@@ -1,0 +1,2114 @@
+# Copyright (C) 2026 WPDeveloper
+# This file is distributed under the GPLv2 or later.
+msgid ""
+msgstr ""
+"Project-Id-Version: xSpeed Cache 1.1.2\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-08-03T09:46:28+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: xspeed\n"
+
+#. Plugin Name of the plugin
+#: xspeed.php
+#: includes/class-cache.php:2530
+#: includes/class-deactivation-feedback.php:189
+msgid "xSpeed Cache"
+msgstr ""
+
+#. Description of the plugin
+#: xspeed.php
+msgid "Minimal, ultra-fast caching plugin for WordPress."
+msgstr ""
+
+#. Author of the plugin
+#: xspeed.php
+msgid "WPDeveloper"
+msgstr ""
+
+#. Author URI of the plugin
+#: xspeed.php
+msgid "https://wpdeveloper.com"
+msgstr ""
+
+#: includes/class-admin.php:153
+#: includes/class-admin.php:254
+msgid "Settings"
+msgstr ""
+
+#: includes/class-admin.php:243
+msgid "Overview"
+msgstr ""
+
+#: includes/class-admin.php:244
+msgid "Cache"
+msgstr ""
+
+#: includes/class-admin.php:245
+msgid "Optimization"
+msgstr ""
+
+#: includes/class-admin.php:246
+msgid "Network"
+msgstr ""
+
+#: includes/class-admin.php:247
+msgid "Health"
+msgstr ""
+
+#: includes/class-admin.php:248
+msgid "Tools"
+msgstr ""
+
+#: includes/class-admin.php:253
+msgid "AI & Agents"
+msgstr ""
+
+#: includes/class-admin.php:312
+msgid "Loading"
+msgstr ""
+
+#: includes/class-admin.php:314
+msgid "xSpeed"
+msgstr ""
+
+#: includes/class-admin.php:315
+msgid "Loading…"
+msgstr ""
+
+#: includes/class-cache-inventory.php:340
+msgid "Cached pages (PHP)"
+msgstr ""
+
+#: includes/class-cache-inventory.php:345
+msgid "Cached pages (server-served)"
+msgstr ""
+
+#: includes/class-cache-inventory.php:350
+msgid "Precompressed copies"
+msgstr ""
+
+#: includes/class-cache-inventory.php:355
+msgid "Per-entry metadata"
+msgstr ""
+
+#: includes/class-cache-inventory.php:360
+msgid "REST responses"
+msgstr ""
+
+#: includes/class-cache-inventory.php:365
+msgid "Minified CSS/JS"
+msgstr ""
+
+#: includes/class-cache-meta-box.php:40
+msgid "xSpeed · Cache Rules"
+msgstr ""
+
+#: includes/class-cache-meta-box.php:63
+msgid "Never cache this page"
+msgstr ""
+
+#: includes/class-cache-meta-box.php:67
+msgid "Skip the page cache entirely for this post. Useful for highly dynamic pages."
+msgstr ""
+
+#: includes/class-cache-meta-box.php:72
+msgid "Custom cache lifetime"
+msgstr ""
+
+#: includes/class-cache-meta-box.php:85
+msgid "hours · 0 = use global"
+msgstr ""
+
+#: includes/class-cache-meta-box.php:89
+msgid "Override the global cache expiry for this post (1–720 hours). Leave at 0 to inherit the site default."
+msgstr ""
+
+#. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
+#: includes/class-cache.php:962
+#, php-format
+msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
+msgstr ""
+
+#: includes/class-cache.php:1080
+msgid "Purge All"
+msgstr ""
+
+#: includes/class-cache.php:1084
+msgid "Purge Page / Static Cache"
+msgstr ""
+
+#: includes/class-cache.php:1088
+msgid "Purge CSS / JS Cache"
+msgstr ""
+
+#: includes/class-cache.php:1092
+msgid "Purge Object Cache"
+msgstr ""
+
+#: includes/class-cache.php:1096
+msgid "Purge REST Cache"
+msgstr ""
+
+#. translators: 1: what was purged, 2: cause of the purge.
+#: includes/class-cache.php:1191
+#, php-format
+msgid "Purged %1$s (%2$s)"
+msgstr ""
+
+#. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
+#: includes/class-cache.php:1197
+#, php-format
+msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
+msgstr ""
+
+#: includes/class-cache.php:2564
+msgid "Unauthorized."
+msgstr ""
+
+#. translators: %s: conflicting plugin name
+#: includes/class-conflict-registry.php:322
+#, php-format
+msgid "%s is active and handles the same feature. Deactivate it before enabling this in xSpeed."
+msgstr ""
+
+#. translators: %s: conflicting plugin name
+#: includes/class-conflict-registry.php:342
+#, php-format
+msgid "%s is active and may interfere. Test carefully."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:63
+msgid "I no longer need the plugin"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:67
+msgid "I'm switching to another plugin"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:68
+msgid "Which plugin are you switching to?"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:72
+msgid "The plugin is difficult to use"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:73
+msgid "What did you find confusing? We'd love to improve it."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:78
+msgid "I couldn't get the plugin to work"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:79
+msgid "What issue did you run into? We're glad to help."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:84
+msgid "The plugin affects my site's performance"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:85
+msgid "What did you notice? Any detail helps us pin it down."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:90
+msgid "It's missing a specific feature I need"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:91
+msgid "Which feature were you looking for?"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:95
+msgid "It's a temporary deactivation"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:99
+msgid "Other"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:100
+msgid "Please tell us a little more."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:191
+msgid "Close"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:195
+msgid "Sorry to see you go"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:197
+msgid "If you have a moment, we'd love to know why you're deactivating xSpeed Cache — pick all that apply. It takes less than a minute and helps us make it better for everyone, but it's completely optional."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:217
+msgid "💡 Need a hand before you go?"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:218
+msgid "Contact our support team"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:226
+msgid "Your response is sent to WPDeveloper along with your site URL and plugin version. Choose “Skip & Deactivate” to leave without sharing anything."
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:231
+msgid "Skip & Deactivate"
+msgstr ""
+
+#: includes/class-deactivation-feedback.php:233
+msgid "Submit & Deactivate"
+msgstr ""
+
+#: includes/class-module-registry.php:43
+msgid "Module is missing a SLUG constant."
+msgstr ""
+
+#: includes/class-module-registry.php:212
+msgid "Circular module dependency detected; boot order is undefined for the offending modules."
+msgstr ""
+
+#. translators: %s: brand name (xSpeed by default, or the white-label name).
+#: includes/class-onboarding.php:56
+#, php-format
+msgid "%s Setup Wizard"
+msgstr ""
+
+#: includes/class-onboarding.php:60
+msgid "Setup Wizard"
+msgstr ""
+
+#: includes/class-recommendations.php:47
+msgid "Enable page caching"
+msgstr ""
+
+#: includes/class-recommendations.php:48
+msgid "Caching is off, so every visit renders the full page. Turning it on is the single biggest speed win."
+msgstr ""
+
+#: includes/class-recommendations.php:58
+msgid "Go to Cache settings"
+msgstr ""
+
+#: includes/class-recommendations.php:74
+msgid "Raise Cache Expiry to match your preload schedule"
+msgstr ""
+
+#. translators: 1: current expiry hours, 2: preload interval hours.
+#: includes/class-recommendations.php:77
+#, php-format
+msgid "Pages expire after %1$dh but the preloader only re-warms them every %2$dh — most visits hit a cold cache."
+msgstr ""
+
+#. translators: %d: recommended expiry in hours.
+#: includes/class-recommendations.php:87
+#, php-format
+msgid "Raise expiry to %dh"
+msgstr ""
+
+#: includes/class-recommendations.php:99
+msgid "A plugin"
+msgstr ""
+
+#: includes/class-recommendations.php:103
+msgid "A plugin is blocking CDN edge caching"
+msgstr ""
+
+#. translators: 1: plugin name, 2: cookie name.
+#: includes/class-recommendations.php:106
+#, php-format
+msgid "%1$s sets the \"%2$s\" cookie on anonymous pages, which makes CDNs skip their edge cache for all HTML."
+msgstr ""
+
+#: includes/class-recommendations.php:114
+msgid "See details in Health"
+msgstr ""
+
+#: includes/class-recommendations.php:124
+msgid "Apply the nginx server snippet"
+msgstr ""
+
+#: includes/class-recommendations.php:125
+msgid "nginx can serve cache hits directly (~5-15ms TTFB, PHP bypassed) once the snippet is in your server block."
+msgstr ""
+
+#: includes/class-recommendations.php:128
+msgid "Get the snippet"
+msgstr ""
+
+#: includes/class-recommendations.php:138
+msgid "Turn on the preloader"
+msgstr ""
+
+#. translators: %d: hit ratio percent.
+#: includes/class-recommendations.php:141
+#, php-format
+msgid "Your hit ratio is %d%% — most visitors hit a cold cache. The preloader crawls your sitemap so pages are warm before anyone asks."
+msgstr ""
+
+#: includes/class-recommendations.php:148
+msgid "Enable preloader"
+msgstr ""
+
+#: includes/class-recommendations.php:158
+msgid "Object cache is configured but not persisting"
+msgstr ""
+
+#: includes/class-recommendations.php:159
+msgid "The backend is not connected, so every request falls back to the database. Run the connection test to see why."
+msgstr ""
+
+#: includes/class-recommendations.php:162
+msgid "Test the connection"
+msgstr ""
+
+#: includes/class-recommendations.php:173
+msgid "Finish connecting Cloudflare"
+msgstr ""
+
+#: includes/class-recommendations.php:174
+msgid "The Cloudflare module is on but has no verified credentials or zone, so edge purges cannot work."
+msgstr ""
+
+#: includes/class-recommendations.php:177
+msgid "Open Cloudflare settings"
+msgstr ""
+
+#: includes/class-recommendations.php:251
+msgid "This recommendation links to a settings screen; it has no one-click fix."
+msgstr ""
+
+#: includes/class-recommendations.php:263
+msgid "Unknown or no-longer-applicable recommendation."
+msgstr ""
+
+#: includes/class-rest-api.php:352
+msgid "The id argument is required."
+msgstr ""
+
+#: includes/class-rest-api.php:463
+msgid "dashboard"
+msgstr ""
+
+#: includes/class-rest-manager.php:74
+msgid "No route was found matching the URL and request method."
+msgstr ""
+
+#: includes/class-rest-manager.php:136
+msgid "The request could not be completed due to a server error."
+msgstr ""
+
+#. translators: %d: HTTP status code.
+#: includes/class-score.php:194
+#, php-format
+msgid "PageSpeed Insights returned HTTP %d."
+msgstr ""
+
+#: includes/class-score.php:263
+msgid "GTmetrix reported the test failed."
+msgstr ""
+
+#: includes/class-score.php:321
+msgid "GTmetrix requires an API key — there is no anonymous mode. Add one in the Score settings."
+msgstr ""
+
+#. translators: %d: HTTP status code.
+#: includes/class-score.php:350
+#, php-format
+msgid "GTmetrix returned HTTP %d. Check the API key."
+msgstr ""
+
+#: includes/class-score.php:403
+msgid "GTmetrix returned an unreadable response."
+msgstr ""
+
+#. translators: %s: video title.
+#: includes/class-video-facade.php:150
+#, php-format
+msgid "Play video: %s"
+msgstr ""
+
+#: includes/class-video-facade.php:153
+msgid "Play video"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:161
+msgid "Feeds are disabled."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:207
+msgid "Anonymous REST access is disabled on this site."
+msgstr ""
+
+#: includes/modules/BrowserCache/BrowserCacheModule.php:115
+msgid "nginx server config required"
+msgstr ""
+
+#: includes/modules/BrowserCache/BrowserCacheModule.php:116
+msgid "Browser-cache headers need to live in your nginx config. Your updated settings are included in the unified server-block snippet on the Cache panel — copy + paste it once into your nginx vhost (or container nginx config), and reload nginx."
+msgstr ""
+
+#: includes/modules/BrowserCache/BrowserCacheModule.php:120
+msgid "Go to the snippet"
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:148
+msgid "Provide at least one cleanup type."
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:116
+msgid "GZIP enabled but not active on the server"
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:117
+msgid "xSpeed wrote the .htaccess rules but the response still isn't gzipped. Your server may have AllowOverride disabled, another caching plugin overriding, or mod_deflate missing. Ask your host to enable GZIP on Apache."
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:128
+msgid "GZIP requires server config on nginx"
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:129
+msgid "xSpeed can only auto-configure GZIP on Apache and LiteSpeed (via .htaccess). The directives are included in the unified server-block snippet on the Cache panel — copy + paste it once into your nginx vhost (or container nginx config) and reload nginx."
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:138
+msgid "GZIP requires server config on this server"
+msgstr ""
+
+#: includes/modules/Gzip/GzipModule.php:139
+msgid "xSpeed can only auto-configure GZIP on Apache and LiteSpeed (via .htaccess). Paste the snippet below into your server config and reload."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:66
+msgid "xSpeed static-rewrite cache"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:81
+msgid "xSpeed static-rewrite cache is active"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:84
+msgid "Performance"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:87
+msgid "Cache hits bypass PHP for ~5-15ms TTFB."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:93
+msgid "xSpeed cache is disabled"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:95
+msgid "Enable the page cache in the xSpeed dashboard to start serving cached HTML for non-logged-in visitors."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:102
+msgid "xSpeed .htaccess rewrite block is missing"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:104
+msgid "Without the static-rewrite block, cache hits go through the PHP drop-in (~85ms TTFB) instead of the web server (~5-15ms). Toggle Enable Cache off and on in xSpeed to reinstall the block."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:111
+msgid "xSpeed nginx server config required"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:113
+msgid "xSpeed can't write nginx config from PHP. Paste this snippet into your site's server { } block, then reload nginx so cache hits serve without booting PHP:"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:122
+msgid "xSpeed PHP drop-in cache active"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:124
+msgid "Static-rewrite caching needs Apache, LiteSpeed, or nginx. The PHP drop-in is still serving cache hits at ~85ms TTFB on this server."
+msgstr ""
+
+#. translators: %s: command name.
+#: includes/modules/Mcp/Cli_Bridge.php:120
+#, php-format
+msgid "Unknown command: %s. Call list_commands to see what is available."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:767
+msgid "Invalid or expired attach request."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:848
+msgid "You must be an administrator to authorize an AI agent to control this site."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:855
+msgid "Security check failed. Please try connecting again."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:982
+msgid "Read-only — inspect cache status and settings."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:983
+msgid "Read & write — purge caches, toggle caching, and change settings."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:984
+msgid "An AI agent"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1003
+msgid "Authorize AI access"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1014
+msgid "Connect to xSpeed"
+msgstr ""
+
+#. translators: %s: AI client name.
+#: includes/modules/Mcp/McpModule.php:1016
+#, php-format
+msgid "%s wants to manage the cache on this site."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1017
+msgid "Site"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1018
+msgid "Signed in as"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1019
+msgid "Access"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1024
+msgid "Deny"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1025
+msgid "Approve"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1035
+msgid "Authorization error"
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1038
+msgid "Could not authorize"
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Auth.php:57
+msgid "Too many failed attempts. Try again later."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_OAuth.php:145
+msgid "At least one valid redirect_uri is required."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_OAuth.php:195
+msgid "Unknown client_id."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_OAuth.php:199
+msgid "redirect_uri does not match a registered value."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_OAuth.php:202
+msgid "Only response_type=code is supported."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_OAuth.php:206
+msgid "PKCE with code_challenge_method=S256 is required."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Pairing.php:408
+msgid "No active MCP connection to change. Connect first."
+msgstr ""
+
+#. translators: %s: tool name.
+#: includes/modules/Mcp/Mcp_Tools.php:694
+#, php-format
+msgid "Unknown tool: %s"
+msgstr ""
+
+#. translators: %s: tool name.
+#: includes/modules/Mcp/Mcp_Tools.php:722
+#, php-format
+msgid "This MCP connection is read-only; the \"%s\" tool changes state and is not permitted. Reconnect with write access to use it."
+msgstr ""
+
+#. translators: %s: comma-separated list of valid purge types.
+#: includes/modules/Mcp/Mcp_Tools.php:869
+#, php-format
+msgid "Invalid purge type. Expected one of: %s"
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:878
+#: includes/modules/Mcp/Mcp_Tools.php:1330
+msgid "AI assistant"
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:896
+msgid "The \"enabled\" parameter is required (true or false)."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:926
+#: includes/modules/Mcp/Mcp_Tools.php:948
+msgid "The \"module\" parameter is required."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:955
+msgid "The \"values\" parameter must be an object of setting keys."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:987
+msgid "The \"command\" parameter is required."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1157
+#: includes/modules/Mcp/Mcp_Tools.php:1197
+msgid "The enabled argument is required."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1161
+#: includes/modules/Mcp/Mcp_Tools.php:1201
+msgid "The enabled argument must be true or false."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1215
+msgid "The action argument must be \"list\" or \"clear\"."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1254
+msgid "External scores are not available on this site."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1328
+msgid "The url argument is required."
+msgstr ""
+
+#. translators: %d: number of detected caching plugins.
+#: includes/modules/Migration/MigrationModule.php:142
+#, php-format
+msgid "Migrate to %1$s — %2$d caching plugin detected"
+msgid_plural "Migrate to %1$s — %2$d caching plugins detected"
+msgstr[0] ""
+msgstr[1] ""
+
+#: includes/modules/Migration/MigrationModule.php:175
+msgid "Import your existing settings in one click instead of configuring everything by hand. Pick a source to migrate:"
+msgstr ""
+
+#. translators: %d: number of settings xSpeed will actually import.
+#: includes/modules/Migration/MigrationModule.php:190
+#, php-format
+msgid "imports %d setting"
+msgid_plural "imports %d settings"
+msgstr[0] ""
+msgstr[1] ""
+
+#: includes/modules/Migration/MigrationModule.php:196
+msgid "Import"
+msgstr ""
+
+#: includes/modules/Migration/MigrationModule.php:203
+msgid "Open Migration panel"
+msgstr ""
+
+#: includes/modules/Migration/MigrationModule.php:204
+msgid "Dismiss"
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:243
+msgid "Enable the preloader before starting a crawl."
+msgstr ""
+
+#: includes/modules/Score/ScoreModule.php:147
+msgid "External scores are turned off. Enable them first — this is the only feature that contacts a third party."
+msgstr ""
+
+#: includes/modules/Score/ScoreModule.php:156
+msgid "No URL to test."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:146
+msgid "“clear the cache on my store,” “warm up the homepage,” “how fast is my blog?”"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:76
+msgid "30 days"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:75
+msgid "7 days"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:117
+#: src/upsell/LockedSection.tsx:99
+#: src/upsell/ProDemo.tsx:105
+msgid "Activate your license"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:164
+#: src/upsell/LockedPanel.tsx:43
+msgid "Activating your license unlocks this module + every other locked row in the sidebar. Your current settings stay unchanged."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:225
+msgid "Add site form"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:183
+msgid "Address not recorded"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:154
+msgid "Age"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:102
+#: src/components/score/ScorePanel.tsx:103
+#: src/components/score/ScorePanel.tsx:104
+msgid "ago"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:151
+msgid "Also worth a look"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:148
+msgid "and it happens."
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:122
+#: src/components/overview/Recommendations.tsx:79
+msgid "Applied"
+msgstr ""
+
+#: src/components/FieldSuggestionStrip.tsx:125
+msgid "Apply"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:46
+msgid "Audit failed"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:36
+msgid "Benchmark failed"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:258
+msgid "Benchmark trend"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:134
+msgid "Benchmark: cached vs uncached (ms)"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:191
+msgid "Book a free performance review and our engineers will hand-configure xSpeed Cache for your site, applying proven best practices for maximum speed, stability, and compatibility."
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:200
+msgid "Book expert setup"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:73
+msgid "Browse all"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:38
+msgid "bypassing PHP"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:77
+msgid "Cache active"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:49
+msgid "Cache impact benchmark"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:77
+msgid "Cache inactive"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:99
+msgid "Cache is"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:112
+msgid "Cache is disabled — both runs hit the same uncached path. Enable Cache to see a real difference."
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:23
+msgid "Cache size"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:69
+msgid "Cache status"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:270
+msgid "cached"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:131
+#: src/components/overview/MetricGrid.tsx:18
+msgid "Cached pages"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:90
+msgid "cached pages in 24h — saving your visitors"
+msgstr ""
+
+#: src/components/SettingsSearch.tsx:251
+msgid "Clear search"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:126
+msgid "Click \"Run benchmark\" to compare load times."
+msgstr ""
+
+#: src/components/Sidebar.tsx:192
+msgid "Cmd/Ctrl + K"
+msgstr ""
+
+#: src/components/Sidebar.tsx:497
+msgid "Collapse"
+msgstr ""
+
+#: src/components/Sidebar.tsx:482
+#: src/components/Sidebar.tsx:488
+#: src/components/Sidebar.tsx:489
+msgid "Collapse sidebar"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:138
+msgid "Compare plans"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:52
+msgid "Compare your homepage with and without cache."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:116
+msgid "Connect this site to your free xSpeed Hub — then manage caching here and on every other site straight from ChatGPT, Claude, or any AI assistant. Free, forever."
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:126
+msgid "Connect to control caching remotely, drive it from AI agents, and manage all your sites in one place."
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:133
+#: src/components/overview/HubCard.tsx:140
+msgid "Connect to Hub"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:187
+msgid "Connect to xSpeed Hub"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:104
+msgid "Connected"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:113
+msgid "Connected as"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:60
+msgid "Connected as %s. Your caching is ready to manage from anywhere."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:57
+msgid "Connected to xSpeed Hub"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:113
+msgid "Control caching remotely and from AI agents."
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:114
+msgid "Control caching remotely, drive it from AI agents, and manage your sites in one place."
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:81
+msgid "Could not apply that fix"
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:68
+msgid "Could not apply the fix."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:142
+msgid "Could not check the test status."
+msgstr ""
+
+#: src/components/Sidebar.tsx:477
+msgid "Dark Mode"
+msgstr ""
+
+#: src/components/overview/OverviewFooter.tsx:24
+msgid "Documentation"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:98
+msgid "Enable the cache to preload pages."
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:85
+msgid "Every deterministic check passes — your configuration looks healthy."
+msgstr ""
+
+#: src/components/Sidebar.tsx:482
+#: src/components/Sidebar.tsx:488
+#: src/components/Sidebar.tsx:489
+msgid "Expand sidebar"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:185
+msgid "External score"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:209
+msgid "External scores are off. Turning them on lets you run an audit from here — nothing is sent anywhere until you press Test."
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:99
+msgid "faster"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:96
+msgid "faster per page"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:73
+msgid "features"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:61
+msgid "Features"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:190
+msgid "Free forever"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:162
+msgid "Get more over time"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:126
+#: src/onboarding/steps/Connect.tsx:73
+msgid "Go to Dashboard"
+msgstr ""
+
+#: src/components/overview/OverviewFooter.tsx:20
+msgid "Help and resources"
+msgstr ""
+
+#: src/components/overview/OverviewFooter.tsx:28
+msgid "Help and support"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:82
+msgid "Hide"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:120
+#: src/components/overview/MetricGrid.tsx:13
+msgid "Hit ratio"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:83
+msgid "Hit ratio and benchmark history, with your settings changes marked."
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:222
+msgid "Hit ratio trend"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:107
+msgid "hits"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:30
+msgid "hrs"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:124
+msgid "I'll connect later"
+msgstr ""
+
+#: src/components/Sidebar.tsx:278
+msgid "in"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:114
+msgid "jump to the hit-ratio trend"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:101
+msgid "just now"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:144
+msgid "Just say what you want"
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:30
+msgid "Key metrics"
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:15
+msgid "last 24 hours"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:74
+msgid "last 24h"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:236
+msgid "Latest"
+msgstr ""
+
+#: src/upsell/ProTeaser.tsx:65
+msgid "Learn more about Pro"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:188
+msgid "Let our cache experts optimize your site"
+msgstr ""
+
+#: src/upsell/LockedSection.tsx:81
+#: src/upsell/ProDemo.tsx:73
+msgid "License"
+msgstr ""
+
+#: src/components/Sidebar.tsx:477
+msgid "Light Mode"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:87
+msgid "Manage this site from the central xSpeed Hub dashboard"
+msgstr ""
+
+#: src/components/SettingsSearch.tsx:274
+msgid "match"
+msgstr ""
+
+#: src/components/SettingsSearch.tsx:274
+msgid "matches"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:29
+msgid "min"
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:101
+msgid "more after this"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:148
+msgid "More options"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:104
+msgid "Negligible difference — page is cheap to render or cache is cold."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:164
+msgid "new Hub features arrive automatically, free."
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:98
+msgid "Next best action"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:190
+msgid "No audit run yet."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:190
+msgid "No card, no catch"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:156
+msgid "no logging into each dashboard separately."
+msgstr ""
+
+#: src/components/SettingsSearch.tsx:275
+#: src/components/Sidebar.tsx:257
+msgid "No matches"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:305
+msgid "No purges recorded yet."
+msgstr ""
+
+#: src/components/cache/NextBestAction.tsx:82
+msgid "No recommendations right now"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:213
+msgid "No redirect? Connect with a token instead."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:242
+msgid "Not reported by this provider."
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:135
+msgid "Nothing cached yet. Visit a page as a logged-out visitor to warm the cache."
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:238
+msgid "Nothing on disk yet."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:81
+msgid "Now unlocked"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:202
+msgid "of"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:94
+msgid "of combined wait time"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:38
+msgid "Off"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:33
+msgid "On"
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:25
+msgid "on disk"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:227
+msgid "on your xSpeed Hub account."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:85
+msgid "One AI connection controls the cache on every site you connect"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:118
+msgid "Open Hub dashboard"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:303
+msgid "Open the tested page"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:152
+msgid "Page"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:38
+#: src/components/overview/HeroStatus.tsx:40
+msgid "pages cached"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:269
+msgid "Pages without one are compressed by the server when requested."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:218
+msgid "Paste this site’s URL + token into the"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:268
+msgid "Precompressed copies on disk:"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:102
+msgid "Preload"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:60
+msgid "Preload could not start"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:58
+msgid "Preload started"
+msgstr ""
+
+#: src/upsell/ProDemo.tsx:131
+msgid "Preview"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:25
+#: src/upsell/LockedSection.tsx:81
+#: src/upsell/ProAudit.tsx:66
+#: src/upsell/ProDemo.tsx:73
+#: src/upsell/ProTeaser.tsx:45
+msgid "Pro"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:95
+msgid "Pro — license needed"
+msgstr ""
+
+#: src/components/Sidebar.tsx:329
+#: src/components/Sidebar.tsx:428
+#: src/upsell/LockedPanel.tsx:95
+msgid "Pro feature"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:165
+#: src/upsell/LockedPanel.tsx:44
+msgid "Pro unlocks this module + every other locked row in the sidebar. Your current Free settings stay unchanged."
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:92
+msgid "Purge all"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:301
+msgid "Purge history"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:86
+msgid "Purge, benchmark, preload and tune settings by asking your AI"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:67
+#: src/upsell/ProAudit.tsx:92
+msgid "Re-run"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:84
+msgid "Real visitor impact"
+msgstr ""
+
+#: src/components/overview/ActivityStrip.tsx:49
+#: src/components/overview/ActivityStrip.tsx:51
+msgid "Recent activity"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:148
+msgid "Recent changes"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:102
+#: src/components/overview/Recommendations.tsx:99
+msgid "Recommendations"
+msgstr ""
+
+#: src/components/FieldSuggestionStrip.tsx:116
+msgid "Recommended:"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:95
+msgid "Refresh"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:108
+msgid "Refresh trends"
+msgstr ""
+
+#: src/components/overview/OverviewFooter.tsx:32
+msgid "Review us on WordPress.org"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:67
+msgid "Run benchmark"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:154
+msgid "Run every site from one place"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:277
+msgid "Run history"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:92
+msgid "Run Pro audit"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:139
+msgid "Run the benchmark at least twice to see a trend."
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:65
+msgid "Run the benchmark once and this card shows how much combined wait time the cache saves your visitors."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:115
+msgid "Run your site just by asking"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:203
+msgid "Running…"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:107
+msgid "saved across"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:100
+msgid "saved per request"
+msgstr ""
+
+#: src/components/SaveIndicator.tsx:93
+msgid "Saving changes…"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:70
+msgid "Scans your current settings + 24h cache stats and shows exactly which Pro features would help."
+msgstr ""
+
+#: src/components/SettingsSearch.tsx:243
+#: src/components/SettingsSearch.tsx:244
+#: src/components/Sidebar.tsx:192
+#: src/components/Sidebar.tsx:201
+msgid "Search settings"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:175
+msgid "See everything it does."
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:20
+msgid "served without PHP"
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:66
+msgid "Serving cached pages… impact numbers appear once today’s hits accumulate."
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:38
+msgid "Serving from"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:40
+msgid "Serving from the PHP cache"
+msgstr ""
+
+#: src/components/SaveIndicator.tsx:88
+msgid "Settings saved"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:82
+msgid "Show"
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:73
+msgid "Show less"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:108
+msgid "show what cleared the cache and why"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:101
+msgid "show what is taking the space"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:94
+msgid "show which pages are cached"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:202
+msgid "Showing"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:230
+msgid "Site URL"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:153
+msgid "Size"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:155
+msgid "Stored"
+msgstr ""
+
+#: src/components/Sidebar.tsx:466
+#: src/components/Sidebar.tsx:473
+msgid "Switch to dark"
+msgstr ""
+
+#: src/components/Sidebar.tsx:466
+#: src/components/Sidebar.tsx:473
+msgid "Switch to light"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:240
+msgid "target ≥80%"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:203
+msgid "Test now"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:168
+msgid "The test could not be started."
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:142
+msgid "This cache is large enough that the scan stopped early — the list below is a recent sample, not every page."
+msgstr ""
+
+#: src/components/Sidebar.tsx:472
+msgid "Toggle theme"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:234
+msgid "Token"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:81
+msgid "Trends"
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:126
+msgid "Trends appear after a couple of days of traffic. The daily series is being collected now."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:199
+msgid "Turn on external scores below first."
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:32
+msgid "Turn on the page cache to start serving pages instantly."
+msgstr ""
+
+#: src/components/cache/TrendCharts.tsx:273
+msgid "uncached"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:190
+msgid "Under a minute"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:129
+#: src/upsell/LockedSection.tsx:109
+#: src/upsell/ProAudit.tsx:113
+#: src/upsell/ProDemo.tsx:115
+msgid "Upgrade to Pro"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:152
+msgid "What this adds"
+msgstr ""
+
+#: src/upsell/ProAudit.tsx:62
+msgid "What would Pro do for your site?"
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:234
+msgid "Where the cache size goes"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:88
+msgid "With cache"
+msgstr ""
+
+#: src/components/cache/CacheBenchmark.tsx:82
+msgid "Without cache"
+msgstr ""
+
+#: src/components/overview/HubCard.tsx:79
+#: src/components/overview/HubCard.tsx:95
+#: src/components/overview/HubCard.tsx:99
+msgid "xSpeed Hub"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:132
+msgid "xSpeed Hub error"
+msgstr ""
+
+#: src/upsell/LockedPanel.tsx:109
+msgid "xSpeed Pro is installed — activate your license to unlock this module and every other Pro feature."
+msgstr ""
+
+#: src/components/cache/ImpactHero.tsx:88
+msgid "xSpeed served"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:68
+msgid "You're all set"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:113
+msgid "You're all set — no recommendations right now."
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:61
+msgid "Your caching is ready to manage from anywhere."
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:64
+msgid "Your features"
+msgstr ""
+
+#: src/onboarding/steps/Connect.tsx:138
+msgid "Your Hub is home base for all your sites. Once connected, you can:"
+msgstr ""
+
+#: src/App.tsx:352
+msgid "Your site at a glance"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:36
+msgid "your web server"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:93
+#: src/components/score/SpeedTestCard.tsx:135
+msgid "%1$d of %2$d left"
+msgstr ""
+
+#: src/components/SecretField.tsx:82
+msgid "A key is saved. Type to replace it; use ✕ to remove it."
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:132
+msgid "Absorbed"
+msgstr ""
+
+#: src/components/CommandPalette.tsx:230
+msgid "Action"
+msgstr ""
+
+#: src/components/Sidebar.tsx:144
+#: src/upsell/ProOverview.tsx:73
+msgid "Activate License"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:660
+msgid "After"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:125
+msgid "An edge cache (Cloudflare) is in front, so this hit ratio is origin-layer only — hits served at the edge never reach the origin and aren’t counted here."
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:330
+msgid "Automatic cleanup has not run yet — first sweep in %s."
+msgstr ""
+
+#: src/components/cache/StatDrilldown.tsx:322
+msgid "Automatic cleanup ran %1$s ago — %2$d file(s) removed, %3$d in total."
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:47
+msgid "Avg saved"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:659
+msgid "Before"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:230
+msgid "Book"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:221
+msgid "Book a free setup review with our team."
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:136
+msgid "bot / 404 requests in 24h — excluded from the hit ratio."
+msgstr ""
+
+#: src/components/TopBar.tsx:52
+msgid "Breadcrumb"
+msgstr ""
+
+#: src/components/health/HealthHero.tsx:24
+msgid "Cache coverage"
+msgstr ""
+
+#: src/App.tsx:224
+msgid "Cache disabled"
+msgstr ""
+
+#: src/App.tsx:224
+msgid "Cache enabled"
+msgstr ""
+
+#: src/App.tsx:240
+msgid "Cache purged"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:56
+#: src/components/overview/HeroStatus.tsx:59
+msgid "Cache warmth"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:661
+msgid "Change"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:206
+msgid "Change across the runs shown"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:652
+msgid "Clear"
+msgstr ""
+
+#: src/components/CommandPalette.tsx:166
+msgid "Command palette"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:724
+msgid "Compare"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:754
+msgid "Compare this run"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:151
+msgid "Connect"
+msgstr ""
+
+#: src/components/TopBar.tsx:107
+msgid "Connect Hub"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:113
+msgid "Connect this site to xSpeed Hub to run GTmetrix tests from here."
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:105
+msgid "Connected — starting your test…"
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:51
+msgid "Every feature below is unlocked and available from its own page. This screen stays as a reference for what Pro adds — manage your license from the License page."
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:47
+msgid "Everything in Free, plus the heavy lifting."
+msgstr ""
+
+#: src/App.tsx:228
+msgid "Failed to disable cache"
+msgstr ""
+
+#: src/App.tsx:228
+msgid "Failed to enable cache"
+msgstr ""
+
+#: src/App.tsx:205
+msgid "Failed to load"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:157
+msgid "Finish in the tab that opened, then come back here."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:437
+msgid "Free tests included with your plan"
+msgstr ""
+
+#: src/onboarding/OnboardingApp.tsx:173
+msgid "Go to the dashboard"
+msgstr ""
+
+#: src/components/score/SpeedTestCard.tsx:122
+msgid "GTmetrix test"
+msgstr ""
+
+#: src/components/health/HealthHero.tsx:31
+msgid "Health summary"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:111
+msgid "Hit Ratio · 24h"
+msgstr ""
+
+#: src/components/cache/CacheHero.tsx:111
+msgid "Hit Ratio · 24h · origin"
+msgstr ""
+
+#: src/components/health/HealthHero.tsx:27
+msgid "hits + misses"
+msgstr ""
+
+#: src/components/TopBar.tsx:107
+msgid "Hub connected"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:116
+msgid "It takes a few seconds."
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:72
+msgid "Last purged"
+msgstr ""
+
+#: src/App.tsx:284
+#: src/components/GroupLanding.tsx:63
+#: src/components/LogsView.tsx:35
+msgid "Logs"
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:65
+msgid "Manage license"
+msgstr ""
+
+#: src/components/Sidebar.tsx:125
+msgid "Manage your license"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:658
+msgid "Metric"
+msgstr ""
+
+#: src/components/overview/HeroStatus.tsx:72
+msgid "never"
+msgstr ""
+
+#: src/components/LogsView.tsx:45
+msgid "No activity recorded yet."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:209
+#: src/components/score/ScorePanel.tsx:696
+msgid "no change"
+msgstr ""
+
+#: src/components/score/SpeedTestCard.tsx:126
+msgid "No tests left this month."
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:142
+msgid "Not now"
+msgstr ""
+
+#: src/components/health/HealthHero.tsx:24
+msgid "of cache features on"
+msgstr ""
+
+#: src/components/GroupLanding.tsx:88
+msgid "on"
+msgstr ""
+
+#: src/onboarding/OnboardingApp.tsx:164
+msgid "Onboarding data unavailable"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:785
+msgid "Open the full report"
+msgstr ""
+
+#: src/components/overview/MetricGrid.tsx:47
+msgid "per page load"
+msgstr ""
+
+#: src/components/score/SpeedTestCard.tsx:127
+msgid "Performance score and Core Web Vitals for your home page."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:419
+msgid "Performance score and Core Web Vitals."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:713
+msgid "Pick one more run to compare."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:714
+msgid "Pick two runs to compare them."
+msgstr ""
+
+#: src/components/Sidebar.tsx:65
+msgid "Primary"
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:46
+msgid "Pro is licensed on this site."
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:54
+msgid "Pro layers deeper optimization, real-user insight, and automation on top of the cache you already run. Nothing you have set up changes."
+msgstr ""
+
+#: src/components/Sidebar.tsx:129
+#: src/upsell/ProOverview.tsx:38
+msgid "Pro Licensed"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:727
+msgid "Provider"
+msgstr ""
+
+#: src/App.tsx:242
+msgid "Purge failed"
+msgstr ""
+
+#: src/components/LogsView.tsx:36
+msgid "Recent cache and settings activity on this site."
+msgstr ""
+
+#: src/components/GroupLanding.tsx:63
+msgid "Recent cache and settings activity."
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:116
+#: src/components/overview/Recommendations.tsx:120
+msgid "Recommended for your site"
+msgstr ""
+
+#: src/components/SecretField.tsx:103
+msgid "Remove"
+msgstr ""
+
+#: src/components/SecretField.tsx:102
+msgid "Remove the saved key"
+msgstr ""
+
+#: src/components/health/HealthHero.tsx:27
+msgid "Requests (24h)"
+msgstr ""
+
+#: src/components/CommandPalette.tsx:204
+msgid "Results"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:101
+msgid "Run a GTmetrix test"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:449
+msgid "Run a GTmetrix test on this site"
+msgstr ""
+
+#: src/components/score/SpeedTestCard.tsx:147
+msgid "Run test"
+msgstr ""
+
+#: src/components/SaveIndicator.tsx:108
+msgid "Save failed — your change was not saved"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:728
+msgid "Score"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:526
+msgid "score out of 100"
+msgstr ""
+
+#: src/components/TopBar.tsx:73
+#: src/components/TopBar.tsx:78
+msgid "Search"
+msgstr ""
+
+#: src/components/CommandPalette.tsx:180
+msgid "Search settings, modules, actions"
+msgstr ""
+
+#: src/components/CommandPalette.tsx:186
+msgid "Search settings, modules, actions…"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:413
+msgid "Speed test"
+msgstr ""
+
+#: src/components/TopBar.tsx:113
+msgid "Switch to dark mode"
+msgstr ""
+
+#: src/components/TopBar.tsx:113
+msgid "Switch to light mode"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:456
+msgid "Test with GTmetrix"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:456
+#: src/components/score/SpeedTestCard.tsx:147
+msgid "Testing…"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:127
+msgid "This site looks local, so it may not be reachable for testing. Your own GTmetrix API key works either way — see the settings below."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:567
+msgid "View on GTmetrix"
+msgstr ""
+
+#: src/components/score/SpeedTestCard.tsx:164
+msgid "View the result"
+msgstr ""
+
+#: src/components/score/ConnectHubModal.tsx:151
+msgid "Waiting for connection…"
+msgstr ""
+
+#: src/components/overview/Recommendations.tsx:218
+msgid "Want a hand?"
+msgstr ""
+
+#: src/onboarding/OnboardingApp.tsx:167
+msgid "We couldn't load the setup wizard. Your site is unaffected — you can configure everything from the dashboard."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:579
+msgid "What to improve"
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:726
+msgid "When"
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:41
+msgid "xSpeed Pro"
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:53
+msgid "xSpeed Pro is installed — activate your license to unlock every feature below. Your current settings stay exactly as they are."
+msgstr ""
+
+#: src/components/score/ScorePanel.tsx:448
+msgid "You have used this month’s free tests."
+msgstr ""
+
+#: src/upsell/ProOverview.tsx:113
+msgid "Your Free tier keeps working exactly as it does today."
+msgstr ""
+
+#: src/components/overview/FeatureMap.tsx:77
+#: src/components/overview/FeatureMap.tsx:80
+msgid "Your setup"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:463
+msgid "AI connection active"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:224
+msgid "Analyzing site…"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:219
+msgid "Applied 3 optimizations"
+msgstr ""
+
+#: src/App.tsx:239
+msgid "Cache enabled, but nothing will be cached until WP_CACHE is added to wp-config.php — copy the line from Health."
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:236
+msgid "Cache optimized"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:322
+msgid "Cache, compression & more"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:466
+msgid "Checking your AI connection…"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:237
+msgid "Compression enabled"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:549
+msgid "Connect with MCP"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:515
+msgid "Connect your AI agent through MCP — then just ask it to analyze and optimize your site."
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:471
+msgid "Connect your AI agent through MCP to control this site by asking."
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:510
+msgid "Control and optimize your site with AI"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:463
+msgid "Control xSpeed with AI"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:238
+msgid "Core Web Vitals checked"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:229
+msgid "Example session"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:318
+msgid "Improve performance"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:326
+msgid "Just ask"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:473
+msgid "Manage MCP"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:327
+msgid "Manage xSpeed through conversation"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:468
+msgid "MCP is connected and ready — your AI agent can purge, tune and benchmark this site."
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:441
+msgid "MCP Server"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:473
+msgid "Open MCP"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:321
+msgid "Optimize automatically"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:205
+msgid "Optimize my site for better PageSpeed."
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:293
+msgid "PageSpeed"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:318
+msgid "PageSpeed & Core Web Vitals"
+msgstr ""
+
+#: src/components/overview/AiControlCard.tsx:247
+msgid "We couldn't read this site's AI connection status. Open MCP to check."
+msgstr ""

@@ -1,0 +1,6 @@
+/* Recolor + size the icon on the <img> itself (FBS-82099). The brand
+   mark ships as fill="currentColor" (black in <img> context); brightness(0)
+   invert(1) renders it white, full opacity keeps it crisp/active in every
+   state. Targeting the <img> avoids the wrapper-vs-img filter conflict
+   that previously left it dimmed. */
+#toplevel_page_xspeed .wp-menu-image img{filter:brightness(0) invert(1);opacity:1;width:20px;height:20px;padding:7px 0}

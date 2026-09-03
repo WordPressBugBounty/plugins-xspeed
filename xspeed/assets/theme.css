@@ -1,0 +1,197 @@
+/**
+ * xSpeed dashboard design tokens + self-hosted fonts (redesign v2).
+ *
+ * Lives in public/ (copied verbatim to assets/ by Vite on build — NOT bundled)
+ * so the @font-face url('./fonts/…') references resolve relative to
+ * assets/theme.css → assets/fonts/…, and so the CSS variables are available to
+ * BOTH the Tailwind utilities in admin.css and every React component. Scoped to
+ * #xspeed-app; dark overrides ride the existing `.dark` class that useTheme
+ * (and PHP's server-side pre-paint) toggles.
+ *
+ * Fonts are Latin-subset woff2 (Inter 400/500/600, Space Grotesk 500/600/700,
+ * JetBrains Mono 400/500) — admin-only, ~168 KB total, font-display: swap.
+ */
+
+/* ---- Self-hosted fonts ------------------------------------------------- */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/space-grotesk-500.woff2') format('woff2'); }
+@font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/space-grotesk-600.woff2') format('woff2'); }
+@font-face { font-family: 'Space Grotesk'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/space-grotesk-700.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/jetbrains-mono-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/jetbrains-mono-500.woff2') format('woff2'); }
+
+/* ---- Design tokens (light) --------------------------------------------- */
+#xspeed-app {
+  /* Interactive — muted teal */
+  --primary: #2AA7A0;
+  --primary-hover: #1E9089;
+  --primary-tint: #E6F5F3;
+  --on-primary: #FFFFFF;
+  /* Text/heading colour for content sitting ON a primary/info tint. */
+  --on-tint: #1E8079;
+  --primary-glow: 0 2px 12px rgba(42, 167, 160, .30);
+
+  /* Surfaces */
+  --canvas: #FBFBFC;
+  --paper: #FFFFFF;
+  --panel: #F5F6F8;
+  --line: #E6E8EC;
+  --line-strong: #D8DCE3;
+
+  /* Text */
+  --text: #0E0F13;
+  --text-secondary: #5C6270;
+  /* WCAG AA (#84). Was #8A909D, which measured 3.10 on --canvas, 3.20 on
+     --paper and 2.96 on --panel — the last being the "Off" status pill, the
+     only state indicator on a group-landing card and the smallest type on
+     screen. Fixing the token rather than the call sites covers all 102
+     usages at once — including Pro's panels, which render inside
+     #xspeed-app and ship no tokens of their own.
+
+     The first pass at this (#6B7180) only measured the three neutral
+     surfaces and missed a fourth class: the TINTS. text-muted is never
+     paired with a *-tint class on the same element — the tint sits on an
+     ancestor upsell card — so a source grep finds nothing and only a
+     rendered-DOM measurement catches it. #6B7180 failed on all four
+     (4.35 / 4.43 / 4.49 / 4.28).
+
+     #686D7C is the lightest value on the same hue that clears 4.5:1 on
+     every surface a muted string can land on:
+
+       canvas 4.99 · paper 5.16 · panel 4.77
+       primary+info-tint 4.60 · success-tint 4.68
+       warning-tint 4.74 · danger-tint 4.52
+
+     Still visibly lighter than --text-secondary (5.91 on canvas), so the
+     hint/secondary distinction the palette relies on survives. */
+  --muted: #686D7C;
+  --faint: #A2A8B4;
+
+  /* Semantic (color + tint) */
+  --success: #10B981;
+  --success-tint: #E9F7F1;
+  --warning: #F59E0B;
+  --warning-tint: #FEF4E6;
+  --danger: #EF4444;
+  --danger-tint: #FDECEC;
+  --info: #2AA7A0;
+  --info-tint: #E6F5F3;
+
+  /* Deep-sea rail (deliberately not near-black, to separate from WP's menu) */
+  --rail-top: #14211F;
+  --rail-bottom: #0D1615;
+  --rail-text: #9FADAB;
+  --rail-edge: rgba(255, 255, 255, .06);
+
+  /* Type families */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Shape */
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+
+/* ---- Design tokens (dark) — rides the existing .dark class -------------- */
+#xspeed-app.dark {
+  --canvas: #0E0F13;
+  --paper: #16181D;
+  --panel: #1B1E24;
+  --line: #282C34;
+  --line-strong: #333845;
+  --text: #E7E9EE;
+  --text-secondary: #9AA1AE;
+  /* Same tint gap as light mode (#84). #7E8593 measured 4.29 on
+     --primary-tint and 4.32 on --success-tint, and cleared --panel by
+     exactly 4.50 — no headroom, so any future surface tweak would have
+     broken it silently. #868D9B clears every dark surface:
+       canvas 5.74 · paper 5.33 · panel 5.01 · primary+info-tint 4.77
+       success-tint 4.81 · warning-tint 5.03 · danger-tint 5.17
+     Dark was never actually at "0 failures" on tints; this is what makes
+     that true rather than assumed. */
+  --muted: #868D9B;
+  --faint: #6A707D;
+  /* Teal, a touch lighter so it reads on the dark surfaces. */
+  --primary: #34C0B7;
+  --primary-hover: #2AA7A0;
+  --primary-tint: #0E2622;
+  --on-tint: #7FD8CF;
+  --info: #34C0B7;
+  --info-tint: #0E2622;
+  --success-tint: #12251F;
+  --warning-tint: #251C0F;
+  --danger-tint: #2A1516;
+}
+
+/* ---- Signature motion (used by the shell + later screens) -------------- */
+@keyframes xspeed-boltpulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.82); } }
+@keyframes xspeed-sweep { 0% { background-position: -220px 0; } 100% { background-position: 320px 0; } }
+@keyframes xspeed-ringfill { from { stroke-dashoffset: 326.7; } to { stroke-dashoffset: 26.1; } }
+
+/* Signature-motion utility classes (reduced-motion aware via the rule below). */
+.xspeed-anim-boltpulse { animation: xspeed-boltpulse 1.8s ease-in-out infinite; }
+.xspeed-anim-sweep { background-size: 220px 100%; animation: xspeed-sweep 1.5s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  #xspeed-app [class*="xspeed-anim"] { animation: none !important; }
+}
+
+/* ---- MCP discovery card (Overview, disconnected) ----------------------- */
+/*
+ * Three tinted surfaces for the "Control and optimize your site with AI" card.
+ * They live here rather than in a component because Tailwind cannot express an
+ * ALPHA of a var()-backed colour: with `primary: 'var(--primary)'` in the theme,
+ * `border-primary/45` silently emits the colour at full strength. Deriving them
+ * from --primary with color-mix() keeps the card on-brand in both themes with
+ * no new tokens — change --primary and all three follow.
+ *
+ * Every rule declares a neutral fallback FIRST. color-mix() is ~2023-era, and
+ * where it is unsupported the declaration is dropped: without the fallback the
+ * card's border-color would fall back to currentColor, painting a near-black
+ * hairline around a white card. The fallback degrades to the plain --line
+ * border and no wash, which is simply the standard card treatment.
+ */
+#xspeed-app .xspeed-mcp-card {
+  border-color: var(--line);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background-image: radial-gradient(120% 150% at 100% 0%,
+    color-mix(in srgb, var(--primary) 9%, transparent) 0%, transparent 58%);
+}
+
+/* The miniature session sits in a recessed teal well, not a second white
+   plane — white-on-white read as a stray box rather than an inset surface. */
+#xspeed-app .xspeed-mcp-well {
+  border-color: var(--line);
+  border-color: color-mix(in srgb, var(--primary) 20%, transparent);
+  background-image: linear-gradient(180deg,
+    color-mix(in srgb, var(--primary) 3%, transparent) 0%,
+    color-mix(in srgb, var(--primary) 7%, transparent) 100%);
+}
+
+#xspeed-app .xspeed-mcp-glow {
+  background-image: radial-gradient(58% 62% at 62% 46%,
+    color-mix(in srgb, var(--primary) 13%, transparent) 0%, transparent 72%);
+}
+
+/* Dark needs more alpha for the same apparent lift: a 3% teal that reads as a
+   tint over #FFFFFF is invisible over #16181D. */
+#xspeed-app.dark .xspeed-mcp-card {
+  border-color: color-mix(in srgb, var(--primary) 38%, transparent);
+}
+#xspeed-app.dark .xspeed-mcp-well {
+  border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  background-image: linear-gradient(180deg,
+    color-mix(in srgb, var(--primary) 6%, transparent) 0%,
+    color-mix(in srgb, var(--primary) 11%, transparent) 100%);
+}
+#xspeed-app.dark .xspeed-mcp-glow {
+  background-image: radial-gradient(58% 62% at 62% 46%,
+    color-mix(in srgb, var(--primary) 16%, transparent) 0%, transparent 72%);
+}

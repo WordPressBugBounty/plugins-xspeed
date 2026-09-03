@@ -1,0 +1,341 @@
+/**
+ * xSpeed — deactivation feedback modal. Spec: DESIGN.md §24.16.
+ *
+ * Self-contained styles for the plugins.php survey. Scoped under
+ * .xspeed-deactivate so nothing leaks into the WP admin. This markup is NOT
+ * inside the React `#xspeed-app` tree, so Tailwind utilities aren't available
+ * here (the config is `important: '#xspeed-app'` and scans `src/` only). The
+ * custom properties below therefore RESTATE the §2 token table rather than
+ * inventing a parallel palette — every value is a literal from §2, so a token
+ * change there is a find-and-replace here.
+ *
+ * DARK MODE — driven by `.xspeed-deactivate--dark`, stamped server-side from
+ * the same `xspeed_theme` cookie the dashboard reads (Admin::user_theme()).
+ * NOT `prefers-color-scheme`: that follows the OS and ignores xSpeed's own
+ * theme toggle. NOT `body.xspeed-dark` either — Admin::admin_body_class()
+ * bails on screens we don't own, so that class never exists on plugins.php.
+ * See render_modal() in includes/class-deactivation-feedback.php.
+ */
+
+.xspeed-deactivate {
+	/* §2 light column. */
+	--xspeed-accent: #2563eb;        /* accent */
+	--xspeed-accent-hover: #1d4ed8;  /* accent, pressed (blue-700) */
+	--xspeed-surface: #ffffff;       /* bg-card */
+	--xspeed-text: #171717;          /* text */
+	--xspeed-muted: #737373;         /* text-muted (neutral-500) */
+	--xspeed-border: #e5e5e5;        /* border */
+	--xspeed-border-input: #d4d4d4;  /* border-input */
+	--xspeed-hover: #f3f4f3;         /* sidebar-hover */
+	--xspeed-tint: #eff6ff;          /* accent ground (blue-50) */
+	--xspeed-tint-border: #bfdbfe;   /* accent ground border (blue-200) */
+	--xspeed-tint-text: #1d4ed8;     /* accent-on-tint (blue-700) */
+
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	box-sizing: border-box;
+}
+
+.xspeed-deactivate.is-open {
+	display: flex;
+}
+
+.xspeed-deactivate * {
+	box-sizing: border-box;
+}
+
+/* Scrim: neutral-950 at 55%, the one dimming layer §24.16 allows. */
+.xspeed-deactivate__overlay {
+	position: absolute;
+	inset: 0;
+	background: rgba(10, 10, 10, 0.55);
+}
+
+/**
+ * §5 allows two radii; the dialog is a card surface, so it takes the
+ * `rounded-lg` 8px — not the 10px the app SHELL uses (§6), which is a
+ * fixed-chrome exception, not a card value. Shadow stays within the
+ * §23 ceiling (shadow-md); no entrance animation, per §18.
+ */
+.xspeed-deactivate__dialog {
+	position: relative;
+	width: 100%;
+	max-width: 480px;
+	max-height: calc(100vh - 48px);
+	display: flex;
+	flex-direction: column;
+	background: var(--xspeed-surface);
+	color: var(--xspeed-text);
+	border: 1px solid var(--xspeed-border);
+	border-radius: 8px;
+	box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+	overflow: hidden;
+}
+
+/* Header */
+.xspeed-deactivate__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 14px 18px;
+	border-bottom: 1px solid var(--xspeed-border);
+}
+
+.xspeed-deactivate__brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+/**
+ * The bundled mark is `fill="currentColor"`, which an <img> cannot inherit —
+ * it always rasterizes BLACK, so on the dark surface it disappeared entirely.
+ * `invert` in dark is the same fix the dashboard chrome uses (§BrandLogo's
+ * `dark:invert`, and the boot skeleton in class-admin.php); `color` here was
+ * dead for the same <img> reason and is gone.
+ */
+.xspeed-deactivate__logo {
+	width: 24px;
+	height: 24px;
+	flex: 0 0 auto;
+}
+
+.xspeed-deactivate--dark .xspeed-deactivate__logo {
+	filter: invert(1);
+}
+
+.xspeed-deactivate__close {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	color: var(--xspeed-muted);
+	font-size: 22px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 6px;
+	transition: background-color 150ms, color 150ms; /* §18 hover */
+}
+
+.xspeed-deactivate__close:hover {
+	background: var(--xspeed-hover);
+	color: var(--xspeed-text);
+}
+
+/* Body */
+.xspeed-deactivate__body {
+	padding: 18px;
+	overflow-y: auto;
+}
+
+.xspeed-deactivate__title {
+	margin: 0 0 6px;
+	font-size: 18px;   /* §3 page title */
+	font-weight: 600;
+	color: var(--xspeed-text);
+}
+
+.xspeed-deactivate__sub {
+	margin: 0 0 16px;
+	font-size: 13px;
+	line-height: 1.55;
+	color: var(--xspeed-muted);
+}
+
+/* Reasons */
+.xspeed-deactivate__reasons {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.xspeed-deactivate__option {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 10px;
+	border-radius: 6px;
+	font-size: 13px; /* §3 body */
+	cursor: pointer;
+	transition: background-color 150ms; /* §18 hover */
+}
+
+.xspeed-deactivate__option:hover {
+	background: var(--xspeed-hover);
+}
+
+.xspeed-deactivate__reason:has(input:checked) .xspeed-deactivate__option {
+	background: var(--xspeed-tint);
+	color: var(--xspeed-tint-text);
+	font-weight: 500; /* §3 card row label */
+}
+
+.xspeed-deactivate__option input[type="radio"],
+.xspeed-deactivate__option input[type="checkbox"] {
+	margin: 0;
+	accent-color: var(--xspeed-accent);
+	flex: 0 0 auto;
+}
+
+.xspeed-deactivate__detail {
+	width: 100%;
+	margin: 6px 0 4px;
+	padding: 8px 10px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--xspeed-text);
+	border: 1px solid var(--xspeed-border-input); /* §2 border-input */
+	border-radius: 6px;
+	resize: vertical;
+	background: var(--xspeed-surface);
+}
+
+.xspeed-deactivate__detail:focus {
+	outline: none;
+	border-color: var(--xspeed-accent);
+	box-shadow: 0 0 0 1px var(--xspeed-accent);
+}
+
+.xspeed-deactivate__help {
+	margin: 4px 0 6px;
+	padding: 10px 12px;
+	background: var(--xspeed-tint);
+	border: 1px solid var(--xspeed-tint-border);
+	border-radius: 6px;
+	font-size: 12px; /* §3 hint */
+	line-height: 1.5;
+}
+
+.xspeed-deactivate__help-title {
+	display: block;
+	font-weight: 600;
+	color: var(--xspeed-text);
+	margin-bottom: 2px;
+}
+
+/* Accent-on-tint, so the link stays legible on the tinted ground in both themes. */
+.xspeed-deactivate__help a {
+	color: var(--xspeed-tint-text);
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.xspeed-deactivate__help a:hover {
+	text-decoration: underline;
+}
+
+.xspeed-deactivate__privacy {
+	margin: 14px 0 0;
+	font-size: 11px; /* §3 micro */
+	line-height: 1.5;
+	color: var(--xspeed-muted);
+}
+
+/* Footer */
+.xspeed-deactivate__footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 14px 18px;
+	border-top: 1px solid var(--xspeed-border);
+}
+
+.xspeed-deactivate__skip {
+	font-size: 13px;
+	color: var(--xspeed-muted);
+	text-decoration: none;
+}
+
+.xspeed-deactivate__skip:hover {
+	color: var(--xspeed-text);
+	text-decoration: underline;
+}
+
+.xspeed-deactivate__submit.button.button-primary {
+	background: var(--xspeed-accent);
+	border-color: var(--xspeed-accent);
+	box-shadow: none;
+	text-shadow: none;
+	padding: 4px 16px;
+	height: auto;
+	min-height: 34px;
+	border-radius: 6px;
+	font-weight: 600;
+}
+
+.xspeed-deactivate__submit.button.button-primary:hover,
+.xspeed-deactivate__submit.button.button-primary:focus {
+	background: var(--xspeed-accent-hover);
+	border-color: var(--xspeed-accent-hover);
+}
+
+.xspeed-deactivate__submit.is-loading {
+	opacity: 0.7;
+	cursor: default;
+}
+
+body.xspeed-deactivate-lock {
+	overflow: hidden;
+}
+
+/**
+ * Dark scheme — follows xSpeed's OWN theme toggle, never the OS.
+ * `.xspeed-deactivate--dark` is stamped server-side from the `xspeed_theme`
+ * cookie, so the modal always matches the dashboard the user just left.
+ * Values are the §2 dark column.
+ */
+.xspeed-deactivate--dark {
+	--xspeed-surface: #171717;       /* bg-card (neutral-900) */
+	--xspeed-text: #fafafa;          /* text */
+	--xspeed-muted: #a3a3a3;         /* text-muted (neutral-400) */
+	--xspeed-border: #2a2a2a;        /* border */
+	--xspeed-border-input: #3f3f46;  /* border-input */
+	/**
+	 * Hover lifts to neutral-800 rather than the dashboard's dark
+	 * sidebar-hover (neutral-900): here the surface ITSELF is neutral-900
+	 * (bg-card), so reusing that value would make every hover invisible.
+	 * One step up keeps the same "hover is a lift off the surface" reading.
+	 */
+	--xspeed-hover: #262626;         /* neutral-800 */
+	--xspeed-tint: #17255480;        /* accent ground (blue-950/50) */
+	--xspeed-tint-border: #1e40af;   /* accent ground border (blue-800) */
+	--xspeed-tint-text: #93c5fd;     /* accent-on-tint (blue-300) */
+}
+
+/**
+ * §19 — the only motion left is the 150ms hover tint (§18). Still honored
+ * explicitly, so the modal makes no assumptions the rest of the app doesn't.
+ */
+@media (prefers-reduced-motion: reduce) {
+	.xspeed-deactivate * {
+		transition: none !important;
+	}
+}
+
+/* Small screens */
+@media (max-width: 600px) {
+	.xspeed-deactivate {
+		padding: 12px;
+	}
+
+	.xspeed-deactivate__footer {
+		flex-direction: column-reverse;
+		align-items: stretch;
+	}
+
+	.xspeed-deactivate__submit.button.button-primary {
+		width: 100%;
+	}
+
+	.xspeed-deactivate__skip {
+		text-align: center;
+	}
+}
