@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.3
+Stable tag: 1.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -326,6 +326,35 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.2.4] – 2026-09-06 =
+
+**The Overview now reports what is actually switched on, counted from the server rather than guessed from the payload, and a new xSpeed Scan grades the site from inside the plugin. Pages carrying a security token can use the fast static path again instead of silently falling back, and nginx users can now fetch their server config from the command line.**
+
+Dashboard & Admin UX:
+- New: The master cache switch now sits in the top bar, reachable from every screen.
+- New: The sidebar collapses to a rail, and adapts on smaller screens.
+- New: An (i) beside a module's pill explains why it is reported as on, where the rule is not obvious.
+- Fixed: The Overview counts the features that are genuinely on. It previously counted entries in the payload, including ones that never rendered, so the number disagreed with the screen.
+- Fixed: On/off state refreshes after a save, so counts update without reloading the page.
+- Fixed: Collapsing the rail no longer shifts the content beside it, and rows keep their size.
+- Fixed: The collapsed rail shows real tooltips rather than the browser's own, and the drawer is now reachable by keyboard.
+
+Caching:
+- Fixed: A page carrying a security token can use the fast static path again, expiring on the token's clock instead of being refused outright.
+- Fixed: A refusal that silently disabled static serving is now surfaced rather than left to guess at.
+- Improved: The cache signature records when it was generated.
+
+Speed Test & Scan:
+- New: An xSpeed Scan runs from inside the plugin and grades the site, with a score ring on the Overview.
+- Improved: The Speed Test page reports both Lighthouse scores, organised into tabs.
+- Fixed: A scan claims its slot atomically, so two runs cannot collide, and the card recovers when a poll fails.
+
+Optimization:
+- Fixed: A CSS background hero is now preloaded as an LCP candidate.
+
+nginx:
+- New: `wp xspeed cache nginx-config` prints the server-block config, so an installer or provisioning script can fetch it without the dashboard. It assumes nginx on a site no request has reached yet, and `--server=` states the answer outright.
 
 = [1.2.3] – 2026-09-02 =
 

@@ -319,4 +319,13 @@ final class MinifyModule extends Module {
 
 		\WP_CLI::error( "Unknown action: $action" );
 	}
+
+	/**
+	 * Minify has no master switch -- it is on when any of minify_html /
+	 * minify_css / minify_js / defer_js / delay_js / async_css /
+	 * remove_query_strings is set. (#363)
+	 */
+	public function is_active(): ?bool {
+		return $this->any_bool_flag_on();
+	}
 }

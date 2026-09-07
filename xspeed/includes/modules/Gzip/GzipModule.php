@@ -286,4 +286,11 @@ final class GzipModule extends Module {
 		$snippet = LegacyGzip::nginx_snippet();
 		return is_string( $snippet ) && '' !== $snippet ? $snippet : null;
 	}
+
+	/**
+	 * Gzip stores its switch as `gzip_enabled`, not `enabled`. (#363)
+	 */
+	public function is_active(): ?bool {
+		return $this->any_bool_flag_on();
+	}
 }

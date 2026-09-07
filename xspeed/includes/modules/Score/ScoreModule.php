@@ -28,6 +28,7 @@ defined( 'ABSPATH' ) || exit;
 
 use XSpeed\Module;
 use XSpeed\Modules\Mcp\Mcp_Hub;
+use XSpeed\Scan;
 use XSpeed\Score;
 use XSpeed\Settings_Manager;
 
@@ -177,6 +178,117 @@ final class ScoreModule extends Module {
 					'methods'  => 'GET',
 					'callback' => array( $this, 'rest_hub_status' ),
 				),
+				/*
+				 * xSpeed Scan. Like the Hub routes above, deliberately NOT
+				 * gated on the `enabled` setting: that toggle guards sending
+				 * the site's URL to Google or GTmetrix with the SITE owner's
+				 * own API key. The scan engine is our own service, needs no
+				 * key, and the user starts it by pressing Scan — the consent
+				 * is the press, and requiring a settings toggle first would
+				 * reinstate exactly the funnel this feature removes.
+				 *
+				 * What the UI MUST NOT skip is telling the user whether the
+				 * resulting report is public; see Scan::private_supported().
+				 */
+				array(
+					'path'     => '/scan',
+					'methods'  => 'POST',
+					'callback' => array( $this, 'rest_scan_start' ),
+				),
+				array(
+					'path'     => '/scan-status',
+					'methods'  => 'GET',
+					'callback' => array( $this, 'rest_scan_status' ),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Start an xSpeed Scan.
+	 *
+	 * Answers as soon as the engine accepts the run — a scan takes 20-60s,
+	 * so holding the request open would trip every proxy between here and
+	 * the browser. The caller polls /scan-status.
+	 *
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function rest_scan_start( \WP_REST_Request $request ) {
+		// One at a time. Without this a double-click spends two runs against
+		// the engine's rate limit and leaves two pending markers racing.
+		$pending = Scan::pending();
+		if ( null !== $pending ) {
+			return rest_ensure_response(
+				array(
+					'status'  => 'running',
+					'scan_id' => $pending['scan_id'],
+					'step'    => '',
+				)
+			);
+		}
+
+		$started = Scan::start(
+			(string) ( $request->get_param( 'url' ) ?? '' ),
+			(bool) $request->get_param( 'fresh' )
+		);
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+
+		return rest_ensure_response(
+			array(
+				'status'     => 'running',
+				'scan_id'    => $started['scan_id'],
+				'report_url' => $started['report_url'],
+				'cached'     => $started['cached'],
+			)
+		);
+	}
+
+	/**
+	 * Poll the in-flight scan, or report the last completed one.
+	 *
+	 * Always 200: "nothing has been scanned yet" is an empty state, not an
+	 * error, and the dashboard renders it on first paint.
+	 *
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public function rest_scan_status() {
+		$pending = Scan::pending();
+
+		if ( null !== $pending ) {
+			$polled = Scan::poll( (string) $pending['scan_id'] );
+			if ( is_wp_error( $polled ) ) {
+				return $polled;
+			}
+			if ( isset( $polled['status'] ) && 'running' === $polled['status'] ) {
+				return rest_ensure_response(
+					array(
+						'status'     => 'running',
+						'scan_id'    => $polled['scan_id'],
+						'step'       => $polled['step'],
+						'latest'     => Scan::latest(),
+						'visibility' => Scan::visibility(),
+						'private_supported' => Scan::private_supported(),
+					)
+				);
+			}
+			return rest_ensure_response(
+				array(
+					'status'     => 'complete',
+					'latest'     => $polled,
+					'visibility' => Scan::visibility(),
+					'private_supported' => Scan::private_supported(),
+				)
+			);
+		}
+
+		return rest_ensure_response(
+			array(
+				'status'     => 'idle',
+				'latest'     => Scan::latest(),
+				'visibility' => Scan::visibility(),
+				'private_supported' => Scan::private_supported(),
 			)
 		);
 	}
@@ -466,7 +578,179 @@ final class ScoreModule extends Module {
 					),
 				),
 			),
+			/*
+			 * A SEPARATE command, not another action on `score`, because the
+			 * two produce different numbers. A scan score is the xSpeed
+			 * rubric (four weighted dimensions, ~20 checks); a score run is a
+			 * raw provider score. Folding them together would invite exactly
+			 * the comparison the two scales cannot support.
+			 */
+			array(
+				'name'      => 'xspeed scan',
+				'callback'  => array( $this, 'cli_scan_handler' ),
+				'shortdesc' => 'xSpeed Scan: `run` a full graded site report, `status` to poll one or read the last, `fixes` for what to do next.',
+				'ai_hint'   => 'Run a full xSpeed Scan and read the graded result. This is BROADER than `xspeed score`: it grades four weighted dimensions (speed, delivery, assets, platform) over ~20 checks and returns what to fix ranked by how many points each recovers, which a raw PageSpeed score cannot tell you. The scan score and a Lighthouse score are DIFFERENT SCALES - never present them as the same number or compare one to the other. `run` starts a scan (20-60s; poll with `status`), `fixes` lists the ranked remediations. Reports are published to a public per-host list unless the site is connected to the Hub, so say so before starting one.',
+				'synopsis'  => array(
+					array(
+						'type'     => 'positional',
+						'name'     => 'action',
+						'options'  => array( 'run', 'status', 'fixes' ),
+						'optional' => true,
+					),
+					array(
+						'type'        => 'assoc',
+						// NOT `--url`, which WP-CLI reserves as a global.
+						'name'        => 'target',
+						'description' => 'URL to scan. Defaults to the home page.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'flag',
+						'name'        => 'fresh',
+						'description' => 'Force a new scan instead of reusing a recent cached report.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'flag',
+						'name'        => 'wait',
+						'description' => 'Poll until the scan finishes instead of returning immediately.',
+						'optional'    => true,
+					),
+				),
+			),
 		);
+	}
+
+	/**
+	 * `wp xspeed scan [run|status|fixes]`
+	 *
+	 * @param array<int,string>    $args       Positional.
+	 * @param array<string,string> $assoc_args Flags.
+	 */
+	public function cli_scan_handler( array $args, array $assoc_args ): void {
+		$action = $args[0] ?? 'status';
+
+		if ( 'fixes' === $action ) {
+			$latest = Scan::latest();
+			if ( null === $latest || empty( $latest['fixes'] ) ) {
+				\WP_CLI::log( 'No scan result yet. Run `wp xspeed scan run --wait` first.' );
+				return;
+			}
+			$rows = array();
+			foreach ( $latest['fixes'] as $f ) {
+				$rows[] = array(
+					'check'       => $f['id'] . ' ' . $f['name'],
+					'status'      => $f['status'],
+					'recoverable' => $f['recoverable'],
+					'evidence'    => $f['evidence'],
+				);
+			}
+			\WP_CLI\Utils\format_items( 'table', $rows, array( 'check', 'status', 'recoverable', 'evidence' ) );
+			return;
+		}
+
+		if ( 'run' === $action ) {
+			// Said before the call, not after: on an unconnected site this
+			// publishes a report about the user's site to a public list.
+			// Name the remedy too -- connecting the Hub is what makes a
+			// report unlisted, and a warning without it leaves no move.
+			if ( 'private' !== Scan::visibility() || ! Scan::private_supported() ) {
+				\WP_CLI::warning(
+					'This report will be publicly visible at xspeedcache.com, listed under your domain. '
+					. 'Connect xSpeed Hub from the dashboard to keep your reports unlisted.'
+				);
+			}
+
+			$started = Scan::start(
+				(string) ( $assoc_args['target'] ?? '' ),
+				! empty( $assoc_args['fresh'] )
+			);
+			if ( is_wp_error( $started ) ) {
+				\WP_CLI::error( $started->get_error_message() );
+				return;
+			}
+			\WP_CLI::log( 'Scan started: ' . $started['scan_id'] );
+			\WP_CLI::log( 'Report: ' . $started['report_url'] );
+
+			if ( empty( $assoc_args['wait'] ) ) {
+				\WP_CLI::log( 'Poll with `wp xspeed scan status`.' );
+				return;
+			}
+
+			// A scan is 20-60s; cap the wait so a stuck engine cannot hang
+			// a CLI session indefinitely.
+			$deadline = time() + 180;
+			while ( time() < $deadline ) {
+				sleep( 5 );
+				$polled = Scan::poll( (string) $started['scan_id'] );
+				if ( is_wp_error( $polled ) ) {
+					\WP_CLI::error( $polled->get_error_message() );
+					return;
+				}
+				if ( ! isset( $polled['status'] ) || 'running' !== $polled['status'] ) {
+					self::cli_print_scan( $polled );
+					return;
+				}
+				\WP_CLI::log( '  ' . ( $polled['step'] ?: 'working' ) . '...' );
+			}
+			\WP_CLI::warning( 'Still running. Poll with `wp xspeed scan status`.' );
+			return;
+		}
+
+		// status
+		$pending = Scan::pending();
+		if ( null !== $pending ) {
+			$polled = Scan::poll( (string) $pending['scan_id'] );
+			if ( is_wp_error( $polled ) ) {
+				\WP_CLI::error( $polled->get_error_message() );
+				return;
+			}
+			if ( isset( $polled['status'] ) && 'running' === $polled['status'] ) {
+				\WP_CLI::log( 'Running: ' . ( $polled['step'] ?: 'working' ) );
+				return;
+			}
+			self::cli_print_scan( $polled );
+			return;
+		}
+
+		$latest = Scan::latest();
+		if ( null === $latest ) {
+			\WP_CLI::log( 'No scan yet. Run `wp xspeed scan run --wait`.' );
+			return;
+		}
+		self::cli_print_scan( $latest );
+	}
+
+	/** Shared rendering for a completed scan. */
+	private static function cli_print_scan( array $r ): void {
+		\WP_CLI::log(
+			sprintf(
+				'Score %s/100  grade %s  (%s)%s',
+				null === $r['score'] ? '-' : $r['score'],
+				$r['grade'] ?: '-',
+				$r['level_name'] ?: '-',
+				! empty( $r['partial'] ) ? '  [partial scan]' : ''
+			)
+		);
+		foreach ( (array) ( $r['dimensions'] ?? array() ) as $key => $d ) {
+			\WP_CLI::log( sprintf( '  %-9s %3s/100  (%s of %s pts)', $key, $d['score'] ?? '-', $d['earned'] ?? '-', $d['weight'] ?? '-' ) );
+		}
+		$lh  = $r['measured']['lighthouse'] ?? null;
+		$lhd = $r['measured']['lighthouse_desktop'] ?? null;
+		if ( null !== $lh || null !== $lhd ) {
+			// Both strategies: the engine measures both and they diverge
+			// widely, so reporting only mobile states the harsher number as
+			// though it were the whole picture. Labelled, and never as "the
+			// score": different scale.
+			\WP_CLI::log(
+				sprintf(
+					'Lighthouse: mobile %s, desktop %s - a different scale, one check inside the score above.',
+					null === $lh ? '-' : $lh . '/100',
+					null === $lhd ? '-' : $lhd . '/100'
+				)
+			);
+		}
+		\WP_CLI::log( 'Report: ' . ( $r['report_url'] ?? '' ) );
 	}
 
 	public function cli_handler( array $args, array $assoc ): void {

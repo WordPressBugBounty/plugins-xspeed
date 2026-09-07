@@ -197,6 +197,17 @@ final class Health {
 			$probe_reason = (string) ( $probe['reason'] ?? '' );
 
 			$block_reason = Cache::static_rewrite_block_reason();
+
+			// An OBSERVED refusal, from the last cacheable render. The settings
+			// above say whether the rewrite is allowed; this says whether pages
+			// are actually reaching the tree. They disagree whenever a page is
+			// refused per-response — a nonce being the common one — and in that
+			// case the settings are right and irrelevant: nginx is configured
+			// correctly, and every hit still comes from PHP. (#372)
+			$skip = Cache::last_static_skip();
+			if ( '' === $block_reason && ! empty( $skip['reason'] ) ) {
+				$block_reason = 'skipped_' . (string) $skip['reason'];
+			}
 			$mobile_block = ( 'mobile_separate' === $block_reason )
 				? ' Note: Separate Mobile Cache is on, which disables the device-blind static rewrite — if your site serves the same HTML to all devices, turn it off (Cache settings) for much faster cache hits.'
 				: '';
@@ -223,6 +234,8 @@ final class Health {
 					$nginx_detail = 'nginx is serving cache hits directly — PHP bypassed (~5-15ms TTFB).';
 				} elseif ( 'mobile_separate' === $block_reason ) {
 					$nginx_detail = 'nginx detected, but the static rewrite is disabled because Separate Mobile Cache is on.' . $mobile_block;
+				} elseif ( 'skipped_nonce' === $block_reason ) {
+					$nginx_detail = self::nonce_skip_detail( $skip );
 				} elseif ( $inconclusive ) {
 					$nginx_detail = sprintf(
 						'Could not verify the static rewrite — the check itself did not complete, so this is not evidence that your config is wrong. If you have already pasted the snippet, it may well be working. Reason: %s',
@@ -278,6 +291,12 @@ final class Health {
 					// step that actually changes the outcome.
 					$tone   = self::INFO;
 					$detail = 'Cache hits are served by xSpeed\'s drop-in and tagged X-XSpeed-Cache: HIT (php), so every hit is visible and counted. The faster .htaccess fast path is off because Apache\'s mod_headers module is not loaded — without it a static hit could not be tagged or counted. Enable mod_headers (`a2enmod headers` on Debian/Ubuntu, then restart Apache) to shave roughly 20-30ms off each cache hit.';
+				} elseif ( 'skipped_nonce' === $block_reason ) {
+					// Before this, Apache fell through to "probe failed —
+					// check AllowOverride", sending the admin to audit a
+					// config that was never the problem.
+					$tone   = self::WARN;
+					$detail = self::nonce_skip_detail( $skip );
 				} elseif ( ! $installed ) {
 					$tone   = self::WARN;
 					$detail = 'Block missing from .htaccess. Toggle Enable Cache off and on to reinstall it.';
@@ -437,6 +456,36 @@ final class Health {
 	 * theme or another plugin are covered too, rather than silently
 	 * skipping the check.
 	 */
+	/**
+	 * Explain a static-tree refusal caused by nonces.
+	 *
+	 * Says four things, because leaving any of them out is what made this
+	 * invisible: the config is FINE (so nobody re-pastes a snippet that was
+	 * never the problem), hits are coming from PHP instead, which nonce keys
+	 * caused it, and that the refusal is deliberate rather than a bug to work
+	 * around. The keys are the actionable part — they name the plugin, and it
+	 * is usually a widget the page does not use. (#372)
+	 *
+	 * @param array{reason?:string,url?:string,keys?:string[]} $skip Recorded refusal.
+	 */
+	private static function nonce_skip_detail( array $skip ): string {
+		$detail = 'Your nginx config is correct, but pages are not reaching the static cache, so hits are served by PHP (typically ~1s instead of ~5-15ms). '
+			. 'They contain nonces, and a static file is served with no PHP — nothing could ever refresh them, so every anonymous form on the page would break once they expire. Keeping these pages on PHP is deliberate.';
+
+		$keys = array_filter( array_map( 'strval', (array) ( $skip['keys'] ?? array() ) ) );
+		if ( ! empty( $keys ) ) {
+			$detail .= ' Nonces found: ' . implode( ', ', $keys ) . '.';
+			$detail .= ' These come from plugin widgets — disabling the ones this site does not use lets its pages be served statically again.';
+		}
+
+		$url = (string) ( $skip['url'] ?? '' );
+		if ( '' !== $url ) {
+			$detail .= sprintf( ' Last seen on %s.', $url );
+		}
+
+		return $detail;
+	}
+
 	public static function schedule_interval_hours( string $schedule ): ?int {
 		if ( isset( self::PRELOAD_INTERVALS[ $schedule ] ) ) {
 			return self::PRELOAD_INTERVALS[ $schedule ];

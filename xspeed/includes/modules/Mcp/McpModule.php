@@ -1492,4 +1492,25 @@ final class McpModule extends Module {
 		Mcp_Pairing::disconnect();
 		\WP_CLI::success( 'Disconnected and revoked the MCP token.' );
 	}
+
+	/**
+	 * MCP is on when a connection token exists -- it has no `enabled`
+	 * setting, so the sidebar counted the AI group as empty on a site with
+	 * a live read-write AI connection. Reads the same
+	 * `Mcp_Pairing::public_status()` the CLI and the panel do, so the count
+	 * cannot disagree with the badge on the panel. (#363)
+	 */
+	public function is_active(): ?bool {
+		$status = Mcp_Pairing::public_status();
+		return ! empty( $status['connected'] );
+	}
+
+	/**
+	 * MCP has no on/off setting -- it is on when a connection exists.
+	 */
+	public function active_reason(): ?string {
+		return $this->is_active()
+			? __( 'An AI assistant is connected to this site. This module counts as on whenever a connection token exists, rather than having its own on/off setting.', 'xspeed' )
+			: __( 'No AI assistant is connected. This module counts as on once you connect one.', 'xspeed' );
+	}
 }

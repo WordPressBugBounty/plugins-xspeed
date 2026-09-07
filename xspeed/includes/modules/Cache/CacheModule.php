@@ -358,12 +358,12 @@ final class CacheModule extends Module {
 			array(
 				'name'      => 'xspeed cache',
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, or `recheck-rewrite` to re-run the static-rewrite probe (site-wide purge / toggle use the dedicated commands).',
+				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost (site-wide purge / toggle use the dedicated commands).',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite' ),
+						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config' ),
 						'optional' => true,
 					),
 					array(
@@ -381,6 +381,13 @@ final class CacheModule extends Module {
 						'type'        => 'assoc',
 						'name'        => 'cause',
 						'description' => 'Label recorded in the purge log for purge-url. Default "CLI".',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'server',
+						'description' => 'Server type to assume for nginx-config, skipping detection. Detection needs SERVER_SOFTWARE, which the command line does not have; an undetectable host is assumed to be nginx anyway, so this is for stating it outright — or for the case detection is positively wrong, such as nginx in front of Apache.',
+						'options'     => array( 'nginx', 'apache', 'litespeed' ),
 						'optional'    => true,
 					),
 				),
@@ -446,6 +453,118 @@ final class CacheModule extends Module {
 	public function cli_handler( array $args, array $assoc ): void {
 		$action = isset( $args[0] ) ? (string) $args[0] : 'status';
 		$limit  = isset( $assoc['limit'] ) ? max( 1, (int) $assoc['limit'] ) : 20;
+
+		/*
+		 * Print the unified nginx server-block so an installer, provisioning
+		 * script, or another plugin can fetch it non-interactively and write
+		 * it into a vhost. Previously this was only reachable via
+		 * `wp eval 'echo \XSpeed\Cache::full_nginx_server_block();'`, which
+		 * is not a supported surface (and is unavailable over MCP, where
+		 * run_command dispatches these same callbacks).
+		 *
+		 * Output discipline matters here: the config goes to STDOUT with
+		 * nothing else, so `wp xspeed cache nginx-config > site.conf` yields a
+		 * pasteable file. Every diagnostic goes to STDERR via WP_CLI::warning
+		 * / ::error, and a non-nginx host or an empty block exits non-zero so
+		 * a script can branch on it rather than writing an empty file.
+		 *
+		 * --server exists because detection cannot work here. WP-CLI runs
+		 * without SERVER_SOFTWARE, so Server::type() falls back to the value
+		 * a previous web request cached — and on a site provisioned entirely
+		 * over WP-CLI there is no such value, leaving `unknown` on a genuine
+		 * nginx host. Rather than guess (a loopback request is the one thing
+		 * least likely to work mid-provisioning), let the caller state it:
+		 * the script writing to /etc/nginx/ already knows the answer.
+		 * Without the flag nothing changes, so a script sweeping a mixed
+		 * fleet still gets its non-zero exit on Apache.
+		 *
+		 * It pins Server::type() rather than being passed down, because the
+		 * decision is re-made at every level: full_nginx_server_block(),
+		 * Cache::nginx_snippet(), and each module's own nginx_directives()
+		 * all ask independently. Threading an argument through would leave
+		 * the deeper gates still detecting, and the command would emit a
+		 * config missing its cache rewrite — worse than refusing outright.
+		 */
+		if ( 'nginx-config' === $action ) {
+			/*
+			 * Scoped to this one generation pass, not the request. Under
+			 * real WP-CLI the process ends here either way, but the same
+			 * callback runs over MCP, where several commands share one PHP
+			 * request — a pin left in place made the NEXT command report
+			 * this host as nginx too.
+			 */
+			$pin    = null;
+			$assume = null;
+
+			if ( isset( $assoc['server'] ) ) {
+				$assume = strtolower( trim( (string) $assoc['server'] ) );
+			} elseif ( \XSpeed\Server::UNKNOWN === \XSpeed\Server::type() ) {
+				/*
+				 * Nothing to detect from, and the action names the server:
+				 * `nginx-config` is the request, so absence of evidence
+				 * defers to it. Positive evidence to the contrary still
+				 * wins — an Apache or LiteSpeed host is told it needs no
+				 * nginx block at all, which is the answer that helps.
+				 */
+				$assume = \XSpeed\Server::NGINX;
+
+				/*
+				 * Only where warnings have somewhere else to go. Real WP-CLI
+				 * sends them to STDERR, leaving the config clean on STDOUT.
+				 * The MCP shim has ONE buffer for both, so warning there
+				 * would prepend "Warning: …" to the config itself and hand
+				 * the caller a file nginx refuses. The constant is the
+				 * discriminator: real WP-CLI defines it, the shim defines
+				 * only the class.
+				 */
+				if ( defined( 'WP_CLI' ) && \WP_CLI ) {
+					\WP_CLI::warning(
+						'Could not detect the web server — no recognisable SERVER_SOFTWARE, and no web request has cached one yet. Assuming nginx, which is what this command generates. Pass --server= to state it explicitly, or load any page once to settle detection.'
+					);
+				}
+			}
+
+			if ( null !== $assume ) {
+				$pinned = $assume;
+				$pin    = static function () use ( $pinned ) {
+					return $pinned;
+				};
+				add_filter( 'xspeed_server_type', $pin );
+			}
+
+			$block  = \XSpeed\Cache::full_nginx_server_block();
+			$server = \XSpeed\Server::type();
+
+			if ( null !== $pin ) {
+				remove_filter( 'xspeed_server_type', $pin );
+			}
+
+			if ( ! is_string( $block ) || '' === trim( $block ) ) {
+				/*
+				 * $server cannot be UNKNOWN here: an undetectable host was
+				 * already assumed to be nginx above, so anything left is a
+				 * server we positively identified — and telling an Apache or
+				 * LiteSpeed operator that .htaccess already covers them is
+				 * more useful than handing them a block to paste nowhere.
+				 */
+				if ( \XSpeed\Server::NGINX !== $server ) {
+					\WP_CLI::error(
+						sprintf(
+							'No nginx server-block to print — this site is running on %s. On Apache and LiteSpeed xSpeed writes its rules to .htaccess automatically.',
+							$server
+						)
+					);
+					return;
+				}
+				\WP_CLI::error( 'No nginx directives to print — page caching and every module that contributes directives are currently disabled.' );
+				return;
+			}
+
+			// STDOUT only: no WP_CLI::log() prefixing, so redirection gives a
+			// clean file. WP_CLI::line() writes the raw string.
+			\WP_CLI::line( rtrim( $block, "\n" ) );
+			return;
+		}
 
 		/*
 		 * Force a fresh static-rewrite probe. The result is cached for five
@@ -600,5 +719,31 @@ final class CacheModule extends Module {
 			return null;
 		}
 		return \XSpeed\Cache::nginx_snippet();
+	}
+
+	/**
+	 * Page caching's master switch is `cache_enabled` in the GLOBAL
+	 * `xspeed_options`, not a per-module `enabled` key -- Cache::toggle owns
+	 * it because flipping it rewrites .htaccess and wp-config.php. The base
+	 * implementation looks only at this module's own settings bag, so it
+	 * found nothing and reported null: the plugin's headline feature was
+	 * missing from its own "N on" count. (#363)
+	 */
+	public function is_active(): ?bool {
+		$opts = get_option( 'xspeed_options', array() );
+		return ! empty( $opts['cache_enabled'] );
+	}
+
+	/**
+	 * No reason shown: page caching has a single master switch, so the pill
+	 * already says everything an (i) would. The switch lives on the Overview
+	 * rather than on this page, but that is a "where is the control" question
+	 * the panel itself should answer, not a reason to explain the verdict.
+	 *
+	 * The (i) is reserved for modules whose on/off is genuinely non-obvious
+	 * -- counted from several flags, or from state outside the settings.
+	 */
+	public function active_reason(): ?string {
+		return null;
 	}
 }

@@ -2062,6 +2062,84 @@ class Cache {
 	 * as the bare path. Any future opt-in that folds a query param into the
 	 * key needs a guard below, exactly like the search one.
 	 */
+	/**
+	 * Transient holding the most recent static-tree refusal.
+	 *
+	 * Short-lived on purpose: it describes what the last cacheable render
+	 * actually did, so a stale entry would keep warning about a page whose
+	 * nonces have since been removed. A site that still refuses simply
+	 * rewrites it on the next render. (#372)
+	 */
+	private const STATIC_SKIP_TRANSIENT = 'xspeed_static_skip';
+
+	/**
+	 * Remember why a page was kept out of the static tree, for Health.
+	 *
+	 * Records the URL, the reason, and — for the nonce case — the distinct
+	 * nonce KEYS found, which is what makes the finding actionable: the names
+	 * (`eael_login_nonce`, `post_grid_pagination_nonce`, …) trace straight back
+	 * to the plugin emitting them, and it is usually a widget the site does not
+	 * use on that page. Only key names are kept, never the nonce values.
+	 *
+	 * @param string $reason Machine-readable refusal reason.
+	 * @param string $html   The response, for extracting the nonce keys.
+	 */
+	private static function note_static_skip( string $reason, string $html = '' ): void {
+		if ( ! function_exists( 'set_transient' ) ) {
+			return;
+		}
+
+		$keys = array();
+		if ( 'nonce' === $reason && '' !== $html ) {
+			// Must recognise the SAME shapes response_has_nonce() refuses on,
+			// or a page is skipped and reported with no keys at all — which is
+			// most of them, since the plain `name="_wpnonce"` form field is the
+			// commonest shape by far and only the JSON one was handled here.
+			// The keys are the actionable half of the message, so a mismatch
+			// leaves the admin with bad news and nothing to act on.
+			//
+			// Both alternations capture the KEY only: each value pattern sits
+			// outside the capture group, so a nonce secret can never be stored.
+			$found = array();
+			if ( preg_match_all( '/name=["\']([a-z0-9_\-\[\]]*nonce[a-z0-9_\-\[\]]*)["\']/i', $html, $m ) ) {
+				$found = array_merge( $found, $m[1] );
+			}
+			if ( preg_match_all( '/["\']([a-z0-9_\-]*nonce[a-z0-9_\-]*)["\']\s*:\s*["\'][a-f0-9]{8,}["\']/i', $html, $m ) ) {
+				$found = array_merge( $found, $m[1] );
+			}
+			// The query-arg shape (`?_wpnonce=…`) has no key name to report
+			// beyond the literal, so name it explicitly rather than reporting
+			// nothing for a page that was genuinely refused.
+			if ( preg_match( '/[?&]_wpnonce=/i', $html ) ) {
+				$found[] = '_wpnonce';
+			}
+			$keys = array_slice( array_values( array_unique( $found ) ), 0, 10 );
+		}
+
+		$uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+
+		set_transient(
+			self::STATIC_SKIP_TRANSIENT,
+			array(
+				'reason' => $reason,
+				'url'    => (string) strtok( $uri, '?' ),
+				'keys'   => $keys,
+				'at'     => time(),
+			),
+			HOUR_IN_SECONDS
+		);
+	}
+
+	/**
+	 * The most recent static-tree refusal, or an empty array when there is none.
+	 *
+	 * @return array{reason:string,url:string,keys:string[],at:int}|array{}
+	 */
+	public static function last_static_skip(): array {
+		$stored = function_exists( 'get_transient' ) ? get_transient( self::STATIC_SKIP_TRANSIENT ) : false;
+		return is_array( $stored ) && ! empty( $stored['reason'] ) ? $stored : array();
+	}
+
 	private static function store_static( string $html ): void {
 		// Search results are keyed by term in cache_key() (`|s=<term>`) but
 		// carry the *path* of whatever URL was searched from — for the usual
@@ -2089,15 +2167,26 @@ class Cache {
 			return;
 		}
 
-		// A nonce-bearing page must not enter the static tree at all. This
-		// tree is served by the web server with NO PHP: there is no TTL
-		// check and no .meta replay, so the per-entry cap that keeps the
-		// drop-in honest (#236) cannot reach here. Cache_GC would collect it
-		// eventually, but "eventually" is a window in which every anonymous
-		// form on the page is broken. Keep these pages on the drop-in, which
-		// DOES honour the capped TTL — same reasoning as the search (#191)
-		// and query-string (#241) guards above.
-		if ( self::response_has_nonce( $html ) ) {
+		// A nonce-bearing page is served here with NO PHP: no TTL check and
+		// no .meta replay, so the per-entry cap that keeps the drop-in honest
+		// (#236) cannot reach a file once it is written. Only Cache_GC removes
+		// it, and until it does the page hands every visitor the same nonce —
+		// which, once that nonce dies, breaks every anonymous form on it.
+		//
+		// Refusing outright was the safe answer, and it cost every
+		// nonce-bearing page the static tree entirely: a site whose homepage
+		// carries one unused login nonce ran PHP on every request forever.
+		// The nonce's own remaining life is the better gate — the page is
+		// written and its deadline recorded below for GC to enforce.
+		//
+		// A nonce we cannot put a clock on is still refused, and that refusal
+		// is still recorded: it stays completely silent otherwise, because the
+		// drop-in answers HIT while Health reports the fast path active from a
+		// probe that writes its OWN file and never proves real pages reach the
+		// tree. (#372)
+		$nonce_ttl = self::response_has_nonce( $html ) ? self::nonce_capped_ttl( $html, 0 ) : 0;
+		if ( self::response_has_nonce( $html ) && $nonce_ttl < 1 ) {
+			self::note_static_skip( 'nonce', $html );
 			return;
 		}
 
@@ -2135,6 +2224,16 @@ class Cache {
 		}
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- Same rationale as the flat-hash cache write above: WP_Filesystem isn't available on frontend requests, and the cache write must happen during shutdown.
 		$written = file_put_contents( $file, $html, LOCK_EX );
+
+		// A nonce-bearing page expires on the nonce's schedule, not the site's.
+		// Nothing reads this file at serve time — the web server hands over
+		// index.html without PHP — so the deadline is recorded beside it for
+		// GC, which is the only thing that can enforce it. Written before the
+		// action below so a listener that shells out cannot race the sweep.
+		if ( false !== $written && $nonce_ttl > 0 ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- same rationale as the write above.
+			file_put_contents( $dir . '/.xspeed-expires', (string) ( time() + $nonce_ttl ), LOCK_EX );
+		}
 
 		if ( false !== $written ) {
 			/**
@@ -2199,13 +2298,33 @@ class Cache {
 	 * comments — and before every cache write, so all serve paths carry the
 	 * same bytes.
 	 *
+	 * The generation time is baked in here, at write time, in UTC. It is the
+	 * moment the cached bytes were produced — NOT the moment they were served
+	 * — because all three serve paths replay the same stored file, and two of
+	 * them (the nginx/`.htaccess` static rewrite) run no PHP at all and so
+	 * could never stamp a serve-time value. Reading the age of a page is the
+	 * point: `generated` plus the current clock tells you how stale it is.
+	 * `gmdate()` (not `current_time()`) keeps the value comparable across
+	 * sites regardless of the configured timezone.
+	 *
 	 * @param string $html Finished page HTML.
 	 * @return string HTML with the signature appended (or unchanged when a
 	 *                filter removed it).
 	 */
 	private static function signed( string $html ): string {
 		$version   = defined( 'XSPEED_VERSION' ) ? XSPEED_VERSION : '';
-		$signature = sprintf( '<!-- Page cached by xSpeed Cache v%s | xspeedcache.com -->', $version );
+		$generated = gmdate( 'Y-m-d H:i:s' ) . ' UTC';
+		// The literal ' | xspeedcache.com' must survive intact, and what
+		// precedes it is where an edition suffix lands: Pro appends itself by
+		// str_replace()-ing on that exact token
+		// (Pro_Plugin::sign_cache_signature). So the stamp goes AFTER it —
+		// placed before, it sits between the version and the anchor and
+		// composes as "generated <date> + Pro v1.1.3".
+		$signature = sprintf(
+			'<!-- Page cached by xSpeed Cache v%s | xspeedcache.com | generated %s -->',
+			$version,
+			$generated
+		);
 
 		/**
 		 * Filter: xspeed_cache_signature
@@ -2217,8 +2336,10 @@ class Cache {
 		 *
 		 * @param string $signature The signature comment.
 		 * @param string $version   The plugin version baked into it.
+		 * @param string $generated The write-time timestamp baked into it,
+		 *                          formatted `Y-m-d H:i:s UTC`.
 		 */
-		$signature = (string) apply_filters( 'xspeed_cache_signature', $signature, $version );
+		$signature = (string) apply_filters( 'xspeed_cache_signature', $signature, $version, $generated );
 		if ( '' === trim( $signature ) ) {
 			return $html;
 		}
@@ -4924,6 +5045,18 @@ class Cache {
 		$reason       = (string) ( $probe['reason'] ?? '' );
 		$block_reason = self::static_rewrite_block_reason();
 
+		// Same observed-refusal check Health makes. This is the shared path for
+		// `wp xspeed cache recheck-rewrite` and POST /cache/recheck-rewrite —
+		// and, because a CLI command is automatically an MCP tool, for the
+		// AI-facing surface too. Leaving it out would have fixed the dashboard
+		// while the CLI kept answering that the fast path was active. (#372)
+		if ( '' === $block_reason ) {
+			$skip = self::last_static_skip();
+			if ( ! empty( $skip['reason'] ) ) {
+				$block_reason = 'skipped_' . (string) $skip['reason'];
+			}
+		}
+
 		// With page caching off there is nothing to serve, so `active` can
 		// never be true here whatever the raw probe says. probe_static_rewrite()
 		// writes its OWN file under the static tree and fetches that, which
@@ -4979,6 +5112,8 @@ class Cache {
 				return 'Separate Mobile Cache is on, which disables the device-blind static rewrite. Cache hits are served by PHP instead. If your site serves the same HTML to every device, turn it off in Cache settings for much faster hits.';
 			case 'no_mod_headers':
 				return "Apache's mod_headers is not loaded, so the static rewrite cannot mark its responses as cache hits. Enable mod_headers, or leave hits on the PHP path.";
+			case 'skipped_nonce':
+				return 'The server config is correct, but pages are not reaching the static cache because they contain nonces, so hits are served by PHP instead. A static file is served with no PHP, so a nonce baked into one could never be refreshed and every anonymous form on the page would break once it expired — keeping these pages on PHP is deliberate. Nonces usually come from plugin widgets; disabling the ones the site does not use lets its pages be served statically again.';
 			default:
 				return sprintf( 'The static rewrite is disabled (%s).', $code );
 		}
@@ -5205,6 +5340,14 @@ class Cache {
 			// ISO-ish timestamps + epoch-looking numbers in query strings.
 			'/\?ver=[0-9.]+/',
 			'/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+Z-]+/',
+			// Our own signature's generation stamp. The two fetches are
+			// sequential and each writes its own entry, so this differs on
+			// essentially every comparison — and it is space-separated, so
+			// the ISO rule above (which requires a literal `T`) never
+			// touches it. Without this the probe reports "differ" for every
+			// site and the "safe to turn Separate Mobile Cache off" verdict
+			// can never appear.
+			'/generated [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC/',
 			// Raw epoch seconds. The two fetches are sequential, so any
 			// template printing time() guaranteed a mismatch.
 			//

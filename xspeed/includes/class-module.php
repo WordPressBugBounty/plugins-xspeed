@@ -256,6 +256,133 @@ abstract class Module {
 	}
 
 	/**
+	 * Is this module actually doing something right now?
+	 *
+	 * "On" is not one shape across the plugin. Most modules carry an
+	 * `enabled` setting, but page caching lives in the GLOBAL option
+	 * (`xspeed_options.cache_enabled`), Minify and Lazy are on when any of
+	 * their individual flags is set, and MCP is on when it is connected.
+	 * The sidebar's "N on" badge counted only the literal `enabled` key, so
+	 * it under-reported: on a site with page caching, minification, lazy
+	 * loading and MCP all running it read "Cache 2 / Optimization 1" and
+	 * left the plugin's headline feature out of its own count. (#363)
+	 *
+	 * The default below keeps the historic behaviour for the modules that
+	 * genuinely do store `enabled`. A module whose "on" means something
+	 * else overrides this and answers for itself, which is what stops the
+	 * count drifting again the next time a module changes shape.
+	 *
+	 * Three-state on purpose:
+	 *   true  — on and doing work
+	 *   false — off
+	 *   null  — no meaningful on/off (a status panel like Health). Callers
+	 *           must exclude these rather than counting them as off.
+	 */
+	public function is_active(): ?bool {
+		$settings = $this->get_settings();
+		return array_key_exists( 'enabled', $settings )
+			? (bool) $settings['enabled']
+			: null;
+	}
+
+	/**
+	 * "On if any of my boolean flags is on" — the shape used by modules
+	 * that have no master switch, only a set of independent toggles
+	 * (Minify, Lazy, Bloat, Gzip).
+	 *
+	 * Derived from the module's OWN schema rather than a hardcoded key
+	 * list, so adding a flag to a module cannot silently fall out of its
+	 * active state the way a literal list would. Only `bool` fields count:
+	 * an int like `eager_first_n` or a list like `excluded_images` is
+	 * configuration for a feature, not evidence the feature is on.
+	 *
+	 * Returns null when the module declares no boolean flags at all, so a
+	 * caller can exclude it rather than record a misleading false.
+	 */
+	final protected function any_bool_flag_on(): ?bool {
+		$schema   = $this->settings_schema();
+		$settings = $this->get_settings();
+
+		$found = false;
+		foreach ( $schema as $key => $spec ) {
+			if ( 'bool' !== ( $spec['type'] ?? '' ) ) {
+				continue;
+			}
+			$found = true;
+			if ( ! empty( $settings[ $key ] ) ) {
+				return true;
+			}
+		}
+
+		return $found ? false : null;
+	}
+
+	/**
+	 * Why is this module reported on or off? One short sentence for the (i)
+	 * beside the status pill.
+	 *
+	 * "On" is not one shape (see is_active()), so without this the pill is a
+	 * bare assertion the user cannot check. It is most opaque exactly where
+	 * the rule is least obvious: Media Optimization reads "On" while its two
+	 * most prominent switches, Lazy-load Images and Iframes, are both off --
+	 * because three other flags are on. The reason names them.
+	 *
+	 * Computed server-side alongside is_active() so the explanation cannot
+	 * drift from the verdict it explains. Returning null means "no reason to
+	 * add" and the (i) is not rendered.
+	 */
+	public function active_reason(): ?string {
+		// A module with its own `enabled` switch needs no explaining: the
+		// pill and the switch say the same thing, and an (i) that only
+		// restates the pill is noise on every one of those pages. Silence
+		// here is what keeps the (i) meaningful where it does appear.
+		if ( array_key_exists( 'enabled', $this->get_settings() ) ) {
+			return null;
+		}
+
+		return $this->bool_flag_reason();
+	}
+
+	/**
+	 * The reason text for a module whose "on" is "any of my flags is on".
+	 *
+	 * Names the specific settings that are on, using their schema labels, so
+	 * the user can go and look at them rather than take the pill on trust.
+	 * Shared by every flag-based module for one consistent sentence.
+	 */
+	final protected function bool_flag_reason(): ?string {
+		$schema   = $this->settings_schema();
+		$settings = $this->get_settings();
+
+		$on = array();
+		foreach ( $schema as $key => $spec ) {
+			if ( 'bool' !== ( $spec['type'] ?? '' ) ) {
+				continue;
+			}
+			if ( ! empty( $settings[ $key ] ) ) {
+				$on[] = $spec['label'] ?? $key;
+			}
+		}
+
+		// No boolean flags at all means the module has no on/off to explain
+		// (a status panel like Health). Mirrors any_bool_flag_on() returning
+		// null: no verdict, so no reason.
+		if ( null === $this->any_bool_flag_on() ) {
+			return null;
+		}
+
+		if ( empty( $on ) ) {
+			return __( 'This module has no single on/off switch. It counts as on when any of its settings is on, and none currently is.', 'xspeed' );
+		}
+
+		return sprintf(
+			/* translators: %s: comma-separated list of setting labels that are switched on. */
+			__( 'This module has no single on/off switch. It counts as on because these settings are on: %s.', 'xspeed' ),
+			implode( ', ', $on )
+		);
+	}
+
+	/**
 	 * WP-CLI command definitions. Each entry: [
 	 *   'name'     => 'xspeed cache purge',
 	 *   'callback' => callable,

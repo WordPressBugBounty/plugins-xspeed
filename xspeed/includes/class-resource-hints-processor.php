@@ -229,6 +229,18 @@ final class Resource_Hints_Processor {
 			}
 		}
 
+		// PASS 1b — the same for CSS background images.
+		//
+		// On a page builder the hero is usually a background-image on the
+		// section, not an <img>, so an <img>-only candidate set never contained
+		// the element that actually paints as LCP. It preloaded whatever <img>
+		// happened to be there — measured at 0ms against the feature switched
+		// off, while spending a high-priority fetch on the critical path — or,
+		// on a page with no <img> at all, emitted nothing. (#247)
+		foreach ( self::background_candidates( $html, $exclusions ) as $bg ) {
+			$candidates[] = $bg;
+		}
+
 		if ( empty( $candidates ) ) {
 			return array( $html, '' );
 		}
@@ -262,7 +274,13 @@ final class Resource_Hints_Processor {
 			if ( ! $already ) {
 				$preload .= self::preload_link( $w['src'], $w['srcset'], $w['sizes'] );
 			}
-			$chosen[ $w['order'] ] = true;
+			// Only <img> winners are promoted in PASS 2 — there is no
+			// fetchpriority/loading attribute to fix on a background element,
+			// and its `order` is offset past every <img> index precisely so it
+			// can never select one for rewriting.
+			if ( empty( $w['background'] ) ) {
+				$chosen[ $w['order'] ] = true;
+			}
 		}
 
 		// Rewrite only the winning tags. Counting occurrences rather than
@@ -288,6 +306,131 @@ final class Resource_Hints_Processor {
 		);
 
 		return array( (string) $html, $preload );
+	}
+
+	/**
+	 * Collect CSS `background-image` heroes as LCP candidates.
+	 *
+	 * Only INLINE `style` attributes are read. A background declared in an
+	 * external stylesheet is invisible here by design: resolving it would mean
+	 * fetching and parsing CSS from inside an output-buffer pass, and the URL a
+	 * selector resolves to depends on cascade order we cannot evaluate from
+	 * markup. Builders that put the hero in a generated per-post stylesheet are
+	 * therefore still unserved — worth doing, but not at this cost. (#247)
+	 *
+	 * Scores are the element's declared pixel area so a background competes
+	 * against an <img> in the SAME units — the whole point being that the
+	 * bigger of the two should win regardless of which kind it is.
+	 *
+	 * @param string   $html       Full page HTML.
+	 * @param string[] $exclusions Substring patterns the user excluded.
+	 * @return array<int,array{tag:string,src:string,srcset:string,sizes:string,score:int,order:int,background:bool}>
+	 */
+	private static function background_candidates( string $html, array $exclusions ): array {
+		if ( ! preg_match_all( '#<(?:div|section|header|figure|a|span|li|main|article|aside)\b[^>]*\sstyle\s*=\s*(["\']).*?\1[^>]*>#is', $html, $matches ) ) {
+			return array();
+		}
+
+		$found = array();
+		foreach ( $matches[0] as $index => $tag ) {
+			$style = self::attr( $tag, 'style' );
+			if ( '' === $style || false === stripos( $style, 'background' ) ) {
+				continue;
+			}
+
+			$src = self::background_url( $style );
+			if ( '' === $src ) {
+				continue;
+			}
+
+			foreach ( $exclusions as $needle ) {
+				if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
+					continue 2;
+				}
+			}
+
+			// Same chrome/opt-out gates as <img>. A logo painted as a background
+			// is no more the hero than a logo in an <img>.
+			if ( self::looks_too_small( $tag ) ) {
+				continue;
+			}
+
+			$area = self::style_area( $style );
+			if ( 0 === $area ) {
+				// Nothing readable. Deliberately non-zero for the same reason
+				// UNKNOWN_SIZE_SCORE is: an unmeasurable background must still
+				// beat nothing on a page that declares no sizes at all, while
+				// losing to anything we can actually measure.
+				$area = self::UNKNOWN_SIZE_SCORE;
+			}
+
+			$found[] = array(
+				'tag'        => $tag,
+				'src'        => $src,
+				'srcset'     => '',
+				'sizes'      => '',
+				'score'      => $area,
+				// Offset so a background never ties ahead of an <img> that
+				// appeared earlier in the document; ties still break on order.
+				'order'      => 100000 + $index,
+				'background' => true,
+			);
+		}
+
+		return $found;
+	}
+
+	/**
+	 * Pull a real image URL out of a `background`/`background-image` declaration.
+	 *
+	 * Returns '' for anything with nothing to fetch: a gradient (which is a
+	 * background-image but not a resource), a data: URI, or `none`.
+	 */
+	private static function background_url( string $style ): string {
+		// Decode BEFORE parsing. Builders emit the url() quotes HTML-encoded
+		// inside a style attribute (url(&quot;/hero.jpg&quot;)), and `&quot;`
+		// carries a semicolon — so splitting the declaration on `;` first
+		// truncated the value to `url(&quot` and found no URL at all.
+		$style = html_entity_decode( $style, ENT_QUOTES );
+
+		if ( ! preg_match( '#background(?:-image)?\s*:\s*((?:[^;\'"]|"[^"]*"|\'[^\']*\')+)#i', $style, $decl ) ) {
+			return '';
+		}
+		if ( ! preg_match( '#url\(\s*(["\']?)(.*?)\1\s*\)#is', $decl[1], $m ) ) {
+			return '';
+		}
+		$url = trim( $m[2] );
+		if ( '' === $url || 0 === stripos( $url, 'data:' ) ) {
+			return '';
+		}
+		return $url;
+	}
+
+	/**
+	 * Declared pixel area from an inline style, or 0 when it can't be read.
+	 *
+	 * Only px is honoured. A percentage or viewport unit resolves against a
+	 * containing block we cannot see from markup, and guessing one produced the
+	 * wrong winner more often than declining to.
+	 */
+	private static function style_area( string $style ): int {
+		$w = self::style_px( $style, 'width' );
+		$h = self::style_px( $style, 'height' );
+		if ( $w > 0 && $h > 0 ) {
+			return $w * $h;
+		}
+		if ( $w > 0 ) {
+			return (int) round( $w * $w * self::ASSUMED_ASPECT_RATIO );
+		}
+		return 0;
+	}
+
+	/** One px-valued CSS length from an inline style, or 0. */
+	private static function style_px( string $style, string $prop ): int {
+		if ( preg_match( '#(?:^|;)\s*' . preg_quote( $prop, '#' ) . '\s*:\s*(\d+(?:\.\d+)?)px#i', $style, $m ) ) {
+			return (int) round( (float) $m[1] );
+		}
+		return 0;
 	}
 
 	/**

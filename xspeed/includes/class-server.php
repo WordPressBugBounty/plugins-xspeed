@@ -40,18 +40,34 @@ class Server {
 			if ( $cached !== $detected ) {
 				update_option( self::OPT_CACHED_TYPE, $detected, false );
 			}
-			return $detected;
+			$type = $detected;
+		} else {
+			// No definitive signal this request (typically WP-CLI, where
+			// SERVER_SOFTWARE is empty). Read whatever was cached the last
+			// time we ran from a real HTTP request.
+			$cached = get_option( self::OPT_CACHED_TYPE, null );
+			$type   = ( is_string( $cached ) && '' !== $cached ) ? $cached : self::UNKNOWN;
 		}
 
-		// No definitive signal this request (typically WP-CLI, where
-		// SERVER_SOFTWARE is empty). Read whatever was cached the last
-		// time we ran from a real HTTP request.
-		$cached = get_option( self::OPT_CACHED_TYPE, null );
-		if ( is_string( $cached ) && '' !== $cached ) {
-			return $cached;
-		}
-
-		return self::UNKNOWN;
+		/**
+		 * Filters the resolved server type.
+		 *
+		 * The override point for contexts that cannot detect. Detection
+		 * reads SERVER_SOFTWARE, which the web server supplies and WP-CLI
+		 * therefore never has; the cached option covers CLI runs on a site
+		 * some request has already reached, but a site provisioned entirely
+		 * over WP-CLI has nothing cached and resolves to `unknown` even on
+		 * nginx. `wp xspeed cache nginx-config --server=` hooks this so
+		 * every gate downstream — Cache::nginx_snippet(), each module's own
+		 * nginx_directives() — agrees on one answer, rather than each
+		 * re-deciding and emitting a half-built config.
+		 *
+		 * Filtering does NOT write the cached option: an assumption stated
+		 * for one command must not become this site's persisted answer.
+		 *
+		 * @param string $type One of apache|litespeed|nginx|iis|unknown.
+		 */
+		return apply_filters( 'xspeed_server_type', $type );
 	}
 
 	/**

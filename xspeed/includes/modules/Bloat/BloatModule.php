@@ -230,4 +230,12 @@ final class BloatModule extends Module {
 			\WP_CLI::log( sprintf( '%-30s %s', $key, $value ? 'on' : 'off' ) );
 		}
 	}
+
+	/**
+	 * Bloat has no master switch -- it is on when any of its disable_* /
+	 * strip_* / restrict_* flags is set. (#363)
+	 */
+	public function is_active(): ?bool {
+		return $this->any_bool_flag_on();
+	}
 }

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: xSpeed Cache
  * Description: Minimal, ultra-fast caching plugin for WordPress.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Requires at least: 6.0
  * Tested up to: 7.1
  * Requires PHP: 7.4
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'XSPEED_VERSION', '1.2.3' );
+define( 'XSPEED_VERSION', '1.2.4' );
 define( 'XSPEED_FILE', __FILE__ );
 define( 'XSPEED_DIR', plugin_dir_path( __FILE__ ) );
 define( 'XSPEED_URL', plugin_dir_url( __FILE__ ) );

@@ -630,6 +630,24 @@ class Admin {
 				'enabled'      => array_key_exists( 'enabled', $settings )
 					? (bool) $settings['enabled']
 					: null,
+				// Whether the module is actually DOING something, which is not
+				// the same question as `enabled` above. "On" has several shapes
+				// -- page caching lives in the global option, Minify and Lazy
+				// are on when any flag is set, MCP when it is connected -- so
+				// each module answers for itself via is_active(). Consumers
+				// that want "what is switched on?" (the sidebar's "N on" badge)
+				// must read THIS, not `enabled`, which only ever described the
+				// modules that happen to store that one key. null means the
+				// module has no meaningful on/off and should be excluded from
+				// any count rather than treated as off. (#363)
+				'active'       => $module->is_active(),
+				// One sentence explaining the line above, computed next to it
+				// so the two cannot disagree. The UI shows it behind an (i)
+				// beside the status pill: "On" is a bare assertion otherwise,
+				// and least obvious exactly where it matters -- Media
+				// Optimization reads On while its two most prominent switches
+				// are off, because three other flags are on. (#363)
+				'active_reason' => $module->active_reason(),
 				'label'        => $meta['label'] ?? ucfirst( $slug ),
 				'icon'         => $meta['icon'] ?? 'Square',
 				'description'  => $meta['description'] ?? '',

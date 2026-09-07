@@ -334,6 +334,26 @@ final class Cache_GC {
 	 * 200 text/html, so the global TTL is always correct there.
 	 */
 	private static function page_max_age( string $phase, string $path, int $default_ttl ): int {
+		if ( 'static' === $phase ) {
+			// A nonce-bearing page records its own deadline when written: the
+			// nonce dies on WordPress's schedule, not the site's cache
+			// lifetime, and this tree is served without PHP so nothing else
+			// can enforce it. A site caching for a week would otherwise hand
+			// out a dead nonce for six and a half days of it, breaking every
+			// anonymous form on the page.
+			$expires_file = dirname( $path ) . '/.xspeed-expires';
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- sidecar read on a cron sweep; WP_Filesystem is not loaded here.
+			$expires = is_readable( $expires_file ) ? (int) @file_get_contents( $expires_file ) : 0; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- file may vanish between the check and the read.
+			if ( $expires > 0 ) {
+				$mtime = @filemtime( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- false is handled below.
+				// Express the deadline as an age, since the caller compares
+				// against the file's own mtime. A file already past its
+				// deadline gets 0, which expires it on this sweep.
+				return ( false !== $mtime ) ? max( 0, $expires - $mtime ) : 0;
+			}
+
+			return $default_ttl;
+		}
 		if ( 'flat' !== $phase ) {
 			return $default_ttl;
 		}

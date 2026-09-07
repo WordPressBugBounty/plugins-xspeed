@@ -358,4 +358,32 @@ final class ObjectCacheModule extends Module {
 				\WP_CLI::error( "Unknown action: $action" );
 		}
 	}
+
+	/**
+	 * The object cache is on when OUR drop-in is installed and actually
+	 * persisting -- not when a backend host is merely typed into the
+	 * settings. `detect()` reads the running instance, so a drop-in that is
+	 * installed but degraded (connected to nothing) correctly reports off
+	 * rather than claiming a cache the site is not getting. (#363)
+	 */
+	public function is_active(): ?bool {
+		$state = Object_Cache::detect();
+		return ! empty( $state['persistent'] );
+	}
+
+	/**
+	 * Configured is not the same as working, and the difference is the whole
+	 * point here -- a drop-in connected to nothing reports on to WordPress
+	 * while persisting no data. Report what is actually happening.
+	 */
+	public function active_reason(): ?string {
+		$state = Object_Cache::detect();
+		if ( ! empty( $state['persistent'] ) ) {
+			return __( 'The object cache drop-in is installed and storing data. This is measured from the running cache, not from the settings on this page.', 'xspeed' );
+		}
+		if ( ! empty( $state['degraded'] ) ) {
+			return __( 'The drop-in is installed but is not storing anything, so this counts as off. Check the connection settings below.', 'xspeed' );
+		}
+		return __( 'No object cache is running. Entering a host below does not switch it on by itself -- the drop-in has to be installed and connect successfully.', 'xspeed' );
+	}
 }
