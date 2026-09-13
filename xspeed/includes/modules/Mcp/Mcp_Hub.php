@@ -625,7 +625,43 @@ final class Mcp_Hub {
 	 * @return array<string,mixed>|\WP_Error
 	 */
 	public static function gtmetrix_test() {
-		return self::gtmetrix_request( 'POST', '/api/site/gtmetrix/test' );
+		return self::hub_request( 'POST', '/api/site/gtmetrix/test' );
+	}
+
+	/**
+	 * Ask the Hub to run a PageSpeed Insights audit for this site.
+	 *
+	 * The PSI twin of gtmetrix_test(): the Hub holds a real Google API key, so
+	 * routing the audit through it is what makes a keyless site's test work —
+	 * an unkeyed call straight to Google shares one anonymous per-IP pool with
+	 * every other unkeyed caller and refuses with "Quota exceeded" under any
+	 * real load (issue #426).
+	 *
+	 * The Hub answers 202 with a run row and audits in the background; the
+	 * result arrives via psi_runs().
+	 *
+	 * @param string $strategy 'mobile', 'desktop' or 'both'.
+	 * @return array<string,mixed>|\WP_Error
+	 */
+	public static function psi_test( string $strategy = 'mobile' ) {
+		$strategy = in_array( $strategy, array( 'mobile', 'desktop', 'both' ), true ) ? $strategy : 'mobile';
+		return self::hub_request( 'POST', '/api/site/psi/test', array( 'strategy' => $strategy ) );
+	}
+
+	/**
+	 * PSI runs for this site, finished ones copied into the local history.
+	 *
+	 * The polling half of psi_test() — that route answers before the audit
+	 * runs, so without this the plugin would never learn the score.
+	 *
+	 * @return array<string,mixed>|\WP_Error
+	 */
+	public static function psi_runs() {
+		$result = self::hub_request( 'GET', '/api/site/psi/runs' );
+		if ( ! is_wp_error( $result ) ) {
+			self::store_hub_results( $result );
+		}
+		return $result;
 	}
 
 	/**
@@ -637,7 +673,7 @@ final class Mcp_Hub {
 	 * @return array<string,mixed>|\WP_Error
 	 */
 	public static function gtmetrix_runs() {
-		$result = self::gtmetrix_request( 'GET', '/api/site/gtmetrix/runs' );
+		$result = self::hub_request( 'GET', '/api/site/gtmetrix/runs' );
 		if ( ! is_wp_error( $result ) ) {
 			self::store_hub_results( $result );
 		}
@@ -683,13 +719,17 @@ final class Mcp_Hub {
 				continue;
 			}
 
+			// The runs table is shared between providers on the Hub too — a
+			// PSI run must not be recorded as a GTmetrix row.
+			$provider = 'psi' === ( $run['provider'] ?? '' ) ? 'psi' : 'gtmetrix';
+
 			Score_Store::insert(
 				array(
 					'ok'         => true,
-					'provider'   => 'gtmetrix',
+					'provider'   => $provider,
 					'ts'         => $ts,
 					'url'        => (string) ( $r['url'] ?? '' ),
-					'strategy'   => (string) ( $r['strategy'] ?? 'desktop' ),
+					'strategy'   => (string) ( $r['strategy'] ?? ( 'psi' === $provider ? 'mobile' : 'desktop' ) ),
 					'score'      => $r['score'] ?? null,
 					'metrics'    => array(
 						'lcp'  => $r['lcp'] ?? null,
@@ -718,30 +758,31 @@ final class Mcp_Hub {
 	 * divergence there would show up as the UI handling a quota error on one
 	 * path and not the other.
 	 *
-	 * @param string $method HTTP method.
-	 * @param string $path   Path under the hub base URL.
+	 * @param string              $method HTTP method.
+	 * @param string              $path   Path under the hub base URL.
+	 * @param array<string,mixed> $body   Extra POST body fields beside site_url.
 	 * @return array<string,mixed>|\WP_Error
 	 */
-	private static function gtmetrix_request( string $method, string $path ) {
+	private static function hub_request( string $method, string $path, array $body = array() ) {
 		$token = Mcp_Pairing::site_token();
 		if ( '' === $token ) {
 			return new \WP_Error(
 				'not_connected',
-				__( 'Connect this site to xSpeed Hub to run a free GTmetrix test.', 'xspeed' )
+				__( 'Connect this site to xSpeed Hub to run a free speed test.', 'xspeed' )
 			);
 		}
 
 		$site_url = self::site_url_canonical();
 		$args     = array(
-			// A GTmetrix test takes a minute, but the Hub answers as soon as it
-			// has ACCEPTED the job — this waits for that handshake only.
+			// A test takes a minute, but the Hub answers as soon as it has
+			// ACCEPTED the job — this waits for that handshake only.
 			'timeout' => 15,
 			'headers' => array( 'X-XSpeed-Site-Token' => $token ),
 		);
 
 		if ( 'POST' === $method ) {
 			$args['headers']['Content-Type'] = 'application/json';
-			$args['body']                    = wp_json_encode( array( 'site_url' => $site_url ) );
+			$args['body']                    = wp_json_encode( array_merge( array( 'site_url' => $site_url ), $body ) );
 			$resp                            = wp_remote_post( self::hub_url() . $path, $args );
 		} else {
 			$resp = wp_remote_get(

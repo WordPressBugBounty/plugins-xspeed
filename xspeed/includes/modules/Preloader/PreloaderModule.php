@@ -29,10 +29,10 @@ final class PreloaderModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Preloader',
-			'tab_label'    => 'Crawl Now', // its own tab on the Preloader page
+			'label'        => __( 'Preloader', 'xspeed' ),
+			'tab_label'    => __( 'Crawl Now', 'xspeed' ), // its own tab on the Preloader page
 			'icon'         => 'Wand2',
-			'description'  => 'Crawl the sitemap to warm cache so visitors never hit a cold MISS.',
+			'description'  => __( 'Crawl the sitemap to warm cache so visitors never hit a cold MISS.', 'xspeed' ),
 			// Custom panel wraps the schema-driven settings with a
 			// Start/Stop control surface + a live status readout
 			// (queue depth, last URL, recent errors).
@@ -45,8 +45,8 @@ final class PreloaderModule extends Module {
 			'enabled'     => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable Preloader',
-				'description' => 'When on, xSpeed crawls the sitemap on the schedule below and warms the page cache.',
+				'label'       => __( 'Enable Preloader', 'xspeed' ),
+				'description' => __( 'When on, xSpeed crawls the sitemap on the schedule below and warms the page cache.', 'xspeed' ),
 			),
 			'schedule'    => array(
 				'type'          => 'enum',
@@ -58,8 +58,8 @@ final class PreloaderModule extends Module {
 					'daily'  => 'Daily',
 					'weekly' => 'Weekly',
 				),
-				'label'         => 'Schedule',
-				'description'   => 'How often to start a fresh crawl. Manual means you trigger it from the dashboard.',
+				'label'         => __( 'Schedule', 'xspeed' ),
+				'description'   => __( 'How often to start a fresh crawl. Manual means you trigger it from the dashboard.', 'xspeed' ),
 				'dependsOn'     => array( 'field' => 'enabled' ),
 			),
 			'batch_size'  => array(
@@ -67,29 +67,29 @@ final class PreloaderModule extends Module {
 				'default'     => 5,
 				'min'         => 1,
 				'max'         => 50,
-				'label'       => 'Batch Size',
-				'description' => 'URLs warmed per cron tick. Higher = faster crawl, more load on the origin.',
+				'label'       => __( 'Batch Size', 'xspeed' ),
+				'description' => __( 'URLs warmed per cron tick. Higher = faster crawl, more load on the origin.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'sitemap_url' => array(
 				'type'        => 'string',
 				'default'     => '',
-				'label'       => 'Sitemap URL (optional)',
-				'description' => 'Override the auto-detected WordPress core sitemap (/wp-sitemap.xml). Leave blank for default.',
+				'label'       => __( 'Sitemap URL (optional)', 'xspeed' ),
+				'description' => __( 'Override the auto-detected WordPress core sitemap (/wp-sitemap.xml). Leave blank for default.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'warm_on_publish' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Warm new content immediately',
-				'description' => 'When a post or page is published, fetch it once so the first visitor sees a cache HIT, not a cold MISS.',
+				'label'       => __( 'Warm new content immediately', 'xspeed' ),
+				'description' => __( 'When a post or page is published, fetch it once so the first visitor sees a cache HIT, not a cold MISS.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'warm_on_comment' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Re-warm after comments',
-				'description' => 'Re-warm a page after a comment is posted (Cache purges the page on comment; this fetches it back into cache).',
+				'label'       => __( 'Re-warm after comments', 'xspeed' ),
+				'description' => __( 'Re-warm a page after a comment is posted (Cache purges the page on comment; this fetches it back into cache).', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);
@@ -141,6 +141,25 @@ final class PreloaderModule extends Module {
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		add_action( Preloader::CRON_HOOK, array( Preloader::class, 'tick' ) );
 		add_action( 'xspeed_preloader_recurring', array( Preloader::class, 'recurring_kickoff' ) );
 

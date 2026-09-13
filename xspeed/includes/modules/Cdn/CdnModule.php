@@ -25,9 +25,9 @@ final class CdnModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'CDN',
+			'label'       => __( 'CDN', 'xspeed' ),
 			'icon'        => 'Globe',
-			'description' => 'Serve static assets (images, fonts, CSS, JS) from a pull-zone CDN host like BunnyCDN, KeyCDN, or your own.',
+			'description' => __( 'Serve static assets (images, fonts, CSS, JS) from a pull-zone CDN host like BunnyCDN, KeyCDN, or your own.', 'xspeed' ),
 		);
 	}
 
@@ -36,30 +36,30 @@ final class CdnModule extends Module {
 			'enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable CDN',
-				'description' => 'Rewrite static asset URLs to the CDN hostname below. Your CDN must be a pull-zone configured to fetch from this site.',
+				'label'       => __( 'Enable CDN', 'xspeed' ),
+				'description' => __( 'Rewrite static asset URLs to the CDN hostname below. Your CDN must be a pull-zone configured to fetch from this site.', 'xspeed' ),
 			),
 			'cdn_url' => array(
 				'type'        => 'string',
 				'default'     => '',
-				'label'       => 'CDN URL',
-				'description' => 'CDN hostname, e.g. cdn.example.com. https:// and trailing slashes are stripped automatically.',
+				'label'       => __( 'CDN URL', 'xspeed' ),
+				'description' => __( 'CDN hostname, e.g. cdn.example.com. https:// and trailing slashes are stripped automatically.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'included_extensions' => array(
 				'type'        => 'list',
 				'default'     => Cdn_Rewriter::DEFAULT_EXTENSIONS,
 				'item_type'   => 'string',
-				'label'       => 'Included File Extensions',
-				'description' => 'Only URLs ending in these extensions are rewritten. Defaults cover images, fonts, CSS, JS, and common media.',
+				'label'       => __( 'Included File Extensions', 'xspeed' ),
+				'description' => __( 'Only URLs ending in these extensions are rewritten. Defaults cover images, fonts, CSS, JS, and common media.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'excluded_patterns' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => 'Excluded Patterns',
-				'description' => 'Glob patterns matched against the URL path. Matching URLs stay on the origin. Examples: /wp-admin/*, *.pdf, /private/*',
+				'label'       => __( 'Excluded Patterns', 'xspeed' ),
+				'description' => __( 'Glob patterns matched against the URL path. Matching URLs stay on the origin. Examples: /wp-admin/*, *.pdf, /private/*', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);
@@ -77,6 +77,25 @@ final class CdnModule extends Module {
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		// Always-on: normalize cdn_url on save (admin context too).
 		add_filter( 'pre_update_option_xspeed_module_cdn', array( $this, 'normalize_on_save' ), 10, 1 );
 

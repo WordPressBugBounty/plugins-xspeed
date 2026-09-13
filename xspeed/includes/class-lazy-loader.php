@@ -643,7 +643,11 @@ JS;
 	}
 
 	private static function set_attr( string $tag, string $name, string $value, bool $only_if_missing = false ): string {
-		$pattern = '#\b' . preg_quote( $name, '#' ) . '\s*=\s*(["\'][^"\']*["\']|\S+)#i';
+		// Lookbehind, not `\b`: writing `width` onto a tag carrying
+		// `data-width="800"` matched the DATA attribute and rewrote it to the
+		// file's intrinsic size — corrupting a slider's own configuration and
+		// leaving the tag with no real width at all. (#333 review round 3)
+		$pattern = '#(?<![-\w])' . preg_quote( $name, '#' ) . '\s*=\s*(["\'][^"\']*["\']|\S+)#i';
 		if ( preg_match( $pattern, $tag ) ) {
 			if ( $only_if_missing ) {
 				return $tag;
@@ -665,8 +669,17 @@ JS;
 	 * resolve cheaply — never block the request on a remote getimagesize.
 	 */
 	private static function ensure_dimensions( string $tag ): string {
-		$has_w = (bool) preg_match( '#\bwidth\s*=#i', $tag );
-		$has_h = (bool) preg_match( '#\bheight\s*=#i', $tag );
+		// `\b` sits between `-` and `w`, so a bare `\bwidth=` also matched
+		// `data-width=` — a slider's own metadata, not a rendered dimension.
+		// The tag then looked half-sized: apply_dimensions() derived the other
+		// dimension from the ratio and wrote ONLY that, so a tag carrying
+		// `data-width="800"` came out with `height="533"` and no width and
+		// laid out at 41x30. Harmless while the URL never resolved; this
+		// branch made it resolve, which is what exposed it. Half a pair is
+		// worse than none, as the docblock below already says.
+		// (#333 review round 3, issue 2)
+		$has_w = (bool) preg_match( '#(?<![-\w])width\s*=#i', $tag );
+		$has_h = (bool) preg_match( '#(?<![-\w])height\s*=#i', $tag );
 		if ( $has_w && $has_h ) {
 			return $tag;
 		}
@@ -686,16 +699,200 @@ JS;
 		// when the tag doesn't already tell us it renders at some other size:
 		// stamping the intrinsic file size onto a responsive or CSS-sized
 		// image would CREATE the layout shift this feature exists to remove.
-		if ( ! self::has_constrained_render( $tag ) && preg_match( '#\bsrc\s*=\s*["\']([^"\']+)["\']#i', $tag, $sm ) ) {
-			$dims = self::dimensions_for_src( $sm[1] );
-			if ( $dims ) {
-				return self::apply_dimensions( $tag, $dims, $has_w, $has_h );
+		if ( ! self::has_constrained_render( $tag ) ) {
+			$url = self::resolvable_image_url( $tag );
+			if ( '' !== $url ) {
+				$dims = self::dimensions_for_src( $url );
+				if ( $dims ) {
+					return self::apply_dimensions( $tag, $dims, $has_w, $has_h );
+				}
 			}
 		}
 
 		// Couldn't resolve. Leave the tag alone — better no dimensions
 		// than wrong ones.
 		return $tag;
+	}
+
+	/**
+	 * The URL to measure an image by: its real `src`, or the lazy-loading
+	 * attribute holding the URL when `src` is absent or a placeholder.
+	 *
+	 * Page-builder sliders (Essential Blocks among them) ship the image with
+	 * NO `src` at all — the URL lives in `data-lazy`, and their own JS moves
+	 * it across at runtime. Resolving only from `src` left every one of those
+	 * images without dimensions (issue #328, the miss that #37 did not cover:
+	 * that one was about the missing `wp-image-N` class, this one is about the
+	 * URL not being in `src` in the first place).
+	 *
+	 * A placeholder `src` — a data: URI or the 1x1 spacer GIF these libraries
+	 * use — is treated as absent: measuring it would stamp the spacer's size
+	 * onto the tag and CREATE a layout shift.
+	 *
+	 * Note the explicit `(?<![-\w])src` boundary. `\bsrc=` also matches the
+	 * tail of `data-src=` and `data-lazy-src=` (a hyphen is a non-word
+	 * character, so `\b` sits between `-` and `s`), which is why those two
+	 * attributes happened to work before this method existed while `data-lazy`
+	 * and `data-original` did not. Relying on that accident meant the URL a
+	 * tag was measured by depended on how its attribute was spelled.
+	 *
+	 * Pure — unit-tested — EXCEPT when `$may_measure` is true and every
+	 * candidate was refused by name, which is the one branch that touches the
+	 * filesystem. Callers that are themselves arranging a measurement pass
+	 * false; see the note at that branch.
+	 *
+	 * @param string $tag         The <img> tag.
+	 * @param bool   $may_measure Whether a name-refused URL may be settled by
+	 *                            reading the file. False for the warm-up
+	 *                            collector, which would otherwise deadlock.
+	 */
+	public static function resolvable_image_url( string $tag, bool $may_measure = true ): string {
+		$src       = '';
+		$named_out = '';
+		if ( preg_match( '#(?<![-\w])src\s*=\s*["\']([^"\']+)["\']#i', $tag, $m ) ) {
+			$src = trim( $m[1] );
+			if ( '' !== $src && ! self::is_placeholder_src( $src ) ) {
+				return $src;
+			}
+		}
+
+		foreach ( array( 'data-lazy', 'data-src', 'data-lazy-src', 'data-original' ) as $attr ) {
+			// Anchor with a negative lookbehind, not `\b` and not
+			// whitespace. `\b` sits between `-` and `d`, so a bare
+			// `\bdata-src=` also matched the TAIL of `x-data-src=` and took
+			// the wrong image's URL — worse than no size, because it reserves
+			// a wrongly shaped box and CAUSES the shift.
+			//
+			// Requiring whitespace instead was my first fix and it was wrong:
+			// attributes are not always separated by one (`alt="31"srcset=`
+			// is valid), so that anchor silently stopped matching and handed
+			// back a size for a tag the guard should have skipped. The
+			// lookbehind rejects the same prefixed decoys without depending on
+			// spacing, and is what `src` already uses two methods below.
+			// (#333 review rounds 2 and 3, issue 1)
+			if ( preg_match( '#(?<![-\w])' . preg_quote( $attr, '#' ) . '\s*=\s*["\']([^"\']+)["\']#i', $tag, $m ) ) {
+				$url = trim( $m[1] );
+				if ( '' === $url ) {
+					continue;
+				}
+				if ( ! self::is_placeholder_src( $url ) ) {
+					return $url;
+				}
+				// Refused on its NAME. Remember it — if nothing else in the
+				// tag resolves, the file itself gets the final say below.
+				if ( '' === $named_out ) {
+					$named_out = $url;
+				}
+			}
+		}
+
+		// Every candidate was refused on its NAME alone. A name is a guess;
+		// the file is the fact. Someone who uploads a photograph called
+		// `placeholder.jpg` — an entirely ordinary thing to find in a media
+		// library — got no dimensions at all, and neither did any of the
+		// copies WordPress generates from it, so the layout shift this
+		// feature removes came straight back for those images with nothing on
+		// screen to explain why. (#333 review round 2, issue 1)
+		//
+		// Only reached when nothing else in the tag resolved, so the cost is a
+		// lookup that was about to be skipped entirely, never an extra one.
+		// A genuine stand-in fails this test on its own merits: a data: URI
+		// never gets here, and a 1x1 spacer measures 1x1.
+		//
+		// The lazy attribute is preferred over `src`, matching the order
+		// above: when a tag carries both, the lazy one names the real image
+		// and `src` holds the stand-in.
+		// The warm-up collector passes false here, and must. Deciding this by
+		// MEASURING is circular for the caller whose whole job is to arrange
+		// the measurement: remote lookups are gated off until `$warming` is
+		// true, `$warming` only becomes true inside warm_dimensions(), and
+		// warm_dimensions() is never reached because this returned ''. A
+		// remote `placeholder.jpg` — a real photograph on a CDN — was warmable
+		// before this branch and stopped being, with a failure cached against
+		// it for good measure. The collector takes the URL the tag offers and
+		// lets warm_dimensions() be the thing that decides.
+		// (#333 review round 3, issue 3)
+		if ( ! $may_measure ) {
+			return '' !== $named_out ? $named_out : $src;
+		}
+
+		foreach ( array( $named_out, $src ) as $candidate ) {
+			if ( '' !== $candidate && self::is_real_image( $candidate ) ) {
+				return $candidate;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Does this URL resolve to something too big to be a lazy-load stand-in?
+	 *
+	 * The stand-ins this guards against are 1x1 spacers and inline data: URIs.
+	 * Anything with real extent is a real image, whatever it is called — which
+	 * is what lets a photograph named `placeholder.jpg` keep its dimensions
+	 * while `spacer.gif` still loses them.
+	 *
+	 * Deliberately conservative: an unresolvable URL returns false, so the
+	 * name-based verdict stands and the tag is left alone. Better no
+	 * dimensions than wrong ones. Uses the same resolver (and therefore the
+	 * same cache) as the normal path, so this costs no extra lookup.
+	 */
+	private static function is_real_image( string $src ): bool {
+		$dims = self::dimensions_for_src( $src );
+		if ( ! is_array( $dims ) ) {
+			return false;
+		}
+		// Indexed [ width, height ] — the shape apply_dimensions() consumes.
+		$w = isset( $dims[0] ) ? (int) $dims[0] : 0;
+		$h = isset( $dims[1] ) ? (int) $dims[1] : 0;
+
+		// A few pixels either way is still a spacer — some libraries ship a
+		// 2x2 or 4x4 rather than a true 1x1. Anything above that has extent a
+		// stand-in does not.
+		return $w > 4 && $h > 4;
+	}
+
+	/**
+	 * True for the stand-in a lazy-loader parks in `src` until its JS swaps
+	 * the real URL in: an inline data: URI, or a `spacer`/`blank`/`placeholder`
+	 * asset. Measuring one of these would stamp the spacer's dimensions onto
+	 * the tag. Pure — unit-tested.
+	 *
+	 * Matched on the WHOLE filename stem, not a word inside it. A word-boundary
+	 * search anywhere in the last segment caught every real image whose name
+	 * merely contains one of these ordinary words — `blank-space-cover.png`,
+	 * `placeholder-portrait.png`, `spacer-hero-banner.jpg` — and silently
+	 * stopped sizing them, which brings back the very layout shift this
+	 * feature exists to prevent, with nothing on screen to explain it
+	 * (#333 review, issue 1).
+	 *
+	 * A real stand-in is named for what it is and nothing else: `blank.gif`,
+	 * `spacer.png`, `lazy-loader.svg`, optionally with a dimension or version
+	 * suffix (`blank-1x1.gif`, `spacer@2x.png`). A descriptive tail is what
+	 * separates a photograph from a spacer, so the tail is what decides.
+	 */
+	public static function is_placeholder_src( string $src ): bool {
+		if ( 0 === stripos( $src, 'data:' ) ) {
+			return true;
+		}
+
+		// Last path segment, without the query string or fragment —
+		// `?v=placeholder` is a cache-buster on a real image, not a name.
+		// Plain string work on purpose: this method is pure and unit-tested
+		// with no WordPress loaded, so wp_parse_url() is not available.
+		$path = strtok( $src, '?#' );
+		if ( ! is_string( $path ) || '' === $path ) {
+			$path = $src;
+		}
+		$name = strtolower( basename( $path ) );
+
+		// Drop the extension, then any trailing dimension/DPR/version marker.
+		$stem = preg_replace( '#\.[a-z0-9]+$#', '', $name );
+		$stem = (string) preg_replace( '#[-_@]?(?:\d+x\d+|\d+x|x\d+|v\d+|\d+)$#', '', (string) $stem );
+		$stem = trim( $stem, '-_.' );
+
+		return 1 === preg_match( '#^(?:spacer|blank|placeholder|lazy-?loader|transparent|pixel|dummy)$#', $stem );
 	}
 
 	/**
@@ -721,7 +918,20 @@ JS;
 	 * images the same way. Pure — unit-tested.
 	 */
 	public static function has_constrained_render( string $tag ): bool {
-		if ( preg_match( '#\bsrcset\s*=#i', $tag ) || preg_match( '#\bsizes\s*=#i', $tag ) ) {
+		// `\b` sits between `-` and `s`, so a bare \bsrcset also matched
+		// `data-srcset` — a lazy attribute the browser has NOT applied yet.
+		// That made an unset attribute suppress dimensions on exactly the
+		// slider images this feature exists to size, for the same
+		// accidental-text-match reason the URL lookup moved away from
+		// (#333 review, issue 3).
+		//
+		// The anchor is a negative lookbehind rather than "start or
+		// whitespace": HTML does not require a space between attributes, so
+		// `alt="31"srcset="..."` slipped past a whitespace anchor and this
+		// guard stopped firing — the tag then got the file's intrinsic size
+		// stamped on it while the browser rendered a differently-shaped
+		// srcset candidate. (#333 review round 3, issue 1)
+		if ( preg_match( '#(?<![-\w])(?:srcset|sizes)\s*=#i', $tag ) ) {
 			return true;
 		}
 		if ( preg_match( '#\bstyle\s*=\s*["\']([^"\']*)["\']#i', $tag, $m ) ) {
@@ -793,7 +1003,10 @@ JS;
 		// The value must be ENTIRELY digits. Matching a leading run would read
 		// `width="50%"` as 50 and scale from a percentage as though it were
 		// pixels — inventing a box rather than declining to guess.
-		if ( ! preg_match( '#\b' . preg_quote( $name, '#' ) . '\s*=\s*(?:"(\d+)"|\'(\d+)\'|(\d+)(?=[\s/>]))#i', $tag, $m ) ) {
+		// Lookbehind for the same reason as set_attr(): `\bwidth=` also reads
+		// `data-width=`, so a slider's own metadata was scaled from as though
+		// it were a rendered dimension.
+		if ( ! preg_match( '#(?<![-\w])' . preg_quote( $name, '#' ) . '\s*=\s*(?:"(\d+)"|\'(\d+)\'|(\d+)(?=[\s/>]))#i', $tag, $m ) ) {
 			return 0;
 		}
 		$value = '' !== ( $m[1] ?? '' ) ? $m[1] : ( '' !== ( $m[2] ?? '' ) ? $m[2] : ( $m[3] ?? '' ) );

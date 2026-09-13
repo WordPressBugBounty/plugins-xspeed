@@ -49,6 +49,22 @@ abstract class Module {
 	 * field declares `default` and optional `min` / `max` / `options` /
 	 * `item_type`. Storage key is `xspeed_module_<slug>`.
 	 *
+	 * A field may also declare `constants` -- an ordered list of wp-config.php
+	 * constant names that pin its value, most specific first:
+	 *
+	 *     'redis_host' => array(
+	 *         'type'      => 'string',
+	 *         'default'   => '127.0.0.1',
+	 *         'constants' => array( 'XSPEED_OC_HOST', 'WP_REDIS_HOST' ),
+	 *     ),
+	 *
+	 * Resolution order is then: first DEFINED constant -> stored option ->
+	 * `default`. A constant defined as an empty string still wins -- it is an
+	 * answer, not an absence. A pinned field is never persisted, and writes
+	 * targeting it are refused rather than silently dropped; see
+	 * Settings_Manager::origins() / locked_in_input(). This lets a host
+	 * (xCloud provisioning Redis) configure a module with no admin visit. (#398)
+	 *
 	 * @return array<string,array>
 	 */
 	public function settings_schema(): array {
@@ -133,6 +149,127 @@ abstract class Module {
 				'callback' => array( $this, 'rest_update_settings' ),
 				'feature'  => static::SLUG,
 			),
+			// Take a constant-pinned field back, or hand it to wp-config again.
+			// On every module, because any field can declare `constants`. (#398)
+			array(
+				'path'     => '/override',
+				'methods'  => 'POST',
+				'callback' => array( $this, 'rest_set_override' ),
+				'feature'  => static::SLUG,
+			),
+			// Per-field provenance on its own, for a panel that needs to
+			// re-read it after an action that changes which fields are pinned
+			// (enabling the object cache writes constants) without re-fetching
+			// every module descriptor. (#398)
+			array(
+				'path'     => '/origins',
+				'methods'  => 'GET',
+				'callback' => array( $this, 'rest_get_origins' ),
+			),
+		);
+	}
+
+	/**
+	 * Where each of this module's settings currently comes from.
+	 */
+	public function rest_get_origins( \WP_REST_Request $request ) {
+		return rest_ensure_response( Settings_Manager::origins( static::SLUG ) );
+	}
+
+	/**
+	 * Toggle a deliberate override of a constant-pinned field.
+	 *
+	 * Body: `{ "field": "redis_host", "override": true }`. Overriding does not
+	 * itself set a value -- it unlocks the field, and the admin's next save
+	 * writes it like any other setting. Reverting hands the field back to the
+	 * constant, which resumes winning immediately.
+	 */
+	public function rest_set_override( \WP_REST_Request $request ) {
+		if ( $this->is_license_locked() ) {
+			return new \WP_Error(
+				'xspeed_license_required',
+				sprintf(
+					/* translators: %s: module slug. */
+					__( '"%s" is a Pro module and this site has no valid license, so its settings cannot be changed.', 'xspeed' ),
+					static::SLUG
+				),
+				array( 'status' => 403 )
+			);
+		}
+
+		$body  = (array) $request->get_json_params();
+		$field = isset( $body['field'] ) ? (string) $body['field'] : '';
+		$on    = ! empty( $body['override'] );
+
+		$spec = $this->settings_schema()[ $field ] ?? null;
+		if ( ! is_array( $spec ) ) {
+			return new \WP_Error(
+				'xspeed_unknown_setting',
+				sprintf(
+					/* translators: %s: setting key. */
+					__( 'Unknown setting: %s', 'xspeed' ),
+					$field
+				),
+				array( 'status' => 400 )
+			);
+		}
+
+		// Overriding a field no constant pins is meaningless -- it is already
+		// editable -- and would leave a stale entry that silently disables the
+		// lock if a constant appeared later.
+		if ( $on && null === Settings_Manager::constant_source( $spec ) ) {
+			return new \WP_Error(
+				'xspeed_setting_not_pinned',
+				sprintf(
+					/* translators: %s: setting key. */
+					__( '"%s" is not defined in wp-config.php, so there is nothing to override.', 'xspeed' ),
+					$field
+				),
+				array( 'status' => 409 )
+			);
+		}
+
+		if ( $on ) {
+			Settings_Manager::set_override( static::SLUG, $field, true );
+		} else {
+			/*
+			 * The full hand-back, not just dropping the override entry. Once we
+			 * have written our own define it outranks the host's, so clearing
+			 * the entry alone left the field on our stale value with no route
+			 * back -- the panel button did nothing while `wp xspeed objcache
+			 * revert`, which did the extra work inline, worked. Both now go
+			 * through Settings_Manager::revert(). (#398)
+			 */
+			$reverted = Settings_Manager::revert( static::SLUG, $field );
+			if ( is_wp_error( $reverted ) ) {
+				return $reverted;
+			}
+		}
+
+		if ( class_exists( '\\XSpeed\\Activity_Log' ) ) {
+			Activity_Log::record(
+				$on ? 'setting_override_taken' : 'setting_override_reverted',
+				sprintf(
+					$on
+						/* translators: 1: setting key, 2: module slug. */
+						? __( 'Overrode "%1$s" on "%2$s" — the wp-config.php value no longer applies.', 'xspeed' )
+						/* translators: 1: setting key, 2: module slug. */
+						: __( 'Reverted "%1$s" on "%2$s" to the value set in wp-config.php.', 'xspeed' ),
+					$field,
+					static::SLUG
+				),
+				Activity_Log::INFO
+			);
+		}
+
+		return rest_ensure_response(
+			array(
+				'ok'       => true,
+				'field'    => $field,
+				'override' => $on,
+				'settings' => Settings_Manager::get_public( static::SLUG ),
+				'origins'  => Settings_Manager::origins( static::SLUG ),
+			)
 		);
 	}
 
@@ -170,6 +307,29 @@ abstract class Module {
 					static::SLUG
 				),
 				array( 'status' => 403 )
+			);
+		}
+
+		// A field pinned by a wp-config.php constant cannot be written. Saying
+		// so beats a 200 over a write that silently did nothing -- and naming
+		// the constant tells the caller where to go and change it. (#398)
+		$locked = Settings_Manager::locked_in_input( static::SLUG, is_array( $params ) ? $params : array() );
+		if ( ! empty( $locked ) ) {
+			$pairs = array();
+			foreach ( $locked as $field => $constant ) {
+				$pairs[] = $field . ' (' . $constant . ')';
+			}
+			return new \WP_Error(
+				'xspeed_setting_defined_in_wp_config',
+				sprintf(
+					/* translators: %s: comma-separated list of "field (CONSTANT_NAME)" pairs. */
+					__( 'These settings are defined in wp-config.php and cannot be changed here: %s. Edit the constant, or remove it to manage the setting from this screen.', 'xspeed' ),
+					implode( ', ', $pairs )
+				),
+				array(
+					'status' => 409,
+					'fields' => $locked,
+				)
 			);
 		}
 
@@ -457,6 +617,57 @@ abstract class Module {
 	final public function get_setting( string $key, $default = null ) {
 		$opts = Settings_Manager::get( static::SLUG );
 		return array_key_exists( $key, $opts ) ? $opts[ $key ] : $default;
+	}
+
+	/**
+	 * Read one boolean flag WITHOUT building the settings schema.
+	 *
+	 * `get_setting()` routes through `Settings_Manager::get()`, which calls
+	 * `settings_schema()` to know the defaults and types. That schema
+	 * declares its `label` / `description` through `__()` — correct, they are
+	 * UI copy a translator has to reach. But modules that read their own
+	 * settings from `boot()` do so on `plugins_loaded`, before `init`, where
+	 * text domains load. Building the schema there translates every label too
+	 * early: WordPress 6.7+ emits `_load_textdomain_just_in_time` on each
+	 * request, and the labels resolve against a domain that is not loaded
+	 * yet, which silently defeats the translation.
+	 *
+	 * A boot-time gate only ever asks "is this feature switched on", so it
+	 * needs the stored value, not the schema. This reads the module's option
+	 * directly and casts. `$default` is what applies when the key was never
+	 * written — pass the same value the schema declares as that field's
+	 * default, or the two disagree on a fresh install.
+	 *
+	 * Use ONLY for a boot-time on/off check. Anything that needs coercion,
+	 * schema defaults, or a non-boolean value must keep using
+	 * `get_setting()` / `get_settings()`.
+	 *
+	 * @param string $key     Field name in this module's settings.
+	 * @param bool   $default Value when the key has never been stored.
+	 */
+	final protected function flag_at_boot( string $key, bool $default = false ): bool {
+		return (bool) $this->setting_at_boot( $key, $default );
+	}
+
+	/**
+	 * Raw stored value for one setting, WITHOUT building the schema. The
+	 * general form of `flag_at_boot()` — see that method for why boot-time
+	 * reads must not touch `settings_schema()`.
+	 *
+	 * No type coercion is applied, so pass a `$default` of the type the
+	 * caller expects and cast the result at the call site. Same rule: use
+	 * ONLY from code that runs before `init`.
+	 *
+	 * @param string $key     Field name in this module's settings.
+	 * @param mixed  $default Value when the key has never been stored.
+	 * @return mixed
+	 */
+	final protected function setting_at_boot( string $key, $default = null ) {
+		$stored = get_option( Settings_Manager::OPTION_PREFIX . static::SLUG, array() );
+		if ( ! is_array( $stored ) || ! array_key_exists( $key, $stored ) ) {
+			return $default;
+		}
+		return $stored[ $key ];
 	}
 
 	final public function get_settings(): array {

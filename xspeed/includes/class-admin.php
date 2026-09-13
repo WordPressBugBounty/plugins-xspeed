@@ -561,6 +561,12 @@ class Admin {
 				// or when no module contributes directives. Replaces the
 				// per-module "paste this snippet" notices.
 				'nginx_server_block' => Cache::full_nginx_server_block(),
+				// Mirrors the /status block so the enable-time disclosure is
+				// correct on FIRST PAINT. Without it the top-bar switch can be
+				// clicked before a status fetch lands, and the one moment the
+				// warning exists for — a leftover drop-in about to be
+				// replaced — is exactly when it would be missing.
+				'dropin'             => Page_Cache_Detector::dropin_disclosure(),
 			),
 			// Registered Modules (Free + Pro). The React app discovers them
 			// here and renders one sidebar item + one panel per module that
@@ -658,6 +664,13 @@ class Admin {
 				// The dashboard bundle localizes this into page HTML, so a raw
 				// credential here would be readable from view-source. (#115)
 				'settings'     => $settings,
+				// Where each value actually came from: a wp-config.php constant,
+				// the option row, or the schema default. The panel renders a
+				// constant-sourced field read-only and names the constant, so it
+				// can never present an editable box over a value the site is not
+				// using. Every module gets this, not just the ones that declare
+				// constants today. (#398)
+				'setting_origins' => Settings_Manager::origins( $slug ),
 				'schema'       => $schema,
 				'notices'      => $module->ui_notices(),
 				'custom_panel' => $meta['custom_panel'] ?? null,

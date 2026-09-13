@@ -77,6 +77,10 @@ class Plugin {
 		// REST + meta box on edit screens.
 		Cache_Meta_Box::boot();
 
+		// Single-URL purge entry points — row actions, the edit-screen
+		// button and the admin-post handler the admin-bar item also uses.
+		Purge_Ui::boot();
+
 		// Phase 0 architecture — managers + Free modules. v1 services
 		// (Cache/Minifier/Gzip) are NOT yet Modules; they'll be refactored
 		// in a follow-up PR with parity tests.

@@ -141,9 +141,9 @@ final class HealthModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Health',
+			'label'        => __( 'Health', 'xspeed' ),
 			'icon'         => 'HeartPulse',
-			'description'  => 'Diagnostics, hit ratio, and recent cache activity.',
+			'description'  => __( 'Diagnostics, hit ratio, and recent cache activity.', 'xspeed' ),
 			// Health is the single host page for all Insights (FBS-83633):
 			// a Recommendations action card + Cache / Visitors / PageSpeed
 			// tabs. HealthPanel renders the Free cache diagnostics (the old

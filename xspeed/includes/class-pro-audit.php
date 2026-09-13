@@ -26,6 +26,10 @@
  * Adding a rule: drop another `if (…) $out[] = …` block in run().
  * Rules are independent — keep them small + concrete + factual.
  *
+ * An add-on adds one from outside via `xspeed_pro_audit_suggestions`
+ * instead — see contributed() for the shape it has to return and why
+ * that path is not gated by already_active().
+ *
  * If the suggestion maps to a single Pro module, add it to
  * BACKING_MODULE and guard the rule with `! self::already_active($id)`.
  * A rule that fires on site state alone keeps nagging a customer who
@@ -47,6 +51,19 @@ final class Pro_Audit {
 	public const SEVERITY_HIGH = 'high';
 	public const SEVERITY_MED  = 'med';
 	public const SEVERITY_LOW  = 'low';
+
+	/**
+	 * Bounds on what `xspeed_pro_audit_suggestions` may add.
+	 *
+	 * The audit is rendered in a dashboard card and returned verbatim by the
+	 * MCP `get_pro_audit` tool, so an add-on that appends 500 rows or a
+	 * paragraph of prose degrades both. The caps are generous against any
+	 * honest use — no native rule comes close — and exist so a buggy
+	 * contributor can't make the payload the problem.
+	 */
+	private const MAX_CONTRIBUTED = 10;
+	private const MAX_REASON_LEN  = 400;
+	private const MAX_FACT_LEN    = 32;
 
 	/**
 	 * Snapshot of state every rule needs. Computed once per audit run
@@ -224,6 +241,253 @@ final class Pro_Audit {
 	}
 
 	/**
+	 * Suggestions contributed by an add-on, normalised to the native shape.
+	 *
+	 * The rules in run() only know what the Free engine can see: options and
+	 * cache counters. An add-on that owns a feature knows things about it that
+	 * no option records — that a generator has never once succeeded, that a
+	 * conversion is producing files bigger than the ones it replaces — and
+	 * before this filter it had nowhere to say so. The finding stayed inside
+	 * that add-on's own panel, and `get_pro_audit`, which is what an agent
+	 * reads when it asks "what is wrong with this site", never heard about it.
+	 *
+	 * DELIBERATELY NOT GATED BY already_active(). That guard exists to stop the
+	 * audit nagging someone to buy a feature they already own (#187), which is
+	 * an upsell concern: an upsell for a feature that is already on can never
+	 * be acted on. A contribution is the opposite kind of message — it comes
+	 * FROM the feature, and the feature has to be switched on to have anything
+	 * to report. Inheriting the suppression would silence exactly the case
+	 * worth hearing: a feature that is on and misbehaving. Do not "tidy up" by
+	 * routing this through already_active(). (xspeed-pro#86)
+	 *
+	 * Contributors may only ADD. The filter is seeded with an empty array and
+	 * the native list is passed as read-only context, so nothing a contributor
+	 * returns can delete or rewrite a native suggestion. Contributions are
+	 * appended after the native rules and then go through the same dedupe and
+	 * severity sort, so a contribution takes over a native id only by being
+	 * strictly more severe — never by merely arriving later.
+	 *
+	 * @param array<int,array<string,mixed>> $native Suggestions the native
+	 *                                               rules produced, as context.
+	 * @return array<int,array{id:string,severity:string,reason:string,fact?:string}>
+	 */
+	private static function contributed( array $native ): array {
+		/**
+		 * Filter: xspeed_pro_audit_suggestions
+		 *
+		 * Extra suggestions to append to the audit. Seeded with an empty
+		 * array — append your own entries and return the array; the native
+		 * suggestions are passed separately as read-only context, so nothing
+		 * returned here can remove or rewrite one.
+		 *
+		 * Each entry: id (string, required — a feature slug; matches a key in
+		 * the React PRO_FEATURES catalog when one exists, otherwise the id
+		 * itself is shown as the title), severity ('high'|'med'|'low',
+		 * defaults to 'low'), reason (string, required — one sentence,
+		 * already-baked numbers, no markup), fact (string, optional — a short
+		 * inline stat for the card's chip). Anything else is dropped.
+		 *
+		 * @param array $suggestions Contributed suggestions (empty on entry).
+		 * @param array $native      The native suggestions, as context.
+		 */
+		try {
+			$raw = apply_filters( 'xspeed_pro_audit_suggestions', array(), $native );
+		} catch ( \Throwable $e ) {
+			// A contributor that throws costs the audit its contributions,
+			// not the audit. Every native finding is already computed by the
+			// time this runs, and the audit is what the dashboard card and
+			// the MCP `get_pro_audit` tool both read — a seam that lets a
+			// broken add-on take those down is a liability to the thing it
+			// extends.
+			//
+			// The whole round is lost, not just the thrower's entry: the
+			// throw unwinds through apply_filters(), so a well-behaved
+			// contributor that ran earlier has no partial result left to
+			// salvage. Nothing to do about that from out here, but it is
+			// the reason this says "contributions" and not "its
+			// contribution".
+			//
+			// core's apply_filters() pops $wp_current_filter AFTER the
+			// callbacks return, so a throw leaves our hook name on the
+			// stack: current_filter() would keep answering
+			// 'xspeed_pro_audit_suggestions' for the rest of the request,
+			// and core's own lazy-loading branches on that. Pop it back,
+			// and only if it is still ours to pop. (WP_Hook's nesting_level
+			// leaks the same way and cannot be reached from here; it is
+			// scoped to this one hook, which we are done with.)
+			if ( isset( $GLOBALS['wp_current_filter'] )
+				&& is_array( $GLOBALS['wp_current_filter'] )
+				&& end( $GLOBALS['wp_current_filter'] ) === 'xspeed_pro_audit_suggestions' ) {
+				array_pop( $GLOBALS['wp_current_filter'] );
+			}
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// Swallowing a fatal without a word makes a broken add-on
+				// indistinguishable from one with nothing to report.
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( '[xspeed] xspeed_pro_audit_suggestions contributor threw: ' . $e->getMessage() );
+			}
+			return array();
+		}
+		if ( ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $raw as $row ) {
+			if ( count( $out ) >= self::MAX_CONTRIBUTED ) {
+				break;
+			}
+			$clean = self::normalize_suggestion( $row );
+			if ( null !== $clean ) {
+				$out[] = $clean;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Coerce one contributed entry into the exact shape run() emits, or drop it.
+	 *
+	 * Everything downstream — the dedupe, the severity sort, the React card,
+	 * the MCP tool's response — is written against `{id, severity, reason,
+	 * fact?}` and nothing re-checks it. An unknown severity alone is enough to
+	 * break the panel, which indexes a style map by it. So this is a whitelist,
+	 * not a merge: unrecognised keys are dropped rather than passed through, and
+	 * an entry that can't supply an id and a reason is dropped whole. A missing
+	 * or invalid severity is not fatal, but it settles at 'low' — a contributor
+	 * who won't say how bad it is doesn't get to outrank anyone.
+	 *
+	 * @param mixed $row Whatever the filter returned in this slot.
+	 * @return array{id:string,severity:string,reason:string,fact?:string}|null
+	 */
+	private static function normalize_suggestion( $row ): ?array {
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+
+		$id = sanitize_key( self::as_text( $row['id'] ?? null ) );
+		if ( '' === $id ) {
+			return null;
+		}
+
+		$reason = self::as_text( $row['reason'] ?? null );
+		$reason = trim( (string) sanitize_text_field( $reason ) );
+		if ( '' === $reason ) {
+			return null;
+		}
+
+		$severity = self::as_text( $row['severity'] ?? null );
+		if ( ! in_array( $severity, array( self::SEVERITY_HIGH, self::SEVERITY_MED, self::SEVERITY_LOW ), true ) ) {
+			$severity = self::SEVERITY_LOW;
+		}
+
+		$clean = array(
+			'id'       => $id,
+			'severity' => $severity,
+			'reason'   => self::clamp( $reason, self::MAX_REASON_LEN ),
+		);
+
+		$fact = trim( (string) sanitize_text_field( self::as_text( $row['fact'] ?? null ) ) );
+		if ( '' !== $fact ) {
+			$clean['fact'] = self::clamp( $fact, self::MAX_FACT_LEN );
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * A string, or '' for anything that isn't honestly one.
+	 *
+	 * Booleans are excluded on purpose: `(string) true` is "1", which would
+	 * sail through an is_scalar() check and land a suggestion whose reason
+	 * reads "1".
+	 *
+	 * @param mixed $value Raw value from a contributed entry.
+	 */
+	private static function as_text( $value ): string {
+		if ( is_string( $value ) ) {
+			return $value;
+		}
+		if ( is_int( $value ) || is_float( $value ) ) {
+			return (string) $value;
+		}
+		return '';
+	}
+
+	/**
+	 * Trim to a hard character budget, ellipsis included in the budget.
+	 *
+	 * @param string $text  Text to bound.
+	 * @param int    $limit Maximum length of the result.
+	 */
+	private static function clamp( string $text, int $limit ): string {
+		if ( function_exists( 'mb_strlen' ) && function_exists( 'mb_substr' ) ) {
+			if ( mb_strlen( $text ) <= $limit ) {
+				return $text;
+			}
+			return rtrim( mb_substr( $text, 0, $limit - 1 ) ) . '…';
+		}
+		return self::clamp_without_mbstring( $text, $limit );
+	}
+
+	/**
+	 * clamp() on a site with no mbstring.
+	 *
+	 * strlen()/substr() count BYTES, and using them here got the budget wrong
+	 * in both directions at once. Too tight: 400 bytes of accented Latin is
+	 * under 200 characters, so a reason well inside its allowance came back
+	 * truncated. And unsafe: a byte cut can land inside a character, and
+	 * wp_json_encode() answers false for the WHOLE response rather than
+	 * mangling one word — the client loses every finding in the audit.
+	 *
+	 * PCRE counts characters in `/u` mode without mbstring, so the budget
+	 * stays a character budget. Both patterns are bounded by `$limit`, so
+	 * neither walks a long string or builds an array of it.
+	 *
+	 * @param string $text  Text to bound.
+	 * @param int    $limit Maximum length of the result.
+	 */
+	private static function clamp_without_mbstring( string $text, int $limit ): string {
+		$limit = max( 1, $limit );
+
+		// preg_match() returns false — not 0 — when the subject is not valid
+		// UTF-8, which is how the byte fallback below is reached.
+		$within = preg_match( '/^.{0,' . $limit . '}$/us', $text );
+		if ( 1 === $within ) {
+			return $text;
+		}
+		if ( 0 === $within && 1 === preg_match( '/^.{0,' . ( $limit - 1 ) . '}/us', $text, $m ) ) {
+			return rtrim( $m[0] ) . '…';
+		}
+
+		// Not valid UTF-8 to begin with — a contributor sent bytes we cannot
+		// count. Bytes are all there is, but the result still has to encode.
+		if ( strlen( $text ) <= $limit ) {
+			return $text;
+		}
+		return rtrim( self::whole_characters( substr( $text, 0, $limit - 1 ) ) ) . '…';
+	}
+
+	/**
+	 * Drop a trailing partial UTF-8 character.
+	 *
+	 * A byte cut can land inside a multibyte character and leave a dangling
+	 * fragment. That makes the string invalid UTF-8, and wp_json_encode()
+	 * answers false for the WHOLE response — the client loses every finding,
+	 * not one accented word. At most three bytes come off.
+	 *
+	 * @param string $bytes Byte-cut text.
+	 */
+	private static function whole_characters( string $bytes ): string {
+		// `//u` is an empty pattern with the UTF-8 modifier: it matches
+		// anything, and fails outright when the subject is not valid UTF-8.
+		while ( '' !== $bytes && 1 !== preg_match( '//u', $bytes ) ) {
+			$bytes = substr( $bytes, 0, -1 );
+		}
+		return $bytes;
+	}
+
+	/**
 	 * Pro's own report of its licence state: 'not_installed' | 'unlicensed'
 	 * | 'active'. Mirrors Admin::pro_state(), which is private to that
 	 * class; only 'active' means Pro's features are actually running.
@@ -365,6 +629,11 @@ final class Pro_Audit {
 				'fact'     => $enabled . ' modules',
 			);
 		}
+
+		// Add-on contributions. Collected after the native rules and before
+		// the fallback: a site whose only real finding comes from an add-on
+		// should get that finding, not the generic filler underneath it.
+		$out = array_merge( $out, self::contributed( $out ) );
 
 		// Fallback — never return an empty audit. Analytics is the
 		// safe always-relevant suggestion (every site has cache

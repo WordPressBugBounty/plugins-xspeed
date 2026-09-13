@@ -21,13 +21,13 @@ final class SupportModule extends Module {
 
 	public const SLUG    = 'support';
 	public const TIER    = self::TIER_FREE;
-	public const VERSION = '1.0.0';
+	public const VERSION = '1.1.0';
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Help & Support',
+			'label'        => __( 'Help & Support', 'xspeed' ),
 			'icon'         => 'LifeBuoy',
-			'description'  => 'Open a support ticket with a one-click system snapshot already attached.',
+			'description'  => __( 'Open a support ticket with a one-click system snapshot already attached.', 'xspeed' ),
 			'custom_panel' => 'SupportPanel',
 		);
 	}
@@ -36,10 +36,28 @@ final class SupportModule extends Module {
 		return array(
 			'support_url' => array(
 				'type'        => 'string',
-				'default'     => 'https://wpdeveloper.com/support',
-				'label'       => 'Support URL',
-				'description' => 'Where the "Open ticket" button takes the user.',
+				'default'     => 'https://xspeedcache.com/support/',
+				'label'       => __( 'Support URL', 'xspeed' ),
+				'description' => __( 'Where the "Open ticket" button takes the user.', 'xspeed' ),
 			),
+		);
+	}
+
+	/**
+	 * The ticket link moved to the dedicated xSpeed support page (#414). A
+	 * site that persisted the old default keeps it in its options row, so the
+	 * new default alone would not reach it — rewrite exactly the old default
+	 * and leave any genuinely custom URL alone.
+	 */
+	public function migrations(): array {
+		return array(
+			'1.1.0' => static function ( array $opts ): array {
+				$stored = isset( $opts['support_url'] ) ? untrailingslashit( trim( (string) $opts['support_url'] ) ) : '';
+				if ( 'https://wpdeveloper.com/support' === $stored ) {
+					$opts['support_url'] = 'https://xspeedcache.com/support/';
+				}
+				return $opts;
+			},
 		);
 	}
 

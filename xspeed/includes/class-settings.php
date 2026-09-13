@@ -230,7 +230,14 @@ class Settings {
 		$report = Page_Cache_Detector::inspect();
 		$state  = Page_Cache_Detector::classify( $report )['state'];
 
-		if ( Page_Cache_Detector::STATE_UNKNOWN_OCCUPIED === $state ) {
+		/*
+		 * A drop-in file is present either way here. ABANDONED means we may
+		 * TAKE it (#391) -- it does not mean the site is a clear field, so a
+		 * fresh install still comes up conservative rather than assuming it
+		 * has the machine to itself.
+		 */
+		if ( Page_Cache_Detector::STATE_UNKNOWN_OCCUPIED === $state
+			|| Page_Cache_Detector::STATE_ABANDONED === $state ) {
 			return ! empty( $report['dropin']['exists'] ) ? $state : null;
 		}
 

@@ -635,6 +635,18 @@ final class Asset_Combiner {
 		if ( ! empty( $reg->extra['after'] ) || ! empty( $reg->extra['before'] ) || ! empty( $reg->extra['data'] ) ) {
 			return null;
 		}
+		// A handle the user protected from defer/delay, or one Defer JS
+		// auto-protects because inline code reads it, must not be absorbed
+		// either. Combining moves the code into a bundle printed under a
+		// DIFFERENT handle, so the exclusion the user wrote — matched by
+		// handle or URL — stops matching anything and the protection is
+		// silently gone. jquery-core is the case that bites: the check above
+		// only catches a handle carrying its OWN inline data, while a
+		// dependency of an inline consumer carries none, so it lands in the
+		// bundle and the exclusion list reads as if it were still honoured.
+		if ( \XSpeed\Minify_Filters::is_protected_from_bundling( $handle, $src ) ) {
+			return null;
+		}
 		// Skip async / defer-via-strategy.
 		$strategy = $reg->extra['strategy'] ?? '';
 		if ( 'async' === $strategy || 'defer' === $strategy ) {

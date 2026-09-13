@@ -28,6 +28,7 @@ defined( 'ABSPATH' ) || exit;
 
 use XSpeed\Module;
 use XSpeed\Modules\Mcp\Mcp_Hub;
+use XSpeed\Modules\Mcp\Mcp_Pairing;
 use XSpeed\Scan;
 use XSpeed\Score;
 use XSpeed\Settings_Manager;
@@ -38,15 +39,29 @@ final class ScoreModule extends Module {
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.1.0';
 
+	/**
+	 * No On/Off state (#425).
+	 *
+	 * The default reports the `enabled` setting, which put an "Off" pill on a
+	 * panel whose Test button works regardless — the press is the consent and
+	 * flips the setting itself. A run-on-demand panel has no meaningful
+	 * on/off, exactly like Health; the setting stays as the internal gate for
+	 * non-press callers (optimize runs, GTmetrix polling), it just is not a
+	 * state this panel wears.
+	 */
+	public function is_active(): ?bool {
+		return null;
+	}
+
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Speed Test',
+			'label'        => __( 'Speed Test', 'xspeed' ),
 			'icon'         => 'Gauge',
 			// Provider-neutral: the panel runs whichever provider the site has
 			// configured (PageSpeed Insights by default, no API key needed).
 			// The Hub-run test has its own copy and is gated behind
 			// hub_speed_test_enabled(), so this line must not promise it.
-			'description'  => 'Run a PageSpeed Insights or GTmetrix audit from the dashboard and keep the history next to your TTFB benchmark.',
+			'description'  => __( 'Run a PageSpeed Insights or GTmetrix audit from the dashboard and keep the history next to your TTFB benchmark.', 'xspeed' ),
 			'custom_panel' => 'ScorePanel',
 		);
 	}
@@ -56,10 +71,21 @@ final class ScoreModule extends Module {
 			'enabled'           => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable external scores',
-				// Off by default and stated plainly: this is the only part
-				// of the plugin that talks to a third party on your behalf.
-				'description' => 'Lets you run a PageSpeed Insights or GTmetrix audit from this dashboard. Nothing is sent anywhere until you press Test.',
+				// Meaningful for the surfaces it still reaches (REST schema,
+				// CLI settings, a wp-config override): it names what the
+				// value permits, not a switch nobody sees.
+				'label'       => __( 'Allow speed tests', 'xspeed' ),
+				// Off by default, but pressing Test IS the consent: the first
+				// run turns this on rather than refusing (#425). What it
+				// still guards is everything that is NOT a Test press — an
+				// optimize run measuring its own effect, for instance.
+				// Switch it off (REST/CLI) and nothing contacts a provider.
+				'description' => __( 'Turns on automatically the first time you run a speed test — the button press is the consent. Switch it off to stop every feature, including optimize runs, from contacting a score provider.', 'xspeed' ),
+				// No dashboard control: the Test press manages it, and a
+				// visible switch that gates a button elsewhere was the
+				// confusion #425 removed. Hidden fields are skipped by the
+				// panel renderer and by settings search.
+				'hidden'      => true,
 			),
 			'provider'          => array(
 				'type'        => 'enum',
@@ -69,15 +95,14 @@ final class ScoreModule extends Module {
 					'psi'      => 'PageSpeed Insights',
 					'gtmetrix' => 'GTmetrix',
 				),
-				'label'       => 'Provider',
-				'description' => 'PageSpeed Insights works without an API key. GTmetrix requires one.',
-				'dependsOn'   => array( 'field' => 'enabled' ),
+				'label'       => __( 'Provider', 'xspeed' ),
+				'description' => __( 'PageSpeed Insights works without an API key. GTmetrix requires one.', 'xspeed' ),
 			),
 			'psi_api_key'       => array(
 				'type'        => 'secret',
 				'default'     => '',
-				'label'       => 'PageSpeed API key (optional)',
-				'description' => 'Only needed if you hit Google\'s anonymous rate limit. Free from cloud.google.com.',
+				'label'       => __( 'PageSpeed API key (optional)', 'xspeed' ),
+				'description' => __( 'Only needed if you hit Google\'s anonymous rate limit. Free from cloud.google.com.', 'xspeed' ),
 				// Rendered as a trailing "Check the documentation" link —
 				// descriptions themselves are plain text (#111).
 				'doc_url'     => 'https://xspeedcache.com/docs/pagespeed-insights-integration/',
@@ -89,8 +114,8 @@ final class ScoreModule extends Module {
 			'gtmetrix_api_key'  => array(
 				'type'        => 'secret',
 				'default'     => '',
-				'label'       => 'GTmetrix API key',
-				'description' => 'Required — GTmetrix has no anonymous mode. Found in your GTmetrix account settings.',
+				'label'       => __( 'GTmetrix API key', 'xspeed' ),
+				'description' => __( 'Required — GTmetrix has no anonymous mode. Found in your GTmetrix account settings.', 'xspeed' ),
 				'dependsOn'   => array(
 					'field' => 'provider',
 					'value' => 'gtmetrix',
@@ -99,16 +124,15 @@ final class ScoreModule extends Module {
 			'test_url'          => array(
 				'type'        => 'url',
 				'default'     => '',
-				'label'       => 'URL to test',
-				'description' => 'Leave empty to test your home page.',
-				'dependsOn'   => array( 'field' => 'enabled' ),
+				'label'       => __( 'URL to test', 'xspeed' ),
+				'description' => __( 'Leave empty to test your home page.', 'xspeed' ),
 			),
 			'default_strategy'  => array(
 				'type'        => 'enum',
 				'default'     => 'mobile',
 				'options'     => array( 'mobile', 'desktop' ),
-				'label'       => 'Strategy',
-				'description' => 'PageSpeed Insights only. Mobile is what Google ranks on.',
+				'label'       => __( 'Strategy', 'xspeed' ),
+				'description' => __( 'PageSpeed Insights only. Mobile is what Google ranks on.', 'xspeed' ),
 				'dependsOn'   => array(
 					'field' => 'provider',
 					'value' => 'psi',
@@ -410,15 +434,7 @@ final class ScoreModule extends Module {
 	 * to a minute. A GET would be prefetched by a browser.
 	 */
 	public function rest_run( \WP_REST_Request $request ) {
-		$opts = Settings_Manager::get( self::SLUG );
-
-		if ( empty( $opts['enabled'] ) ) {
-			return new \WP_Error(
-				'xspeed_score_disabled',
-				__( 'External scores are turned off. Enable them first — this is the only feature that contacts a third party.', 'xspeed' ),
-				array( 'status' => 409 )
-			);
-		}
+		$opts = $this->consent_by_running( Settings_Manager::get( self::SLUG ) );
 
 		$url = $this->resolve_url( (string) $request->get_param( 'url' ), $opts );
 		if ( '' === $url ) {
@@ -437,7 +453,195 @@ final class ScoreModule extends Module {
 		}
 
 		$strategy = (string) ( $request->get_param( 'strategy' ) ?: $opts['default_strategy'] );
-		return rest_ensure_response( Score::run_psi( $url, $strategy, (string) $opts['psi_api_key'] ) );
+		$api_key  = (string) $opts['psi_api_key'];
+
+		// No key of their own → run it through the Hub when this site is
+		// connected. The Hub holds a real Google key, so this is the path
+		// that does NOT die on the shared anonymous quota (#426). When the
+		// Hub can't take it, fall through to the anonymous direct call —
+		// worse odds, but exactly what the plugin did before.
+		if ( '' === trim( $api_key ) ) {
+			$via_hub = $this->start_psi_via_hub( $url, $strategy );
+			if ( null !== $via_hub ) {
+				return $via_hub;
+			}
+		}
+
+		return rest_ensure_response( Score::run_psi( $url, $strategy, $api_key ) );
+	}
+
+	/**
+	 * Record the Test press as the opt-in (#425).
+	 *
+	 * The five-step funnel — find the toggle, enable it, come back, press
+	 * Test — existed to make the outbound call opt-in. The press already is
+	 * the opt-in: it is an explicit, authenticated request to contact a
+	 * provider right now. So a run no longer refuses when the toggle is off;
+	 * it turns the toggle on and proceeds, and the toggle keeps its real job
+	 * of gating everything that is NOT a Test press (optimize runs measuring
+	 * their own effect, GTmetrix polling).
+	 *
+	 * @param array<string,mixed> $opts Current module settings.
+	 * @return array<string,mixed> Settings with `enabled` true.
+	 */
+	private function consent_by_running( array $opts ): array {
+		if ( empty( $opts['enabled'] ) ) {
+			Settings_Manager::update( self::SLUG, array( 'enabled' => true ) );
+			$opts['enabled'] = true;
+		}
+		return $opts;
+	}
+
+	/**
+	 * Start a keyless PSI audit through the Hub, or null when the Hub cannot
+	 * take it and the caller should fall back to the direct anonymous call.
+	 *
+	 * Null — fall back — only for "the Hub was never an option here": not
+	 * connected, PSI not configured on it, or unreachable. A real refusal
+	 * (rate-limited, a run already active) is surfaced, because retrying it
+	 * anonymously would spend the shared quota to report a worse error.
+	 *
+	 * The Hub audits the site's HOME page, so a custom test URL also skips
+	 * this path rather than silently testing a different page than asked.
+	 *
+	 * @return \WP_REST_Response|\WP_Error|null
+	 */
+	private function start_psi_via_hub( string $url, string $strategy ) {
+		if ( untrailingslashit( $url ) !== untrailingslashit( (string) home_url( '/' ) ) ) {
+			return null;
+		}
+
+		$result = Mcp_Hub::psi_test( $strategy );
+
+		if ( is_wp_error( $result ) ) {
+			if ( in_array( $result->get_error_code(), array( 'not_connected', 'psi_not_configured', 'hub_unreachable' ), true ) ) {
+				return null;
+			}
+			// A 401/403 means the pairing is dead (revoked, detached, stale
+			// token) — for THIS feature that is the same as not connected,
+			// not an error the Test button should wear.
+			$data = $result->get_error_data();
+			if ( is_array( $data ) && in_array( (int) ( $data['status'] ?? 0 ), array( 401, 403 ), true ) ) {
+				return null;
+			}
+			return $this->hub_result( $result );
+		}
+
+		$run_id = isset( $result['run']['id'] ) ? (string) $result['run']['id'] : '';
+
+		// No run id means nothing can ever be polled — writing a marker here
+		// would orphan it (may_poll() rejects an empty test_id before the
+		// staleness check, so it would never expire either). A 202 without an
+		// id is a malformed Hub response; say so rather than pretend a test
+		// is pending.
+		if ( '' === $run_id ) {
+			return new \WP_Error(
+				'hub_error',
+				__( 'xSpeed Hub accepted the test but returned no run id. Please try again.', 'xspeed' ),
+				array( 'status' => 502 )
+			);
+		}
+
+		// The Hub answers 202 before the audit runs; the result arrives via
+		// the same pending/poll machinery GTmetrix already uses.
+		update_option(
+			Score::PENDING_OPTION,
+			array(
+				'test_id'  => $run_id,
+				'url'      => $url,
+				'started'  => time(),
+				'provider' => 'hub-psi',
+			),
+			false
+		);
+
+		return rest_ensure_response(
+			array(
+				'ok'       => true,
+				'provider' => 'psi',
+				'source'   => 'hub',
+				'state'    => 'queued',
+				'test_id'  => $run_id,
+				'url'      => $url,
+				'strategy' => $strategy,
+				'pending'  => true,
+			)
+		);
+	}
+
+	/**
+	 * Poll an in-flight Hub-run PSI audit.
+	 *
+	 * psi_runs() has already copied any finished run into the local history,
+	 * so resolving here is: find our run, see whether it is still going, and
+	 * drop the marker the moment it is not.
+	 *
+	 * @param array<string,mixed> $pending The stored pending marker.
+	 * @return array<string,mixed>|\WP_Error
+	 */
+	private function poll_hub_psi( array $pending ) {
+		$result = Mcp_Hub::psi_runs();
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		$mine = null;
+		foreach ( (array) ( $result['runs'] ?? array() ) as $run ) {
+			if ( is_array( $run ) && (string) ( $run['id'] ?? '' ) === (string) $pending['test_id'] ) {
+				$mine = $run;
+				break;
+			}
+		}
+
+		$state = is_array( $mine ) ? (string) ( $mine['status'] ?? '' ) : '';
+
+		if ( 'queued' === $state || 'running' === $state ) {
+			return array(
+				'ok'       => true,
+				'provider' => 'psi',
+				'source'   => 'hub',
+				'state'    => $state,
+				'test_id'  => (string) $pending['test_id'],
+				'pending'  => true,
+			);
+		}
+
+		// Terminal — done, error, or the Hub no longer lists it at all.
+		delete_option( Score::PENDING_OPTION );
+
+		if ( 'error' === $state ) {
+			$row = array(
+				'ok'       => false,
+				'provider' => 'psi',
+				'source'   => 'hub',
+				'state'    => 'error',
+				'pending'  => false,
+				'error'    => (string) ( $mine['error'] ?? __( 'The audit did not produce a result.', 'xspeed' ) ),
+			);
+			Score::record(
+				array(
+					'ok'       => false,
+					'provider' => 'psi',
+					'ts'       => time(),
+					'url'      => (string) ( $pending['url'] ?? '' ),
+					'strategy' => 'mobile',
+					'score'    => null,
+					'metrics'  => array(),
+					'issues'   => array(),
+					'error'    => $row['error'],
+					'source'   => 'hub',
+				)
+			);
+			return $row;
+		}
+
+		return array(
+			'ok'       => true,
+			'provider' => 'psi',
+			'source'   => 'hub',
+			'state'    => 'completed',
+			'pending'  => false,
+		);
 	}
 
 	/**
@@ -450,10 +654,11 @@ final class ScoreModule extends Module {
 		$opts    = Settings_Manager::get( self::SLUG );
 		$pending = get_option( Score::PENDING_OPTION, array() );
 
-		// Same opt-in gate as rest_run(). Without it, `status` — which is
-		// also the CLI's DEFAULT action — polled GTmetrix with the feature
-		// switched off and no API key, which falsified readme.txt's promise
-		// that nothing is sent while it is off.
+		// Same opt-in gate as the rest of the module. Without it, `status` —
+		// which is also the CLI's DEFAULT action — polled GTmetrix with the
+		// feature switched off and no API key, which falsified readme.txt's
+		// promise that nothing is sent while it is off. (A Hub-run test polls
+		// only the Hub the site is deliberately connected to.)
 		if ( ! $this->may_poll( $opts, $pending ) ) {
 			return rest_ensure_response(
 				array(
@@ -464,17 +669,9 @@ final class ScoreModule extends Module {
 			);
 		}
 
-		if ( ! is_array( $pending ) || empty( $pending['test_id'] ) ) {
-			return rest_ensure_response(
-				array(
-					'pending' => false,
-					'state'   => 'idle',
-					'latest'  => Score::latest(),
-				)
-			);
-		}
-
-		$polled = Score::poll_gtmetrix( (string) $opts['gtmetrix_api_key'] );
+		$polled = 'hub-psi' === ( $pending['provider'] ?? '' )
+			? $this->poll_hub_psi( $pending )
+			: Score::poll_gtmetrix( (string) $opts['gtmetrix_api_key'] );
 		if ( is_wp_error( $polled ) ) {
 			return $polled;
 		}
@@ -498,31 +695,33 @@ final class ScoreModule extends Module {
 	}
 
 	/**
-	 * May we contact GTmetrix to poll the in-flight test?
+	 * May we contact anyone to poll the in-flight test?
 	 *
-	 * Three conditions, all necessary: the feature is on, an API key exists
-	 * (there is no anonymous GTmetrix), and the pending marker is real and
-	 * not stale. A marker with no expiry turned one failed start into a
-	 * permanent poll loop against a third party.
+	 * The pending marker must be real and not stale — a marker with no expiry
+	 * turned one failed start into a permanent poll loop against a third
+	 * party. Beyond that, who we may poll depends on who ran the test: a
+	 * GTmetrix test needs the feature on and an API key (there is no
+	 * anonymous GTmetrix); a Hub-run test needs only the Hub connection the
+	 * site already has — the Hub is not a third party the toggle guards.
 	 *
 	 * @param array<string,mixed> $opts    Module settings.
 	 * @param mixed               $pending The stored pending marker.
 	 */
 	private function may_poll( array $opts, $pending ): bool {
-		if ( empty( $opts['enabled'] ) || '' === trim( (string) $opts['gtmetrix_api_key'] ) ) {
-			return false;
-		}
 		if ( ! is_array( $pending ) || empty( $pending['test_id'] ) ) {
 			return false;
 		}
-		// A GTmetrix test that hasn't resolved within the window is not going
-		// to; drop the marker rather than poll it forever.
+		// A test that hasn't resolved within the window is not going to;
+		// drop the marker rather than poll it forever.
 		$started = isset( $pending['started'] ) ? (int) $pending['started'] : 0;
 		if ( $started > 0 && ( time() - $started ) > Score::PENDING_MAX_AGE ) {
 			delete_option( Score::PENDING_OPTION );
 			return false;
 		}
-		return true;
+		if ( 'hub-psi' === ( $pending['provider'] ?? '' ) ) {
+			return '' !== Mcp_Pairing::site_token();
+		}
+		return ! empty( $opts['enabled'] ) && '' !== trim( (string) $opts['gtmetrix_api_key'] );
 	}
 
 	/**
@@ -805,10 +1004,9 @@ final class ScoreModule extends Module {
 		}
 
 		if ( 'run' === $action ) {
-			if ( empty( $opts['enabled'] ) ) {
-				\WP_CLI::error( 'External scores are turned off. Enable the score module first — this is the only feature that contacts a third party.' );
-				return;
-			}
+			// Running the command IS the opt-in — same consent rule as the
+			// dashboard's Test button (#425).
+			$opts = $this->consent_by_running( $opts );
 
 			$url      = $this->resolve_url( isset( $assoc['target'] ) ? (string) $assoc['target'] : '', $opts );
 			$provider = isset( $assoc['provider'] ) ? (string) $assoc['provider'] : (string) $opts['provider'];
@@ -824,7 +1022,22 @@ final class ScoreModule extends Module {
 			}
 
 			$strategy = isset( $assoc['strategy'] ) ? (string) $assoc['strategy'] : (string) $opts['default_strategy'];
-			$run      = Score::run_psi( $url, $strategy, (string) $opts['psi_api_key'] );
+			$api_key  = (string) $opts['psi_api_key'];
+
+			// No key → prefer the Hub, same ladder as rest_run() (#426).
+			if ( '' === trim( $api_key ) ) {
+				$via_hub = $this->start_psi_via_hub( $url, $strategy );
+				if ( $via_hub instanceof \WP_Error ) {
+					\WP_CLI::error( $via_hub->get_error_message() );
+					return;
+				}
+				if ( null !== $via_hub ) {
+					\WP_CLI::success( 'PageSpeed audit started via xSpeed Hub. Poll with: wp xspeed score status' );
+					return;
+				}
+			}
+
+			$run = Score::run_psi( $url, $strategy, $api_key );
 
 			if ( empty( $run['ok'] ) ) {
 				\WP_CLI::error( (string) $run['error'] );
@@ -845,13 +1058,22 @@ final class ScoreModule extends Module {
 		// status
 		$pending = get_option( Score::PENDING_OPTION, array() );
 		if ( $this->may_poll( $opts, $pending ) ) {
-			$polled = Score::poll_gtmetrix( (string) $opts['gtmetrix_api_key'] );
+			$polled = 'hub-psi' === ( $pending['provider'] ?? '' )
+				? $this->poll_hub_psi( $pending )
+				: Score::poll_gtmetrix( (string) $opts['gtmetrix_api_key'] );
 			if ( is_wp_error( $polled ) ) {
 				\WP_CLI::error( $polled->get_error_message() );
 				return;
 			}
 			if ( ! empty( $polled['pending'] ) ) {
-				\WP_CLI::log( sprintf( 'GTmetrix test %s is %s.', (string) $pending['test_id'], (string) ( $polled['state'] ?? 'running' ) ) );
+				\WP_CLI::log(
+					sprintf(
+						'%s test %s is %s.',
+						'hub-psi' === ( $pending['provider'] ?? '' ) ? 'PageSpeed (Hub)' : 'GTmetrix',
+						(string) $pending['test_id'],
+						(string) ( $polled['state'] ?? 'running' )
+					)
+				);
 				return;
 			}
 		}

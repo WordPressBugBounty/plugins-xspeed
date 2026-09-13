@@ -177,7 +177,7 @@ class Deactivation_Feedback {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
 			return;
 		}
-		$support_url = 'https://wpdeveloper.com/support/';
+		$support_url = 'https://xspeedcache.com/support/';
 		$theme_class = 'dark' === Admin::user_theme() ? ' xspeed-deactivate--dark' : '';
 		?>
 		<div id="xspeed-deactivate-modal" class="xspeed-deactivate<?php echo esc_attr( $theme_class ); ?>" aria-hidden="true">

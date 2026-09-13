@@ -21,6 +21,19 @@ class Cache {
 	private static $buffer_level = null;
 
 	/**
+	 * Bytes freed by the current sweep, accumulated by sweep_delete().
+	 *
+	 * A counter rather than a return value because the two sweeps that free
+	 * the bytes — the flat glob loop and the recursive static walk — already
+	 * report a FILE count, and `wp xspeed purge` needs both numbers from a
+	 * single pass. Re-walking the tree to size it would double the I/O on
+	 * exactly the caches large enough for the number to matter.
+	 *
+	 * @var int
+	 */
+	private static $sweep_bytes = 0;
+
+	/**
 	 * The `X-XSpeed-Cache` value decided for this request, and — when the
 	 * decision was BYPASS — the slug of the gate that made it.
 	 *
@@ -2955,14 +2968,24 @@ class Cache {
 	 * per host (see host_dir()), and the sweep is scoped to match, so a
 	 * purge originating on site-a leaves site-b's cache warm. (#6)
 	 *
-	 * @param string      $cause Who asked, for the purge log.
-	 * @param string|null $host  Host to purge. Defaults to the current site.
-	 *                           Pass '*' to sweep the ENTIRE tree — network
-	 *                           admin's "purge all sites", and the migration
-	 *                           of pre-#6 entries that sit in the tree root.
+	 * Clears the files only: the flat tree, the static tree, the REST
+	 * responses and the minified assets. The object-cache flush, the stats
+	 * update, `xspeed_after_purge_all` and the log entry live in purge_all(),
+	 * which is still the entry point for every existing caller. Split out so
+	 * `wp xspeed purge` can report the local sweep as one line item and the
+	 * object cache as another, each with its own status — see Purge_Runner.
+	 *
+	 * @param string|null $host Host to purge. Defaults to the current site.
+	 *                          Pass '*' to sweep the ENTIRE tree — network
+	 *                          admin's "purge all sites", and the migration
+	 *                          of pre-#6 entries that sit in the tree root.
+	 * @return array{pages:int,rest:int,assets:int,bytes:int} Entries removed
+	 *               per store, and the bytes freed by the two file sweeps
+	 *               that measure themselves.
 	 */
-	public static function purge_all( string $cause = 'manual', ?string $host = null ) {
-		$network_wide = ( '*' === $host );
+	public static function purge_local( ?string $host = null ): array {
+		$network_wide      = ( '*' === $host );
+		self::$sweep_bytes = 0;
 		// The flat tree buckets by a flattened segment (host/a-b) while the
 		// static tree mirrors the URL (host/a/b), so they need separate
 		// scopes — see current_host_dir() vs current_static_scope().
@@ -3025,7 +3048,7 @@ class Cache {
 				if ( $files ) {
 					$count += count( $files );
 					foreach ( $files as $f ) {
-						wp_delete_file( $f );
+						self::sweep_delete( $f );
 					}
 				}
 				// Remove the .meta sidecars (content-type for feeds/sitemaps)
@@ -3034,7 +3057,7 @@ class Cache {
 				$meta = glob( $root . '/*.meta' );
 				if ( $meta ) {
 					foreach ( $meta as $m ) {
-						wp_delete_file( $m );
+						self::sweep_delete( $m );
 					}
 				}
 				// Remove precompressed siblings (e.g. <key>.html.br from the Pro
@@ -3044,7 +3067,7 @@ class Cache {
 				$br = glob( $root . '/*.br' );
 				if ( $br ) {
 					foreach ( $br as $b ) {
-						wp_delete_file( $b );
+						self::sweep_delete( $b );
 					}
 				}
 				// `*.br` does not match `*.br.size` — same reason as the flat-root
@@ -3053,7 +3076,7 @@ class Cache {
 				$br_size = glob( $root . '/*.br.size' );
 				if ( $br_size ) {
 					foreach ( $br_size as $b ) {
-						wp_delete_file( $b );
+						self::sweep_delete( $b );
 					}
 				}
 			}
@@ -3072,7 +3095,8 @@ class Cache {
 		}
 		// REST response cache (cache/xspeed/rest/*.json) — same purge
 		// triggers (publish, settings change) invalidate it too.
-		$count += Rest_Cache::purge();
+		$rest   = Rest_Cache::purge();
+		$count += $rest;
 
 		// Minified + combined CSS/JS (cache/xspeed/min/ and min/combined/).
 		// purge_all is a full filesystem sweep and must clear these too, even
@@ -3080,27 +3104,60 @@ class Cache {
 		// from a feature the user later turned off must still be removed, and
 		// a stale combined-<hash>.css that the regenerated page no longer
 		// references otherwise 404s and breaks the frontend. (FBS-83114/83116)
-		if ( class_exists( '\\XSpeed\\Minifier' ) ) {
-			Minifier::purge_minified();
-		}
+		$assets = class_exists( '\\XSpeed\\Minifier' ) ? Minifier::purge_minified() : 0;
 
-		// Persistent object cache (Redis / Memcached). Flush regardless of
-		// whether the Object Cache module is currently enabled — a drop-in
-		// installed earlier keeps serving until flushed.
-		//
-		// wp_cache_flush() is NETWORK-global: on multisite it would drop
-		// every other site's object cache too, which is the same bug this
-		// change fixes for the page cache. Prefer the blog-scoped flush
-		// (WP 6.1+) unless we were explicitly asked to go network-wide. (#6)
+		return array(
+			'pages'  => $count - $rest,
+			'rest'   => $rest,
+			'assets' => $assets,
+			'bytes'  => self::$sweep_bytes,
+		);
+	}
+
+	/**
+	 * Flush the persistent object cache (Redis / Memcached).
+	 *
+	 * Runs regardless of whether the Object Cache module is currently
+	 * enabled — a drop-in installed earlier keeps serving until flushed.
+	 *
+	 * @param bool $network_wide Flush every blog's entries. wp_cache_flush()
+	 *                           is NETWORK-global, so on multisite the
+	 *                           default prefers the blog-scoped group flush
+	 *                           (WP 6.1+) — otherwise one site's purge drops
+	 *                           every other site's object cache, the same bug
+	 *                           #6 fixed for the page cache.
+	 * @return bool Whether a flush was actually performed.
+	 */
+	public static function flush_object_cache( bool $network_wide = false ): bool {
 		if ( ! $network_wide && is_multisite() && function_exists( 'wp_cache_flush_group' ) && function_exists( 'wp_cache_supports' ) && wp_cache_supports( 'flush_group' ) ) {
 			// Blog-scoped groups only; a shared/global group (site options,
 			// user meta) is intentionally left alone.
 			foreach ( array( 'options', 'posts', 'terms', 'post_meta', 'comment' ) as $group ) {
 				wp_cache_flush_group( $group );
 			}
-		} elseif ( function_exists( 'wp_cache_flush' ) ) {
-			wp_cache_flush();
+			return true;
 		}
+		if ( function_exists( 'wp_cache_flush' ) ) {
+			return (bool) wp_cache_flush();
+		}
+		return false;
+	}
+
+	/**
+	 * Purge this site's cache: the local sweep, then the object cache, then
+	 * the bookkeeping every caller expects (stats, `xspeed_after_purge_all`,
+	 * inventory invalidation, purge log).
+	 *
+	 * @param string      $cause Who asked, for the purge log.
+	 * @param string|null $host  See purge_local().
+	 * @return int Page + REST entries removed.
+	 */
+	public static function purge_all( string $cause = 'manual', ?string $host = null ) {
+		$network_wide = ( '*' === $host );
+		$removed      = self::purge_local( $host );
+		$count        = $removed['pages'] + $removed['rest'];
+
+		self::flush_object_cache( $network_wide );
 
 		self::update_stats( array( 'last_purge' => time() ) );
 
@@ -3864,6 +3921,22 @@ class Cache {
 	 * across the flat + static caches — .br siblings are not counted
 	 * (they're encodings of a page, not pages).
 	 */
+	/**
+	 * Delete a cache file, adding its size to the current sweep's byte
+	 * total. filesize() is silenced and re-checked because the file can
+	 * vanish between the glob and the unlink — a concurrent purge, or the
+	 * cache GC — and a warning there would be noise, not news.
+	 *
+	 * @param string $file Absolute path inside the cache tree.
+	 */
+	private static function sweep_delete( string $file ): void {
+		$size = @filesize( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- the file may be gone already; see docblock.
+		if ( is_int( $size ) ) {
+			self::$sweep_bytes += $size;
+		}
+		wp_delete_file( $file );
+	}
+
 	private static function rmtree_html( string $dir ): int {
 		if ( ! is_dir( $dir ) ) {
 			return 0;
@@ -3889,14 +3962,14 @@ class Cache {
 				continue;
 			}
 			if ( substr( $entry, -5 ) === '.html' ) {
-				wp_delete_file( $path );
+				self::sweep_delete( $path );
 				++$removed;
 			} elseif ( substr( $entry, -3 ) === '.br' || substr( $entry, -8 ) === '.br.size' ) {
 				// Precompressed sibling (index.html.br) and the record of its
 				// length. Remove both so a purge doesn't orphan stale Brotli
 				// bodies, or a size record that would later be read against a
 				// different sibling's bytes. Not counted.
-				wp_delete_file( $path );
+				self::sweep_delete( $path );
 			}
 		}
 		return $removed;
@@ -4012,9 +4085,41 @@ class Cache {
 			 * a stats call should do on an ordinary healthy site.
 			 */
 			'page_cache_blocked_reason' => ( ! $serving && ! empty( Settings::get()['cache_enabled'] ) )
-				? self::acquisition_blocker()
+				? ( self::acquisition_blocker() ?? self::not_serving_reason() )
 				: null,
 		);
+	}
+
+	/**
+	 * Why the cache is not serving, when nothing REFUSES to enable it.
+	 *
+	 * acquisition_blocker() answers "may we take the field", and since a
+	 * foreign drop-in became takeable it answers null on a site where another
+	 * plugin is nonetheless holding that file. Intent and outcome still
+	 * disagree there, and the dashboard was left reporting the symptom -- not
+	 * serving -- with no reason under it, which is exactly the state a user
+	 * cannot act on.
+	 *
+	 * So this names the holder and says what to do: enabling takes it over.
+	 */
+	private static function not_serving_reason(): ?string {
+		$owner = self::dropin_owner();
+		if ( self::DROPIN_FOREIGN !== $owner && self::DROPIN_UNREADABLE !== $owner ) {
+			return null;
+		}
+
+		if ( self::DROPIN_UNREADABLE === $owner ) {
+			return __( 'advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed.', 'xspeed' );
+		}
+
+		$label = Page_Cache_Detector::dropin_owner_label();
+		return $label
+			? sprintf(
+				/* translators: %s: the page-caching plugin that owns advanced-cache.php. */
+				__( '%s is serving the page cache. Turn the xSpeed cache off and on again to take it over.', 'xspeed' ),
+				$label
+			)
+			: __( 'Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over.', 'xspeed' );
 	}
 
 	/**
@@ -4073,7 +4178,7 @@ class Cache {
 	 *     manual_snippet: ?string
 	 * }
 	 */
-	public static function toggle( $enable ) {
+	public static function toggle( $enable, bool $consented = true ) {
 		Page_Cache_Detector::invalidate();
 		$expected = Page_Cache_Detector::inspect()['revision'];
 		/** Diagnostic seam; changing the expected revision can only force a safe refusal. */
@@ -4088,7 +4193,7 @@ class Cache {
 			if ( ! hash_equals( (string) $expected, (string) $fresh ) ) {
 				return self::blocked_toggle_state( __( 'Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again.', 'xspeed' ) );
 			}
-			$state = self::toggle_unlocked( (bool) $enable );
+			$state = self::toggle_unlocked( (bool) $enable, $consented );
 			return $state;
 		} finally {
 			flock( $lock, LOCK_UN );
@@ -4097,7 +4202,12 @@ class Cache {
 	}
 
 	/** Run the page-cache mutation while toggle() owns the scoped lock. */
-	private static function toggle_unlocked( bool $enable ) {
+	/**
+	 * @param bool $consented The user asked for this in the dashboard, so a
+	 *                        foreign drop-in may be taken over. False on the
+	 *                        unattended paths, which stand down instead.
+	 */
+	private static function toggle_unlocked( bool $enable, bool $consented = true ) {
 		$enable = (bool) $enable;
 
 		if ( $enable ) {
@@ -4132,6 +4242,35 @@ class Cache {
 			 */
 			$reasserting = self::page_cache_operational() && self::DROPIN_XSPEED === self::dropin_owner();
 			$blocker     = $reasserting ? null : self::acquisition_blocker();
+
+			/*
+			 * Taking over another plugin's drop-in needs the user to have
+			 * asked for it. On the dashboard they did -- they clicked the
+			 * switch, having been told whose file it is. The UNATTENDED
+			 * callers have no such click: restore_dropin_if_enabled() runs
+			 * after a plugin update and auto_heal() on an admin page load,
+			 * both from nothing more than `cache_enabled` still being true.
+			 *
+			 * A competitor installed since that flag was set would have its
+			 * page cache seized by a background repair, which is the silent
+			 * acquisition this plugin refuses to perform. So those callers
+			 * pass $consented = false and stand down instead.
+			 */
+			if ( null === $blocker && ! $consented && self::DROPIN_FOREIGN === self::dropin_owner() ) {
+				// Name the owner. This string is rendered by host plugins
+				// through Host::enable_page_cache(), and an unnamed refusal
+				// is what made every host invent its own explanation.
+				$owner_label = Page_Cache_Detector::dropin_owner_label();
+				return self::blocked_toggle_state(
+					$owner_label
+						? sprintf(
+							/* translators: %s: the page-caching plugin that owns advanced-cache.php. */
+							__( '%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over.', 'xspeed' ),
+							$owner_label
+						)
+						: __( 'Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over.', 'xspeed' )
+				);
+			}
 			if ( null !== $blocker ) {
 				Activity_Log::record(
 					'cache_enable_blocked',
@@ -4746,8 +4885,20 @@ class Cache {
 	public static function sync_query_allowlist(): void {
 		$file = XSPEED_CACHE_DIR . '/.ignored-query-params';
 
-		$opts    = Settings_Manager::get( 'cache' );
-		$ignored = is_array( $opts['ignored_query_params'] ?? null ) ? $opts['ignored_query_params'] : array();
+		/*
+		 * Stored read, not Settings_Manager::get() — this runs from boot(),
+		 * before translation is legal (see stored_cache_opts()).
+		 *
+		 * A raw read applies no schema defaults, and this field's default is a
+		 * long tracking-parameter list, NOT empty. Falling back to array()
+		 * would strip that whole allow-list from the drop-in on any install
+		 * that has never saved the Cache panel. So fall back to the schema's
+		 * own default, read from the module without building its labels.
+		 */
+		$opts    = self::stored_cache_opts();
+		$ignored = is_array( $opts['ignored_query_params'] ?? null )
+			? $opts['ignored_query_params']
+			: \XSpeed\Modules\Cache\CacheModule::DEFAULT_IGNORED_QUERY_PARAMS;
 
 		$parts = array();
 		foreach ( $ignored as $pattern ) {
@@ -4800,10 +4951,32 @@ class Cache {
 		file_put_contents( $file, $payload, LOCK_EX );
 	}
 
+	/**
+	 * CacheModule's STORED settings, read straight from the option.
+	 *
+	 * `Settings_Manager::get( 'cache' )` builds CacheModule's settings schema,
+	 * whose labels are declared through `__()`. The reconcile chain below runs
+	 * from `CacheModule::boot()` on `plugins_loaded` — before
+	 * `after_setup_theme`, the point WordPress 6.7+ treats as safe to
+	 * translate — so going through the schema there fires
+	 * `_load_textdomain_just_in_time` on every request AND resolves the labels
+	 * against a domain that is not loaded yet.
+	 *
+	 * The callers here need stored values, not schema metadata, so a raw read
+	 * is equivalent. It applies NO defaults or coercion: read each key with a
+	 * fallback matching the schema's own default.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function stored_cache_opts(): array {
+		$stored = get_option( Settings_Manager::OPTION_PREFIX . 'cache', array() );
+		return is_array( $stored ) ? $stored : array();
+	}
+
 	public static function sync_mobile_flag( $enabled = null ): void {
 		if ( null === $enabled ) {
-			$opts    = Settings_Manager::get( 'cache' );
-			$enabled = ! empty( $opts['mobile_separate'] );
+			$stored  = self::stored_cache_opts();
+			$enabled = ! empty( $stored['mobile_separate'] );
 		}
 		$dir  = XSPEED_CACHE_DIR;
 		$flag = $dir . '/.mobile-separate';
@@ -4909,7 +5082,8 @@ class Cache {
 		// sync_mobile_flag() do — the cache module's settings, not the
 		// top-level xspeed_options — or this marker would track a key that
 		// never changes and a real flip would go unnoticed.
-		$cache_opts     = Settings_Manager::get( 'cache' );
+		// Stored read — this runs from boot(); see stored_cache_opts().
+		$cache_opts     = self::stored_cache_opts();
 		$mobile_now     = ! empty( $cache_opts['mobile_separate'] );
 		$mobile_last    = get_option( 'xspeed_last_mobile_separate', null );
 		$mobile_flipped = ( null !== $mobile_last && (bool) (int) $mobile_last !== $mobile_now );
@@ -4992,7 +5166,8 @@ class Cache {
 		if ( Server::APACHE === Server::type() && ! Server::apache_has_mod_headers() ) {
 			return false;
 		}
-		$opts = Settings_Manager::get( 'cache' );
+		// Stored read — reached from boot(); see stored_cache_opts().
+		$opts = self::stored_cache_opts();
 		return empty( $opts['mobile_separate'] );
 	}
 
@@ -5498,9 +5673,14 @@ class Cache {
 		// anonymous copy to carts, members and bypassed bots alike. The
 		// three historical names survive as a floor inside cookie_rule().
 		// `~*` is case-insensitive, matching PHP's stripos()/glob checks.
-		$cache_opts  = Settings_Manager::get( 'cache' );
+		// Stored read — reached from boot(); see stored_cache_opts(). The
+		// fallbacks below mirror the schema's own defaults, which a raw read
+		// does not apply.
+		$cache_opts  = self::stored_cache_opts();
 		$cookie_rule = Server_Rules::cookie_rule(
-			is_array( $cache_opts['excluded_cookies'] ?? null ) ? $cache_opts['excluded_cookies'] : array()
+			is_array( $cache_opts['excluded_cookies'] ?? null )
+				? $cache_opts['excluded_cookies']
+				: \XSpeed\Modules\Cache\CacheModule::DEFAULT_EXCLUDED_COOKIES
 		);
 		$lines[] = 'if ($http_cookie ~* "(' . $cookie_rule['regex'] . ')") { set $xspeed_no_cache "$xspeed_no_cache-cookie"; }';
 
@@ -5682,7 +5862,7 @@ class Cache {
 			return false;
 		}
 
-		$state = self::toggle( true );
+		$state = self::toggle( true, false );
 		// A refusal reports whether the cache SERVES, which on this path can
 		// be true for reasons that have nothing to do with this call — so a
 		// refusal would otherwise log "drop-in restored" for a restore that
@@ -5724,7 +5904,7 @@ class Cache {
 			return;
 		}
 
-		$state = self::toggle( true );
+		$state = self::toggle( true, false );
 		// A refusal means something else now owns the page-cache field, or
 		// the write could not be verified. Either way this is not the moment
 		// to go on maintaining our rewrite block and log file.
@@ -6246,6 +6426,12 @@ class Cache {
 	public const DROPIN_NONE = 'none';
 	/** A drop-in is installed and we could not read it. */
 	public const DROPIN_UNREADABLE = 'unreadable';
+	/**
+	 * Present but holding nothing -- empty, or whitespace only. WP Rocket
+	 * truncates advanced-cache.php to 0 bytes on deactivate, and calling that
+	 * FOREIGN made it a permanent blocker with no owner to ask. (#391)
+	 */
+	public const DROPIN_ABANDONED = 'abandoned';
 
 	/**
 	 * Who owns wp-content/advanced-cache.php right now.
@@ -6270,9 +6456,43 @@ class Cache {
 			return self::DROPIN_UNREADABLE;
 		}
 
-		return xspeed_has_canonical_dropin_signature( $contents )
-			? self::DROPIN_XSPEED
-			: self::DROPIN_FOREIGN;
+		if ( xspeed_has_canonical_dropin_signature( $contents ) ) {
+			return self::DROPIN_XSPEED;
+		}
+
+		// Nothing in the file means nothing owns it. Kept distinct from
+		// FOREIGN so the acquisition gate can tell "someone else's cache" from
+		// "a husk the last plugin left behind". (#391)
+		if ( '' === trim( $contents ) ) {
+			return self::DROPIN_ABANDONED;
+		}
+
+		/*
+		 * The other half of the same question, and it cannot be answered from
+		 * the bytes: a file we cannot attribute is a COMPETITOR only while
+		 * some page cache is actually running. With every candidate switched
+		 * off it is abandoned -- a hosting company's own cache, a hand-rolled
+		 * one, or a plugin that was deleted without cleaning up.
+		 *
+		 * Asking the detector rather than re-deriving it here is the point:
+		 * these two answers disagreeing is a split brain with a bad ending --
+		 * acquisition_blocker() opens the gate, install_dropin() then refuses
+		 * on FOREIGN, and toggle() blames the filesystem for a write it never
+		 * attempted. One question, one answer. (#391, #393)
+		 */
+		if ( class_exists( __NAMESPACE__ . '\\Page_Cache_Detector' ) ) {
+			$owner = (string) ( Page_Cache_Detector::inspect()['dropin']['owner'] ?? '' );
+
+			// Attributable to a named plugin -> somebody's cache, whatever its
+			// activation state. Only a file NOBODY can be shown to own, with
+			// nothing running, is abandoned.
+			if ( Page_Cache_Detector::OWNER_UNKNOWN === $owner
+				&& ! Page_Cache_Detector::another_page_cache_is_active() ) {
+				return self::DROPIN_ABANDONED;
+			}
+		}
+
+		return self::DROPIN_FOREIGN;
 	}
 
 	/**
@@ -6328,6 +6548,43 @@ class Cache {
 				continue;
 			}
 			/*
+			 * Another plugin's drop-in is no longer a refusal.
+			 *
+			 * It used to be: whoever held advanced-cache.php kept it, and
+			 * enabling was blocked with "deactivate its page cache first".
+			 * That left a user who had asked for our cache with no way to get
+			 * it — on a live site the only exit was deleting a file over SSH,
+			 * and the message could not even say which of its two causes
+			 * applied ("is active OR owns advanced-cache.php").
+			 *
+			 * Turning the page cache on is the instruction to serve pages
+			 * from cache, and that is not possible without this file. So we
+			 * take it, and the dashboard says whose file it is first —
+			 * dropin_disclosure() names the owner, the user confirms, and
+			 * install_dropin() writes ours over the top.
+			 *
+			 * A still-active competitor is deliberately NOT re-added as a
+			 * blocker below: it is caught by `active_page_cache`, which the
+			 * capability rule already downgrades to a note. Two page caches
+			 * installed at once is the user's call to make, not ours to
+			 * refuse — they just told us which one they want serving.
+			 *
+			 * UNREADABLE is the exception and stays a refusal: we cannot name
+			 * what we would destroy, and install_dropin() refuses it too, so
+			 * opening the gate here would only produce a failed write.
+			 */
+			$about_dropin_owner = in_array(
+				$code,
+				array(
+					Page_Cache_Detector::BLOCKER_FOREIGN_DROPIN,
+					Page_Cache_Detector::BLOCKER_UNKNOWN_DROPIN,
+				),
+				true
+			);
+			if ( $about_dropin_owner && self::DROPIN_UNREADABLE !== $owner ) {
+				continue;
+			}
+			/*
 			 * Capability is not possession. `active_page_cache` and
 			 * `multiple_page_caches` both fire on a plugin that merely CAN
 			 * cache pages — the detector cannot prove a competitor's page
@@ -6356,7 +6613,23 @@ class Cache {
 				),
 				true
 			);
-			if ( $about_capability && in_array( $owner, array( self::DROPIN_XSPEED, self::DROPIN_NONE ), true ) ) {
+			/*
+			 * FOREIGN belongs in this list now, and it is the whole point.
+			 *
+			 * The rule is still "capability is not possession": these two
+			 * blockers fire on any plugin that CAN cache pages, which the
+			 * detector cannot prove is switched off. What changed is that a
+			 * competitor holding the drop-in no longer stops us either — we
+			 * take the file, having said whose it is. So there is nothing
+			 * left for a merely-installed competitor to protect, and keeping
+			 * the refusal here would put back the dead end by another route:
+			 * "another page cache is active" on a site where the user has
+			 * just told us, by name, which cache they want serving.
+			 *
+			 * UNREADABLE is deliberately still absent — that one refuses.
+			 */
+			if ( $about_capability
+				&& in_array( $owner, array( self::DROPIN_XSPEED, self::DROPIN_NONE, self::DROPIN_FOREIGN, self::DROPIN_ABANDONED ), true ) ) {
 				continue;
 			}
 			if ( Page_Cache_Detector::BLOCKER_MULTIPLE_PAGE_CACHES === $code ) {
@@ -6562,12 +6835,20 @@ class Cache {
 		}
 
 		/*
-		 * Ownership first, before any of the work below. WordPress gives every
-		 * caching plugin the same single file, so a drop-in that is not ours is
-		 * another plugin's live cache — refuse rather than replace it.
+		 * A drop-in we cannot READ is the one thing still refused here. Not
+		 * because of who owns it — we no longer refuse on ownership — but
+		 * because an unreadable file is usually a permissions problem, and
+		 * writing over it would fail anyway or destroy something we were
+		 * never able to look at.
+		 *
+		 * Everything else is ours to take. Enabling the page cache IS the
+		 * user's instruction to serve the cache, and serving it means holding
+		 * advanced-cache.php; the dashboard says whose file it is replacing
+		 * before the click (Page_Cache_Detector::dropin_disclosure()), so the
+		 * takeover is consented rather than silent.
 		 */
 		$owner = self::dropin_owner();
-		if ( self::DROPIN_FOREIGN === $owner || self::DROPIN_UNREADABLE === $owner ) {
+		if ( self::DROPIN_UNREADABLE === $owner ) {
 			return false;
 		}
 
@@ -6897,8 +7178,57 @@ class Cache {
 			)
 		);
 
-		foreach ( self::purge_types() as $slug => $type ) {
-			if ( empty( $type['visible'] ) ) {
+		// Settings first, then the two whole-errand actions (Purge All,
+		// Purge this URL), then the per-type items. The order is the one WP
+		// Rocket uses, and it front-loads what people open this menu for:
+		// nobody reaches for "Purge Object Cache" as often as they reach for
+		// the page they are looking at.
+		$wp_admin_bar->add_node(
+			array(
+				'id'     => 'xspeed-purge-settings',
+				'parent' => 'xspeed-purge',
+				'title'  => esc_html__( 'Settings', 'xspeed' ),
+				'href'   => admin_url( 'admin.php?page=' . Admin::PAGE_SLUG ),
+			)
+		);
+
+		$types = self::purge_types();
+
+		// 'all' is rendered out of band so the single-URL item can sit
+		// directly under it. A filter that reorders or drops it is honoured:
+		// the loop below skips whatever was emitted here.
+		$emitted = array();
+		if ( ! empty( $types['all']['visible'] ) ) {
+			$wp_admin_bar->add_node(
+				array(
+					'id'     => 'xspeed-purge-all',
+					'parent' => 'xspeed-purge',
+					'title'  => esc_html( $types['all']['label'] ),
+					'href'   => self::purge_type_url( 'all' ),
+				)
+			);
+			$emitted['all'] = true;
+		}
+
+		// Only when the current screen is about one thing — a front-end view,
+		// or a published post's edit screen. On a list table or a settings
+		// page there is nothing for "this" to mean, so the item stays hidden
+		// rather than silently targeting the dashboard. Purge_Ui decides both
+		// the label and the scope, which differ between the two contexts.
+		$context = Purge_Ui::context_node();
+		if ( null !== $context ) {
+			$wp_admin_bar->add_node(
+				array(
+					'id'     => 'xspeed-purge-this-url',
+					'parent' => 'xspeed-purge',
+					'title'  => esc_html( $context['title'] ),
+					'href'   => $context['href'],
+				)
+			);
+		}
+
+		foreach ( $types as $slug => $type ) {
+			if ( empty( $type['visible'] ) || isset( $emitted[ $slug ] ) ) {
 				continue;
 			}
 			$wp_admin_bar->add_node(

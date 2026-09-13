@@ -26,6 +26,89 @@ use XSpeed\Settings_Manager;
 
 final class CacheModule extends Module {
 
+	/**
+	 * Default Excluded Cookies.
+	 *
+	 * A constant for the same reason as DEFAULT_IGNORED_QUERY_PARAMS:
+	 * Cache::rewrite_block_lines() needs the list at boot, where building
+	 * the settings schema would translate its labels too early. The schema
+	 * and that fallback both read THIS, so they cannot drift.
+	 *
+	 * @var string[]
+	 */
+	public const DEFAULT_EXCLUDED_COOKIES = array(
+		'comment_author',
+		'~wordpress_[a-f0-9]+',
+		'wp-postpass',
+		'wordpress_no_cache',
+		'wordpress_logged_in',
+		'edd_items_in_cart',
+		'woocommerce_items_in_cart',
+		'fct_cart_hash',
+		'comment_',
+		'woocommerce_',
+		'wordpress',
+		'xf_',
+		'edd_',
+		'jetpack',
+		'yith_wcwl_session_',
+		'yith_wrvp_',
+		'wpsc_',
+		'ecwid',
+		'ec_',
+		'bookly',
+	);
+
+	/**
+	 * Default Ignored Query Parameters.
+	 *
+	 * A constant because Cache::sync_query_allowlist() needs this list at
+	 * boot, where building the settings schema would translate its labels
+	 * before WordPress allows it. Both the schema below and that boot-time
+	 * fallback read THIS, so the two cannot drift.
+	 *
+	 * @var string[]
+	 */
+	public const DEFAULT_IGNORED_QUERY_PARAMS = array(
+		'__s',
+		'_ga',
+		'_ke',
+		'~[a-zA-Z0-9_-]+_sid',
+		'adgroupid',
+		'age-verified',
+		'ao_noptimize',
+		'campaignid',
+		'ck_subscriber_id',
+		'cn-reloaded',
+		'dclid',
+		'epik',
+		'fb_action_ids',
+		'fb_action_types',
+		'fb_source',
+		'fbclid',
+		'gclid',
+		'jobid',
+		'mc_cid',
+		'mc_eid',
+		'mkt_tok',
+		'msclkid',
+		'ref',
+		// Twitter/X (`ref_src`, `ref_url`) and Facebook (`refid`)
+		// decorations. Enumerated because param names match
+		// whole-name: the bare `ref` above no longer absorbs them,
+		// and a `ref*` glob would over-match `referrer` and
+		// `refund_id`, which are page-selecting.
+		'ref_src',
+		'ref_url',
+		'refid',
+		'~session_[a-zA-Z0-9_-]+_alive',
+		'sseid',
+		'sslid',
+		'usqp',
+		'~utm_[a-zA-Z0-9_-]+',
+	);
+
+
 	public const SLUG    = 'cache';
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.0.0';
@@ -44,9 +127,9 @@ final class CacheModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'Page Cache',
+			'label'       => __( 'Page Cache', 'xspeed' ),
 			'icon'        => 'Database',
-			'description' => 'Page caching for non-logged-in visitors.',
+			'description' => __( 'Page caching for non-logged-in visitors.', 'xspeed' ),
 		);
 	}
 
@@ -72,9 +155,9 @@ final class CacheModule extends Module {
 				'default'     => self::DEFAULT_EXPIRY_HOURS,
 				'min'         => 1,
 				'max'         => 720,
-				'label'       => 'Cache Expiry (hours)',
+				'label'       => __( 'Cache Expiry (hours)', 'xspeed' ),
 				'unit'        => 'hours',
-				'description' => 'How long cached pages live before regenerating. 1 to 720 hours (30 days).',
+				'description' => __( 'How long cached pages live before regenerating. 1 to 720 hours (30 days).', 'xspeed' ),
 			),
 			'excluded_urls' => array(
 				'type'        => 'list',
@@ -102,46 +185,25 @@ final class CacheModule extends Module {
 					'/wp-login',
 				),
 				'item_type'   => 'string',
-				'label'       => 'Excluded URLs',
-				'description' => 'One pattern per line. Plain text matches anywhere in the URL (e.g. /cart). Use glob for anchored matches (/cart/* matches /cart/items but not /foo/cart/bar; *.pdf matches PDFs). Prefix with ~ for a raw regex (e.g. ~wp-.*\.php).',
+				'label'       => __( 'Excluded URLs', 'xspeed' ),
+				'description' => __( 'One pattern per line. Plain text matches anywhere in the URL (e.g. /cart). Use glob for anchored matches (/cart/* matches /cart/items but not /foo/cart/bar; *.pdf matches PDFs). Prefix with ~ for a raw regex (e.g. ~wp-.*\.php).', 'xspeed' ),
 			),
 			'excluded_cookies' => array(
 				'type'        => 'list',
 				// Cookies that signal a logged-in / transactional visitor
 				// whose response must not be served from a shared cache.
 				// `~` prefix = raw regex (e.g. ~wordpress_[a-f0-9]+). (FBS-82181)
-				'default'     => array(
-					'comment_author',
-					'~wordpress_[a-f0-9]+',
-					'wp-postpass',
-					'wordpress_no_cache',
-					'wordpress_logged_in',
-					'edd_items_in_cart',
-					'woocommerce_items_in_cart',
-					'fct_cart_hash',
-					'comment_',
-					'woocommerce_',
-					'wordpress',
-					'xf_',
-					'edd_',
-					'jetpack',
-					'yith_wcwl_session_',
-					'yith_wrvp_',
-					'wpsc_',
-					'ecwid',
-					'ec_',
-					'bookly',
-				),
+				'default'     => self::DEFAULT_EXCLUDED_COOKIES,
 				'item_type'   => 'string',
-				'label'       => 'Excluded Cookies',
-				'description' => 'Skip cache for any visitor whose request carries a cookie whose NAME matches one of these patterns. Plain text = "contains"; glob (woocommerce_*) and ~regex (~wordpress_[a-f0-9]+) supported. One per line.',
+				'label'       => __( 'Excluded Cookies', 'xspeed' ),
+				'description' => __( 'Skip cache for any visitor whose request carries a cookie whose NAME matches one of these patterns. Plain text = "contains"; glob (woocommerce_*) and ~regex (~wordpress_[a-f0-9]+) supported. One per line.', 'xspeed' ),
 			),
 			'bypass_user_agents' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => 'Bypass User Agents',
-				'description' => 'Substring match against the visitor User-Agent. Matched UAs bypass cache (useful for screenshot bots, internal previews, monitoring). Glob + ~regex supported. One per line.',
+				'label'       => __( 'Bypass User Agents', 'xspeed' ),
+				'description' => __( 'Substring match against the visitor User-Agent. Matched UAs bypass cache (useful for screenshot bots, internal previews, monitoring). Glob + ~regex supported. One per line.', 'xspeed' ),
 			),
 			'ignored_query_params' => array(
 				'type'        => 'list',
@@ -150,59 +212,22 @@ final class CacheModule extends Module {
 				// share one entry. `~` prefix = raw regex. (FBS-82181)
 				// Matched whole-name, so every entry here means the param
 				// it names and nothing that merely contains it.
-				'default'     => array(
-					'__s',
-					'_ga',
-					'_ke',
-					'~[a-zA-Z0-9_-]+_sid',
-					'adgroupid',
-					'age-verified',
-					'ao_noptimize',
-					'campaignid',
-					'ck_subscriber_id',
-					'cn-reloaded',
-					'dclid',
-					'epik',
-					'fb_action_ids',
-					'fb_action_types',
-					'fb_source',
-					'fbclid',
-					'gclid',
-					'jobid',
-					'mc_cid',
-					'mc_eid',
-					'mkt_tok',
-					'msclkid',
-					'ref',
-					// Twitter/X (`ref_src`, `ref_url`) and Facebook (`refid`)
-					// decorations. Enumerated because param names match
-					// whole-name: the bare `ref` above no longer absorbs them,
-					// and a `ref*` glob would over-match `referrer` and
-					// `refund_id`, which are page-selecting.
-					'ref_src',
-					'ref_url',
-					'refid',
-					'~session_[a-zA-Z0-9_-]+_alive',
-					'sseid',
-					'sslid',
-					'usqp',
-					'~utm_[a-zA-Z0-9_-]+',
-				),
+				'default'     => self::DEFAULT_IGNORED_QUERY_PARAMS,
 				'item_type'   => 'string',
-				'label'       => 'Ignored Query Parameters',
-				'description' => 'Query keys removed from the URL before computing the cache key, so /post?utm_source=x and /post share a cache entry. Defaults cover the common analytics + ad + session params. Each entry matches a whole param name — plain text is an exact name, and glob (utm_*) or ~regex are anchored too, so "ref" does not also match "preference". One per line.',
+				'label'       => __( 'Ignored Query Parameters', 'xspeed' ),
+				'description' => __( 'Query keys removed from the URL before computing the cache key, so /post?utm_source=x and /post share a cache entry. Defaults cover the common analytics + ad + session params. Each entry matches a whole param name — plain text is an exact name, and glob (utm_*) or ~regex are anchored too, so "ref" does not also match "preference". One per line.', 'xspeed' ),
 			),
 			'purge_on_upgrade' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Purge After Updates',
-				'description' => 'Clear the page cache when a plugin, theme or WordPress core is updated. Cached HTML is produced by the code being replaced, so leaving it in place serves pre-update markup — and links to minified assets that no longer exist — until the cache expires. Translation updates are ignored, since a language pack changes no markup a cached page depends on. Updates to xSpeed itself always purge, regardless of this setting.',
+				'label'       => __( 'Purge After Updates', 'xspeed' ),
+				'description' => __( 'Clear the page cache when a plugin, theme or WordPress core is updated. Cached HTML is produced by the code being replaced, so leaving it in place serves pre-update markup — and links to minified assets that no longer exist — until the cache expires. Translation updates are ignored, since a language pack changes no markup a cached page depends on. Updates to xSpeed itself always purge, regardless of this setting.', 'xspeed' ),
 			),
 			'mobile_separate' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Separate Mobile Cache',
-				'description' => 'Keep mobile and desktop responses in separate cache buckets. Turn on for AMP, mobile-specific themes (WPtouch / Jetpack mobile theme), or any setup that serves different HTML by device.',
+				'label'       => __( 'Separate Mobile Cache', 'xspeed' ),
+				'description' => __( 'Keep mobile and desktop responses in separate cache buckets. Turn on for AMP, mobile-specific themes (WPtouch / Jetpack mobile theme), or any setup that serves different HTML by device.', 'xspeed' ),
 			),
 		);
 	}
@@ -353,12 +378,46 @@ final class CacheModule extends Module {
 						'description' => 'Seconds to spend before stopping between steps. Default 120.',
 						'optional'    => true,
 					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'measure-score',
+						'description' => 'auto (default) measures when the stored score is stale and after changes land; never reuses the stored score; always measures even for a dry run.',
+						'optional'    => true,
+						'options'     => array( 'auto', 'never', 'always' ),
+					),
+				),
+			),
+			array(
+				'name'      => 'xspeed purge',
+				'callback'  => array( $this, 'cli_purge' ),
+				'shortdesc' => 'Clear every cache xSpeed manages — page and static files, REST responses, minified assets, the object cache and the configured edge — and report per store what was cleared, what was skipped and why. Use --type to clear just one.',
+				'ai_hint'   => 'Clear the cache after a change is live on the server but visitors still see the old version. Purges everything by default; --type=page for the local HTML only, --type=cloudflare for the edge only. Exits non-zero if a store that IS configured refused to purge, so its output can be trusted rather than assumed.',
+				'synopsis'  => array(
+					array(
+						'type'        => 'assoc',
+						'name'        => 'type',
+						'description' => 'What to clear: all (default), page, object, cloudflare, cdn — or a group name (edge). Comma-separate to clear several.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'cause',
+						'description' => 'Label recorded in the purge log, so `wp xspeed cache purge-log` can tell this run apart from a click. Default "CLI".',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'format',
+						'description' => 'table (default, one line per store) or json (the full report, for scripts).',
+						'optional'    => true,
+						'options'     => array( 'table', 'json' ),
+					),
 				),
 			),
 			array(
 				'name'      => 'xspeed cache',
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost (site-wide purge / toggle use the dedicated commands).',
+				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost. To clear the whole site use `wp xspeed purge`.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
@@ -412,6 +471,7 @@ final class CacheModule extends Module {
 				'aggressiveness' => (string) ( $assoc['aggressiveness'] ?? 'standard' ),
 				'dry_run'        => isset( $assoc['dry-run'] ),
 				'budget_seconds' => isset( $assoc['budget'] ) ? (int) $assoc['budget'] : 120,
+				'measure_score'  => (string) ( $assoc['measure-score'] ?? 'auto' ),
 			)
 		);
 
@@ -421,6 +481,12 @@ final class CacheModule extends Module {
 		}
 
 		if ( ! empty( $result['dry_run'] ) ) {
+			// The summary carries the score AND its age. Printing the plan
+			// without it left the one number a reader wants off the only
+			// command they run before deciding to apply anything.
+			if ( isset( $result['message'] ) ) {
+				\WP_CLI::log( (string) $result['message'] );
+			}
 			\WP_CLI::log( 'Plan (' . count( $result['plan'] ) . ' steps, nothing applied):' );
 			foreach ( $result['plan'] as $step ) {
 				\WP_CLI::log( '  - ' . $step['change'] . ' [' . $step['tier'] . ']' );
@@ -446,8 +512,145 @@ final class CacheModule extends Module {
 		}
 
 		if ( ! empty( $result['applied'] ) ) {
-			\WP_CLI::success( count( $result['applied'] ) . ' change(s) applied and verified.' );
+			// "applied and verified" was more than the checks earn. They read
+			// HTML in PHP and cannot run JavaScript, so this line was telling
+			// someone the site was fine when the only honest claim is that
+			// nothing in the markup looked broken.
+			\WP_CLI::success( count( $result['applied'] ) . ' change(s) applied; HTML checks passed.' );
+
+			if ( ! empty( $result['verify_urls'] ) ) {
+				\WP_CLI::log( '' );
+				\WP_CLI::log( 'Now open these and check they render, with no console errors:' );
+				foreach ( $result['verify_urls'] as $u ) {
+					\WP_CLI::log( '  ' . $u );
+				}
+			}
 		}
+	}
+
+	/**
+	 * `wp xspeed purge` — clear every cache xSpeed owns, in one call.
+	 *
+	 * Reports per store rather than printing a success banner, because the
+	 * banner was the bug: a site whose Cloudflare token had lost its purge
+	 * permission saw "cache cleared" and kept serving stale HTML from the
+	 * edge. What is skipped is as much of the answer as what is cleared, so
+	 * every skip prints its reason.
+	 *
+	 * Exit code follows the same distinction. A store that is not configured
+	 * has nothing to clear and does not fail the run — otherwise every CI
+	 * pipeline on a site without Redis goes red for a purge that did exactly
+	 * what it should. A store that IS configured and refused is a failure.
+	 *
+	 * There is deliberately no `--url`: WP-CLI reserves that flag for
+	 * multisite site selection and consumes it before a handler ever sees it.
+	 * Clearing one page is `wp xspeed cache purge-url <url>`.
+	 *
+	 * @param array<int,string>    $args  Positional args (unused).
+	 * @param array<string,string> $assoc Flags.
+	 */
+	public function cli_purge( array $args, array $assoc ): void {
+		unset( $args );
+
+		$requested = array_values(
+			array_filter(
+				array_map( 'trim', explode( ',', (string) ( $assoc['type'] ?? 'all' ) ) )
+			)
+		);
+		if ( ! $requested ) {
+			$requested = array( 'all' );
+		}
+
+		$accepted = \XSpeed\Purge_Runner::accepted_types();
+		$unknown  = array_diff( $requested, $accepted );
+		if ( $unknown ) {
+			// Refuse before purging anything: a typo in --type must not
+			// quietly clear a DIFFERENT store than the one named.
+			\WP_CLI::error(
+				sprintf(
+					'Unknown purge type: %s. Expected one of: %s',
+					implode( ', ', $unknown ),
+					implode( ', ', $accepted )
+				)
+			);
+			return;
+		}
+
+		$cause  = isset( $assoc['cause'] ) && '' !== trim( (string) $assoc['cause'] ) ? trim( (string) $assoc['cause'] ) : 'CLI';
+		$report = \XSpeed\Purge_Runner::run( $requested, $cause );
+
+		if ( 'json' === ( $assoc['format'] ?? 'table' ) ) {
+			// The report goes to STDOUT alone so `... --format=json | jq` works;
+			// the failure message goes to STDERR via ::error, which is also
+			// what produces the non-zero exit.
+			\WP_CLI::line( (string) wp_json_encode( $report ) );
+			if ( ! $report['ok'] ) {
+				\WP_CLI::error( 'One or more cache stores failed to purge; see the report above.' );
+			}
+			return;
+		}
+
+		$cleared = 0;
+		$skipped = 0;
+		$failed  = 0;
+		foreach ( $report['types'] as $row ) {
+			switch ( $row['status'] ) {
+				case \XSpeed\Purge_Runner::CLEARED:
+					++$cleared;
+					\WP_CLI::log( sprintf( '  cleared  %s%s', $row['label'], self::purge_amount( $row ) ) );
+					break;
+				case \XSpeed\Purge_Runner::FAILED:
+					++$failed;
+					\WP_CLI::log( sprintf( '  FAILED   %s — %s', $row['label'], $row['reason'] ) );
+					break;
+				default:
+					++$skipped;
+					\WP_CLI::log( sprintf( '  skipped  %s — %s', $row['label'], $row['reason'] ) );
+			}
+		}
+
+		if ( $failed ) {
+			\WP_CLI::error(
+				sprintf(
+					'%d of %d cache store(s) failed to purge; %d cleared, %d skipped.',
+					$failed,
+					count( $report['types'] ),
+					$cleared,
+					$skipped
+				)
+			);
+			return;
+		}
+
+		if ( ! $cleared ) {
+			// Not a success banner: nothing was purged, and saying so is the
+			// honest answer for a --type nobody has configured.
+			\WP_CLI::log( sprintf( 'Nothing to purge — %d store(s) skipped.', $skipped ) );
+			return;
+		}
+
+		\WP_CLI::success( sprintf( 'Purged %d cache store(s); %d skipped.', $cleared, $skipped ) );
+	}
+
+	/**
+	 * The " — 42 entries (1.3 MB)" tail on a cleared line.
+	 *
+	 * Entries and bytes are both optional: a Redis FLUSHALL reports neither,
+	 * and printing "0 entries" for it would read as an empty cache rather
+	 * than an uncountable one.
+	 *
+	 * @param array{entries:int|null,bytes:int|null} $row Report row.
+	 */
+	private static function purge_amount( array $row ): string {
+		$parts = array();
+		if ( null !== $row['entries'] ) {
+			$parts[] = sprintf( '%d entr%s', $row['entries'], 1 === (int) $row['entries'] ? 'y' : 'ies' );
+		}
+		if ( null !== $row['bytes'] && $row['bytes'] > 0 ) {
+			$parts[] = size_format( $row['bytes'], 1 );
+		}
+
+		return $parts ? ' — ' . implode( ', ', $parts ) : '';
 	}
 
 	public function cli_handler( array $args, array $assoc ): void {

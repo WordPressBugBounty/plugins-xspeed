@@ -194,6 +194,15 @@ final class Score {
 					__( 'PageSpeed Insights returned HTTP %d.', 'xspeed' ),
 					$code
 				);
+
+			// A keyless refusal is Google's shared anonymous pool running dry,
+			// not a fault on this site — and Google's own sentence (project
+			// numbers, quota metric names) reads like a broken plugin. Name
+			// the two remedies instead. (#426)
+			if ( '' === trim( $api_key ) && ( 429 === $code || preg_match( '/quota|rate limit/i', $message ) ) ) {
+				$message = __( 'Google\'s shared anonymous PageSpeed quota is exhausted right now — this is not a problem with your site. Add a free PageSpeed API key in the Speed Test settings, or connect this site to xSpeed Hub to run tests through it.', 'xspeed' );
+			}
+
 			return self::failure( 'psi', $url, $strategy, $message );
 		}
 
@@ -486,9 +495,28 @@ final class Score {
 		return $out;
 	}
 
-	/** Most recent successful run, or null. */
+	/**
+	 * Most recent successful run, or null.
+	 *
+	 * Asks the store for the newest `ok` row rather than scanning the capped
+	 * history window. Failed runs are recorded too, so a site whose audits
+	 * keep failing — the unauthenticated PSI quota refuses often, and the key
+	 * is optional — would push its last real score out of the window after
+	 * MAX_HISTORY failures and then report no score at all (#306 review,
+	 * issue 1). Reproduced: one genuine audit of 91, then 30 failures, and
+	 * latest() returned null.
+	 *
+	 * The option fallback still scans, because that path has no query to make
+	 * and is only reached when the table is unavailable.
+	 */
 	public static function latest(): ?array {
-		foreach ( self::history() as $row ) {
+		Score_Store::maybe_install();
+		$row = Score_Store::latest_ok();
+		if ( is_array( $row ) ) {
+			return $row;
+		}
+
+		foreach ( self::history_option() as $row ) {
 			if ( ! empty( $row['ok'] ) ) {
 				return $row;
 			}

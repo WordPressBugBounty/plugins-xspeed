@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.4
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -61,7 +61,7 @@ Strips all the unnecessary whitespace, comments and characters from your HTML, C
 * Combine CSS and JS files to reduce HTTP requests
 * Defer or delay JavaScript so it does not block page rendering
 * Async CSS loading
-* Removes `?ver=` query strings from asset URLs
+* Removes `?ver=` query strings from asset URLs (generated files under `wp-content/uploads` keep theirs, so a page-builder or consent-banner edit still reaches returning visitors)
 * Safe-minify automatically skips already-minified files and falls back if anything looks off
 
 **GZIP Compression**
@@ -161,7 +161,7 @@ xSpeed Cache handles the edge cases other plugins miss:
 
 **Non-technical users:** A 3-step setup wizard walks you through first-time configuration in under 2 minutes. Settings auto-save, so there is no Save button to forget.
 
-**Developers:** REST API at `/wp-json/xspeed/v1/`, developer filters (`xspeed_skip_minify`, `xspeed_cache_skip_for_post`, `xspeed_cache_expiry_for_post`), `WP_DEBUG` awareness, and a React 18 and TypeScript admin UI.
+**Developers:** REST API at `/wp-json/xspeed/v1/`, developer filters (`xspeed_skip_minify`, `xspeed_strip_asset_version`, `xspeed_cache_skip_for_post`, `xspeed_cache_expiry_for_post`), `WP_DEBUG` awareness, and a React 18 and TypeScript admin UI.
 
 **Agencies:** Use the `xspeed_branding` filter to white-label the dashboard for clients.
 
@@ -261,7 +261,7 @@ By default, no. The only request is a check to your own site's home URL to confi
 
 == External services ==
 
-xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only if you turn it on — one external performance-score provider. The setup wizard shows a clearly-labeled consent control for analytics (enabled by default, untick to opt out), and nothing is sent until you confirm your choices there. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default and never run on their own.
+xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. The setup wizard shows a clearly-labeled consent control for analytics (enabled by default, untick to opt out), and nothing is sent until you confirm your choices there. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
 
 = Self-hosted gzip probe =
 
@@ -280,10 +280,10 @@ xSpeed Cache contacts your own site (the gzip probe below); when usage analytics
 = External performance scores (opt-in, off by default) =
 
 * **What it does:** Lets you run a performance audit of one of your own pages from the dashboard and shows the score alongside xSpeed Cache's internal TTFB benchmark. Two providers are supported: Google PageSpeed Insights (works without an API key; you may add your own key to raise Google's anonymous rate limit) and GTmetrix (requires your own API key — it has no anonymous mode).
-* **When it runs:** Only when you press **Test now** on the dashboard, or run `wp xspeed score run`. There is no schedule and no background call. If the feature is left off — which is the default — no request is ever made.
-* **Where the request goes:** Google PageSpeed Insights — `https://www.googleapis.com/pagespeedonline/v5/runPagespeed` ([Terms](https://developers.google.com/speed/docs/insights/v5/about), [Privacy Policy](https://policies.google.com/privacy)) — or GTmetrix — `https://gtmetrix.com/api/2.0/tests` ([Terms](https://gtmetrix.com/terms-of-service.html), [Privacy Policy](https://gtmetrix.com/privacy.html)).
-* **What is sent:** The URL you are testing (your own page, which the provider then fetches publicly) and, if you supplied one, your own API key for that provider. No personal data, no visitor data, and no site content are sent by the plugin.
-* **How to turn it off:** Switch "Enable external scores" off in the xSpeed Cache dashboard (Health → PageSpeed). Past results stay in your database until you clear them.
+* **When it runs:** Only when you press **Test now** on the dashboard, or run `wp xspeed score run`. Pressing Test is the opt-in: the first run switches the feature on. There is no schedule and no background call. While the feature is off — which is the default until your first test — no request is ever made.
+* **Where the request goes:** Google PageSpeed Insights — `https://www.googleapis.com/pagespeedonline/v5/runPagespeed` ([Terms](https://developers.google.com/speed/docs/insights/v5/about), [Privacy Policy](https://policies.google.com/privacy)) — or GTmetrix — `https://gtmetrix.com/api/2.0/tests` ([Terms](https://gtmetrix.com/terms-of-service.html), [Privacy Policy](https://gtmetrix.com/privacy.html)). If your site is connected to xSpeed Hub and you have not added your own PageSpeed API key, the audit request goes to your own Hub account (`https://app.xspeedcache.com`, [Privacy Policy](https://wpdeveloper.com/privacy-policy)), which calls PageSpeed Insights on your behalf with its own key so the test does not fail on Google's shared anonymous quota.
+* **What is sent:** The URL you are testing (your own page, which the provider then fetches publicly) and, if you supplied one, your own API key for that provider. On the Hub route, only your site's URL and the site token that proves the connection. No personal data, no visitor data, and no site content are sent by the plugin.
+* **How to turn it off:** Nothing runs unless you start a test, so there is nothing to switch off day-to-day. To also block automated measurements (an optimize run measuring its own effect), turn the "Allow speed tests" setting off with WP-CLI — `wp xspeed settings update score --values='{"enabled":false}'` — or over the REST API; it stays off until you run a test again. Past results stay in your database until you clear them.
 
 = Deactivation feedback (optional, only when you submit it) =
 
@@ -326,6 +326,45 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.3.0] – 2026-09-13 =
+
+**A single page can now be purged straight from the admin bar, the post list or the editor, and known third-party scripts — analytics, chat widgets, tracking pixels — are delayed automatically without asking you to list them. A host or agency can pin any setting from wp-config.php with a constant: the dashboard shows the pin, names the constant, and lets an admin take the setting back. xSpeed can also take over an abandoned page-cache drop-in, with your consent, instead of being blocked by it forever.**
+
+Caching:
+- New: Purge a single page from the admin bar, the post list's row actions, or the editor — and the purge confirms what it actually removed instead of assuming.
+- New: `wp xspeed purge` clears every cache in one call, and a purge is scoped to exactly what the caller asked for.
+- New: Publishing or updating a post also purges the pages that list it, not just the post itself.
+- New: An abandoned page-cache drop-in left by another plugin can be taken over with one consenting click, and a leftover husk of a drop-in no longer blocks caching forever.
+- Fixed: A migration handover now completes instead of stopping halfway, from the dashboard and the CLI alike.
+- Fixed: xSpeed no longer mistakes itself for a competing cache plugin.
+
+Optimization:
+- New: Known third-party scripts are delayed until interaction automatically, including the inline install snippets vendors ask you to paste into the header.
+- New: Font stylesheets are deferred out of the render path, and a Google Fonts request that blocks rendering is rewritten to swap.
+- New: A manual preload list covers the images no detector can see.
+- Fixed: The LCP preload no longer picks a brand logo over the page's real hero image.
+- Fixed: Deferring no longer breaks inline scripts that depend on another handle, combining no longer swallows scripts that delaying protects, and handle exclusions are honoured in the delay pass.
+- Fixed: Valid minified JavaScript is no longer rejected, asset URLs are matched across schemes, an uploads folder at the domain root is recognised, and `?ver` is kept on files plugins rewrite in place.
+- Fixed: Lazy loading reads an image's size from whichever attribute holds its URL, and no longer mistakes a real image for a placeholder because of a word inside its filename.
+
+Settings:
+- New: Any module setting can be pinned from wp-config.php with a constant. The dashboard shows a pinned field as read-only and names the constant that holds it.
+- New: An admin can take a pinned setting back — the override displaces the host's constant and only that.
+- Fixed: A panel containing a pinned field saves again, and editing a pinned setting is a single inline edit.
+
+Object Cache:
+- New: Redis credentials and Memcached servers are read from wp-config.php, and `WP_REDIS_PREFIX` is honoured as a key salt.
+- Fixed: Cache keys are always namespaced per site, so two sites sharing a Redis or Memcached database can no longer read or purge each other's entries.
+- Fixed: The dashboard panel gained every fix that had only reached the CLI, owns only what the plugin itself wrote, and no longer presents another plugin's object cache as xSpeed's.
+
+Reliability:
+- Fixed: Translations now load for both PHP and the dashboard, and the settings screens are translatable.
+- Fixed: nginx sends one Cache-Control header per location instead of two, and the de-duplicated header no longer caches 404 responses.
+- Fixed: An audit contributor that throws no longer takes the whole audit down with it, and add-ons can report findings of their own.
+
+AI tools:
+- Improved: The optimize assistant honours its cooldown, never measures without consent, keeps the score through a run of failures, and reports the newest score with its age.
 
 = [1.2.4] – 2026-09-06 =
 

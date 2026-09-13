@@ -2,7 +2,7 @@
 /**
  * Plugin Name: xSpeed Cache
  * Description: Minimal, ultra-fast caching plugin for WordPress.
- * Version: 1.2.4
+ * Version: 1.3.0
  * Requires at least: 6.0
  * Tested up to: 7.1
  * Requires PHP: 7.4
@@ -11,6 +11,7 @@
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: xspeed
+ * Domain Path: /languages
  *
  * @package XSpeed
  */
@@ -19,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'XSPEED_VERSION', '1.2.4' );
+define( 'XSPEED_VERSION', '1.3.0' );
 define( 'XSPEED_FILE', __FILE__ );
 define( 'XSPEED_DIR', plugin_dir_path( __FILE__ ) );
 define( 'XSPEED_URL', plugin_dir_url( __FILE__ ) );
@@ -276,6 +277,17 @@ function xspeed_missing_core_classes() {
 add_action(
 	'plugins_loaded',
 	function () {
+		/*
+		 * Register the text domain before anything else in this closure.
+		 * Nothing loads it implicitly, and translation plugins such as Loco
+		 * hook `load_textdomain_mofile` -- that filter only fires in response
+		 * to an actual load call, so without this every .mo on disk is
+		 * silently ignored. This has to run on `plugins_loaded` or later or
+		 * WordPress trips its own _doing_it_wrong guard, and it has to come
+		 * before the integrity check below, whose notice is translatable too.
+		 */
+		load_plugin_textdomain( 'xspeed', false, dirname( plugin_basename( XSPEED_FILE ) ) . '/languages' );
+
 		$missing = xspeed_missing_core_classes();
 		if ( ! empty( $missing ) ) {
 			add_action(

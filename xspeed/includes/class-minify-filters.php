@@ -139,6 +139,16 @@ final class Minify_Filters {
 		if ( self::is_excluded_script( (string) $handle, (string) $src ) ) {
 			return $tag;
 		}
+		// Inline code elsewhere on the page reads this handle (or something
+		// it depends on). Inline blocks never defer, so deferring this one
+		// would run the consumer first. Defer only — delay is an opt-in
+		// target list, where the user has named the script deliberately.
+		if ( isset( self::inline_bound_handles()[ (string) $handle ] ) ) {
+			return $tag;
+		}
+		// NB: is_protected_from_bundling() is the same two rules in one call
+		// for the combiner; the split here is deliberate, since the
+		// exclusion check above already ran and short-circuits earlier.
 		if ( false !== stripos( $tag, ' defer' ) || false !== stripos( $tag, ' async' ) ) {
 			return $tag;
 		}
@@ -185,8 +195,7 @@ final class Minify_Filters {
 		// somebody else on purpose. The buffer pass has always checked this;
 		// the enqueue path did not, so a consent-blocked or JSON-carrying
 		// handle could still be rewritten here. (#274)
-		if ( preg_match( '#\btype\s*=\s*(["\'])(.*?)\1#is', $tag, $type_m )
-			&& in_array( strtolower( trim( $type_m[2] ) ), self::NON_EXECUTABLE_TYPES, true ) ) {
+		if ( in_array( self::extract_type( $tag ), self::NON_EXECUTABLE_TYPES, true ) ) {
 			return $tag;
 		}
 		// src= variant: swap src → data-xs-src and add data-xs-delay marker.
@@ -216,14 +225,23 @@ final class Minify_Filters {
 				1
 			);
 		}
-		// Inline script: change type to text/plain so the browser
-		// doesn't execute, mark for bootstrap rewriter.
-		return (string) preg_replace(
+		// Inline script: change type to text/xspeed-delayed so the browser
+		// doesn't execute, mark for bootstrap rewriter. Any existing type
+		// is REPLACED, not appended-after: HTML keeps an attribute's first
+		// occurrence, so a snippet carrying its own `type="text/javascript"`
+		// would win over a marker appended behind it and keep executing.
+		// A non-default original type is stashed in data-xs-type so the
+		// bootstrap can restore it on replay (#274 — type is what a script
+		// IS; a parked `type="module"` must come back as a module).
+		$tag = (string) preg_replace_callback(
 			'#<script\b([^>]*)>#i',
-			'<script$1 type="text/xspeed-delayed" data-xs-delay="1">',
+			static function ( array $m ): string {
+				return '<script' . self::park_type_attrs( $m[1] ) . '>';
+			},
 			$tag,
 			1
 		);
+		return $tag;
 	}
 
 	/**
@@ -247,6 +265,72 @@ final class Minify_Filters {
 		// made yet, so the only correct move is to leave it alone. (#274)
 		'text/plain',
 	);
+
+	/**
+	 * The `type` attribute, quoted OR unquoted, anchored to attribute
+	 * position — a required leading whitespace, never a bare `\b`.
+	 *
+	 * The anchoring matters twice over. `\btype` also matches the tail of
+	 * any hyphenated `data-…-type` attribute (a `-` is a non-word char, so
+	 * the boundary sits inside the name — the same #273 class as `src`),
+	 * and it matches a `type=` sitting INSIDE another attribute's value
+	 * (`onload="this.type='done'"`). Requiring whitespace before the name
+	 * rules both out: attributes are whitespace-separated, while `.type`
+	 * and `-type` never are. The unquoted branch exists because
+	 * `type=text/javascript` is valid HTML: a quoted-only pattern left it
+	 * standing, the parking type appended after it lost the
+	 * first-occurrence race, and the snippet executed immediately AND
+	 * replayed on interaction — every vendor event fired twice.
+	 */
+	private const TYPE_ATTR_RE = '#\stype\s*=\s*(?:(["\'])(.*?)\1|([^\s>]+))#is';
+
+	/**
+	 * `type` values a parked tag need not remember: the replay default is
+	 * already JavaScript, so stashing these would only fatten the markup.
+	 */
+	private const DEFAULT_JS_TYPES = array(
+		'text/javascript',
+		'application/javascript',
+	);
+
+	/**
+	 * Read a tag's `type` attribute value, lowercased and trimmed.
+	 *
+	 * @param string $haystack Full tag or its attribute string.
+	 * @return string '' when no type attribute is present.
+	 */
+	private static function extract_type( string $haystack ): string {
+		if ( ! preg_match( self::TYPE_ATTR_RE, $haystack, $m ) ) {
+			return '';
+		}
+		$value = ( isset( $m[3] ) && '' !== $m[3] ) ? $m[3] : $m[2];
+		return strtolower( trim( $value ) );
+	}
+
+	/**
+	 * Rewrite an inline tag's attribute string for parking: strip its own
+	 * `type`, stash a non-default one in `data-xs-type` (the bootstrap
+	 * restores it on replay, so a parked `type="module"` comes back as a
+	 * module rather than a classic script — #274), and append the parking
+	 * marker pair.
+	 *
+	 * @param string $attrs Raw attribute string (everything between
+	 *                      `<script` and `>`).
+	 */
+	private static function park_type_attrs( string $attrs ): string {
+		$orig  = self::extract_type( $attrs );
+		$attrs = (string) preg_replace( self::TYPE_ATTR_RE, '', $attrs );
+		$stash = '';
+		if ( '' !== $orig && ! in_array( $orig, self::DEFAULT_JS_TYPES, true ) ) {
+			// MIME-ish charset only — a type value is never markup, and this
+			// string is re-emitted inside a double-quoted attribute.
+			$orig = (string) preg_replace( '#[^a-z0-9/+.\-]#', '', $orig );
+			if ( '' !== $orig ) {
+				$stash = ' data-xs-type="' . $orig . '"';
+			}
+		}
+		return $attrs . $stash . ' type="text/xspeed-delayed" data-xs-delay="1"';
+	}
 
 	/**
 	 * URL fragments that must keep a live src no matter what. The enqueue
@@ -316,11 +400,8 @@ final class Minify_Filters {
 				$src = $src_m[2];
 
 				// Data, not code.
-				if ( preg_match( '#\btype\s*=\s*(["\'])(.*?)\1#is', $tag, $type_m ) ) {
-					$type = strtolower( trim( $type_m[2] ) );
-					if ( in_array( $type, self::NON_EXECUTABLE_TYPES, true ) ) {
-						return $tag;
-					}
+				if ( in_array( self::extract_type( $tag ), self::NON_EXECUTABLE_TYPES, true ) ) {
+					return $tag;
 				}
 
 				foreach ( self::ALWAYS_EXCLUDED_SRC as $needle ) {
@@ -329,11 +410,36 @@ final class Minify_Filters {
 					}
 				}
 
-				// Buffer-pass tags have no handle — match on URL only.
-				if ( self::is_excluded_script( '', $src ) ) {
+				// Recover the handle from the tag's id before deciding.
+				//
+				// This pass used to pass '' as the handle, on the reasoning
+				// that a tag reaching the buffer was never enqueued and so has
+				// none. That holds for the third-party snippets this pass
+				// exists for — but NOT for enqueued scripts, which also travel
+				// through here, and which WordPress prints with
+				// `id="<handle>-js"`. Passing '' meant every handle-based
+				// exclusion was silently inert at this layer: the user writes
+				// `jquery-core`, the enqueue path honours it, and then the
+				// buffer pass — which only ever compared URLs — delayed the
+				// very script the list was protecting.
+				//
+				// That is how a site with jquery-core AND jquery-migrate
+				// excluded still shipped jQuery delayed while migrate loaded
+				// normally, and every inline `jQuery(...)` on the page threw
+				// "jQuery is not defined". The two behaved differently for no
+				// reason a user could see, which is what made it look like a
+				// matching quirk rather than a whole layer ignoring the list.
+				$tag_handle = '';
+				if ( preg_match( '#\sid\s*=\s*(["\'])(.*?)\1#i', $tag, $id_m ) ) {
+					// WP appends `-js`; anything else is somebody's own id and
+					// is still worth matching literally.
+					$tag_handle = (string) preg_replace( '/-js$/', '', $id_m[2] );
+				}
+
+				if ( self::is_excluded_script( $tag_handle, $src ) ) {
 					return $tag;
 				}
-				if ( ! self::is_delay_target( '', $src ) ) {
+				if ( ! self::is_delay_target( $tag_handle, $src ) ) {
 					return $tag;
 				}
 
@@ -346,6 +452,112 @@ final class Minify_Filters {
 			},
 			$html
 		);
+	}
+
+	/**
+	 * Delay inline vendor snippets that reference a known third-party host.
+	 *
+	 * The pass above rewrites `src` and deliberately leaves inline code
+	 * alone — but the OFFICIAL install for Clarity, GA, GTM and the Meta
+	 * pixel is an inline loader (`(function(c,l,a,r,i,t,y){…t.src=…})`)
+	 * with no `src` attribute at all. That snippet executes on every page
+	 * load, fetches the vendor bundle inside the measurement window, and
+	 * puts the one host whose Cache-Control the site cannot set straight
+	 * into the cache-policy and TBT audits. Delaying the enqueue path and
+	 * the raw-src path while this runs untouched is delaying everything
+	 * except the tag the feature exists for.
+	 *
+	 * The judgment call is the same one KNOWN_THIRD_PARTY_SRC already
+	 * makes: an inline body that names one of those hosts is that vendor's
+	 * loader or its config — never something first-party code holds a
+	 * synchronous reference to. The body is the haystack for the user's
+	 * exclusion and target lists too, so the same fragment that protects a
+	 * `src` tag protects its inline install.
+	 *
+	 * `document.write` bodies are skipped outright: replayed after the
+	 * parser has closed the document, a delayed write would replace the
+	 * page rather than add to it.
+	 *
+	 * @param string $html Complete page HTML.
+	 */
+	public static function delay_inline_snippets( $html ): string {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return (string) $html;
+		}
+		if ( self::skip_in_non_frontend_context() ) {
+			return $html;
+		}
+		$opts = self::opts();
+		if ( empty( $opts['delay_js'] ) ) {
+			return $html;
+		}
+
+		$out = preg_replace_callback(
+			'#<script\b([^>]*)>(.*?)</script>#is',
+			static function ( array $m ): string {
+				list( $whole, $attrs, $body ) = $m;
+
+				if ( '' === trim( $body ) ) {
+					return $whole;
+				}
+
+				// Our own replay bootstrap. Its body quotes the delay
+				// machinery's own strings, so a pathological user target
+				// fragment could match it — and a parked bootstrap means
+				// nothing on the page ever replays.
+				if ( false !== stripos( $attrs, 'xspeed-delay-bootstrap' ) ) {
+					return $whole;
+				}
+
+				// Already marked, or a real src= — the src passes own those.
+				// `(?<![-\w])` for the same reason as above: `data-cmplz-src`
+				// must not read as a src. (#273)
+				if ( false !== stripos( $attrs, 'data-xs-delay' ) || false !== stripos( $attrs, 'data-xs-src' ) ) {
+					return $whole;
+				}
+				if ( preg_match( '#(?<![-\w])src\s*=\s*(["\']).*?\1#is', $attrs ) ) {
+					return $whole;
+				}
+
+				// Data, a module map, or a consent manager's parked tag.
+				if ( in_array( self::extract_type( $attrs ), self::NON_EXECUTABLE_TYPES, true ) ) {
+					return $whole;
+				}
+
+				// A delayed document.write replays after the document has
+				// closed and replaces the page. Never delay one.
+				if ( false !== stripos( $body, 'document.write' ) ) {
+					return $whole;
+				}
+
+				// The body stands in for the URL in the lists the src passes
+				// consult — but NOT via is_delay_target(), whose empty-list
+				// default is "delay everything". That default is right for a
+				// tag with a URL and catastrophic here: it would park every
+				// inline script on the page. Inline code is delayed only on a
+				// positive identification — the body names a known vendor
+				// host, or a fragment the user targeted — and the exclusion
+				// list still wins first.
+				if ( self::is_excluded_script( '', $body ) ) {
+					return $whole;
+				}
+				if ( ! self::matches_known_third_party( $body ) && ! self::matches_user_targets( $body ) ) {
+					return $whole;
+				}
+
+				// Replace — not append — any existing type. Attributes keep
+				// their FIRST occurrence in HTML, so appending the parking
+				// type after the snippet's own `type="text/javascript"`
+				// would leave the original executable. A non-default type is
+				// stashed in data-xs-type for the bootstrap to restore.
+				return '<script' . self::park_type_attrs( $attrs ) . '>' . $body . '</script>';
+			},
+			$html
+		);
+		// A PCRE failure (backtrack limit on a huge inline body) returns
+		// null — and casting that to '' would serve AND cache a blank page.
+		// The unrewritten original is always the safe fallback.
+		return null === $out ? $html : $out;
 	}
 
 	/**
@@ -383,9 +595,19 @@ final class Minify_Filters {
     var delayed=document.querySelectorAll('script[data-xs-delay]');
     delayed.forEach(function(s){
       var n=document.createElement('script');
+      // Nonce hiding: a connected element's nonce CONTENT attribute reads
+      // as "", so copying it via the attribute loop would hand the clone
+      // an empty nonce and a nonce-based CSP would block the replay. The
+      // IDL property still carries the real value.
+      if(s.nonce){n.nonce=s.nonce;}
       Array.prototype.slice.call(s.attributes).forEach(function(a){
         if(a.name==='data-xs-src'){n.setAttribute('src',a.value);return;}
         if(a.name==='data-xs-delay')return;
+        if(a.name==='nonce')return;
+        // A parked inline tag's ORIGINAL type (module, mostly) rides in
+        // data-xs-type — restore it, or the replay runs a module as a
+        // classic script and its imports throw. (#274)
+        if(a.name==='data-xs-type'){n.setAttribute('type',a.value);return;}
         // `type` is what a script IS, not decoration, so it is carried over
         // — with ONE exception: our own inline parking marker, which exists
         // only to stop the browser executing the original and must not be
@@ -502,6 +724,26 @@ final class Minify_Filters {
 		if ( preg_match( '#\bmedia\s*=\s*(["\'])\s*print\s*\1#i', $tag ) ) {
 			return $tag;
 		}
+		return self::async_link_markup( $tag );
+	}
+
+	/**
+	 * The one place the async-CSS output shape lives: swap the link's media
+	 * to `print`, restore the original media onload, record it in
+	 * `data-xs-async`, and re-emit the untouched tag inside `<noscript>` for
+	 * clients that never run the onload handler.
+	 *
+	 * Shared by the enqueue-path filter above and the raw-tag buffer pass
+	 * below so the two can never drift — Pro's Critical CSS recognises this
+	 * exact marker to avoid double-wrapping, and a second copy of the
+	 * pattern is how that kind of contract quietly breaks.
+	 *
+	 * Callers own every skip decision (markers, onload, non-screen media);
+	 * this helper only produces the markup.
+	 *
+	 * @param string $tag A `<link rel="stylesheet">` tag deemed safe to defer.
+	 */
+	private static function async_link_markup( string $tag ): string {
 		$async = (string) preg_replace_callback(
 			'#\bmedia\s*=\s*(["\'])([^"\']*)\1#i',
 			static function ( $m ) {
@@ -522,6 +764,189 @@ final class Minify_Filters {
 		}
 		// Fallback for noscript users — re-emit the original tag inside <noscript>.
 		return $async . '<noscript>' . $tag . '</noscript>';
+	}
+
+	/**
+	 * Stylesheet hosts that serve FONT CSS — small, render-blocking sheets of
+	 * `@font-face` rules. The buffer pass below defers only these: a raw
+	 * cross-origin `<link>` could carry anything, and blindly deferring an
+	 * unknown vendor's layout CSS from the buffer would reintroduce the
+	 * unstyled-flash failure async_style_tag()'s guards exist to prevent.
+	 * Font CSS is the safe subset — text renders in a fallback face and swaps,
+	 * which is exactly what `font-display: swap` does on purpose.
+	 */
+	private const FONT_CSS_HOSTS = array(
+		'fonts.googleapis.com',
+		'fonts.bunny.net',
+		'use.typekit.net',
+		'p.typekit.net',
+		'fonts.cdnfonts.com',
+	);
+
+	/**
+	 * The font-CSS host allowlist, filtered and normalised.
+	 *
+	 * @return string[] Lowercase hostnames.
+	 */
+	private static function font_css_hosts(): array {
+		/**
+		 * Hosts whose stylesheet links the async-CSS buffer pass rewrites to
+		 * the non-blocking print → onload pattern. Only font-CSS providers
+		 * belong here: every listed host's sheets are safe to load late
+		 * because they only add `@font-face` rules.
+		 *
+		 * @param string[] $hosts Hostnames (exact match, case-insensitive).
+		 */
+		$hosts = (array) apply_filters( 'xspeed_async_css_font_hosts', self::FONT_CSS_HOSTS );
+
+		return array_map( 'strtolower', array_map( 'strval', $hosts ) );
+	}
+
+	/**
+	 * Media values that never apply to a screen paint. A sheet restricted to
+	 * one of these is not render-blocking for screen, so deferring it saves
+	 * nothing — and `print` in particular is either a genuine print sheet or
+	 * somebody's finished async pattern, both of which must be left alone.
+	 */
+	private const NON_SCREEN_MEDIA = array(
+		'print',
+		'speech',
+		'aural',
+		'braille',
+		'embossed',
+		'handheld',
+		'projection',
+		'tty',
+		'tv',
+	);
+
+	/**
+	 * Filter: `xspeed_cache_final_html` — defer RAW font-CSS stylesheet links
+	 * that never passed through wp_enqueue_style.
+	 *
+	 * `async_style_tag()` hooks `style_loader_tag`, so it only ever sees
+	 * enqueued stylesheets. Themes and font plugins print Google Fonts (and
+	 * Bunny, Typekit, CDNFonts) as literal
+	 * `<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=…">`
+	 * markup in the head — on the site that surfaced this, four such tags —
+	 * and each one stays render-blocking with no plugin lever. Unused CSS
+	 * skips cross-origin hrefs by design, so nothing else picks them up.
+	 *
+	 * Runs on the finished page buffer, so the rewrite is baked into the
+	 * cached HTML and replays on every static hit. Deliberately narrow: only
+	 * links whose host is on the font-CSS allowlist are touched — see
+	 * FONT_CSS_HOSTS. Same-origin links (no host, or the site's own) never
+	 * match the allowlist and are untouched.
+	 *
+	 * @param string $html Complete page HTML.
+	 */
+	public static function async_raw_font_css_links( $html ): string {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return (string) $html;
+		}
+		if ( self::skip_in_non_frontend_context() ) {
+			return $html;
+		}
+		$opts = self::opts();
+		if ( empty( $opts['async_css'] ) ) {
+			return $html;
+		}
+
+		// Never rewrite inside a <noscript>. That block IS the no-JS
+		// fallback — its <link> is a plain blocking stylesheet on purpose,
+		// and async_style_tag() itself emits one for every sheet it defers.
+		// Rewriting it would nest <noscript> (invalid; the parser closes the
+		// outer block at the first </noscript>) and hand no-JS visitors a
+		// media="print" sheet whose onload never runs: no stylesheet at all.
+		// Splitting the buffer on <noscript> spans and rewriting only the
+		// slices between them also makes the pass idempotent against
+		// whatever an earlier pass emitted.
+		$parts = preg_split(
+			'#(<noscript\b[^>]*>.*?</noscript\s*>)#is',
+			$html,
+			-1,
+			PREG_SPLIT_DELIM_CAPTURE
+		);
+
+		// preg_split failed (pathological buffer / backtrack limit). Without
+		// the split we cannot tell a fallback link from a live one, so leave
+		// the page untouched — a few blocking font sheets beat a broken
+		// no-JS fallback.
+		if ( ! is_array( $parts ) ) {
+			return $html;
+		}
+
+		foreach ( $parts as $i => $part ) {
+			// Odd indices are the captured <noscript> blocks.
+			if ( 1 === $i % 2 || '' === $part ) {
+				continue;
+			}
+			$parts[ $i ] = self::async_font_links_in_slice( $part );
+		}
+
+		return implode( '', $parts );
+	}
+
+	/**
+	 * Rewrite the font-CSS links in one <noscript>-free slice of the buffer.
+	 *
+	 * @param string $html Slice of page HTML with no <noscript> spans.
+	 */
+	private static function async_font_links_in_slice( string $html ): string {
+		$hosts = self::font_css_hosts();
+
+		$out = preg_replace_callback(
+			'#<link\b[^>]*>#i',
+			static function ( array $m ) use ( $hosts ): string {
+				$tag = $m[0];
+
+				// Only plain stylesheets — never preload/alternate/anything
+				// carrying explicit author intent. `(?<![-\w])` not `\b`, so
+				// a `data-rel=` attribute can never read as the rel — same
+				// reason the delay passes spell src that way. (#273)
+				if ( ! preg_match( '#(?<![-\w])rel\s*=\s*(["\']?)\s*stylesheet\s*\1#i', $tag ) ) {
+					return $tag;
+				}
+
+				// Already deferred (either marker spelling — ours and Pro's),
+				// or explicitly opted out by the theme.
+				foreach ( array( 'data-xs-async', 'data-xspeed-async', 'data-xspeed-keep' ) as $marker ) {
+					if ( false !== stripos( $tag, $marker ) ) {
+						return $tag;
+					}
+				}
+
+				// An onload handler on a stylesheet link is only ever
+				// somebody's finished async pattern — same rule as
+				// async_style_tag(). (#216)
+				if ( preg_match( '#(?<![-\w])onload\s*=#i', $tag ) ) {
+					return $tag;
+				}
+
+				// A sheet that never applies on screen is not blocking paint.
+				if ( preg_match( '#(?<![-\w])media\s*=\s*(["\'])([^"\']*)\1#i', $tag, $mm )
+					&& in_array( strtolower( trim( $mm[2] ) ), self::NON_SCREEN_MEDIA, true ) ) {
+					return $tag;
+				}
+
+				if ( ! preg_match( '#(?<![-\w])href\s*=\s*(["\'])([^"\']+)\1#i', $tag, $hm ) ) {
+					return $tag;
+				}
+				// No host means a relative URL — same-origin, and the enqueue
+				// path's business if it is anybody's.
+				$host = strtolower( (string) wp_parse_url( $hm[2], PHP_URL_HOST ) );
+				if ( '' === $host || ! in_array( $host, $hosts, true ) ) {
+					return $tag;
+				}
+
+				return self::async_link_markup( $tag );
+			},
+			$html
+		);
+
+		// A PCRE failure returns null — the unrewritten slice is the safe
+		// fallback, never an empty page.
+		return null === $out ? $html : $out;
 	}
 
 	/**
@@ -625,6 +1050,25 @@ final class Minify_Filters {
 	 * Skip URLs whose query carries non-ver params — those might be
 	 * intentional (e.g. a CDN providing per-image transforms).
 	 *
+	 * `ver` is load-bearing on one class of asset: a file a plugin
+	 * REGENERATES IN PLACE. Complianz rewrites
+	 * uploads/complianz/css/banner-1-optin.css whenever the banner is
+	 * edited, Beaver Builder rewrites uploads/bb-plugin/cache/<post>-layout.css
+	 * on every layout save, Elementor uploads/elementor/css/post-<id>.css on
+	 * publish. The path never changes, so `?ver=<timestamp|hash>` is the only
+	 * thing telling a browser — or our own Browser Cache `immutable` rule — to
+	 * refetch. Strip it and the old styling is served until the browser cache
+	 * gives up, which for us is a year. So anything under the uploads root
+	 * keeps its version.
+	 *
+	 * Release assets under plugins/, themes/ and core are still stripped, but
+	 * not because they are safe: an update overwrites the same path there too,
+	 * and only `?ver=` changed. The difference is frequency, not mechanism — a
+	 * plugin update lands rarely and is expected to, a banner edit is a setting
+	 * the user just changed and expects to see. Stripping is the feature the
+	 * toggle is for; with Browser Cache on it is what the user is buying, and
+	 * `docs/user/minification.md` states the cost. (#276)
+	 *
 	 * @param string $src
 	 */
 	public static function strip_version_query( $src ): string {
@@ -639,15 +1083,44 @@ final class Minify_Filters {
 			return $src;
 		}
 		parse_str( $parts['query'], $query );
-		if ( ! is_array( $query ) ) {
+		if ( ! is_array( $query ) || ! array_key_exists( 'ver', $query ) ) {
 			return $src;
 		}
+
+		$strip = ! self::is_regenerated_asset( $parts );
+
+		/**
+		 * Whether Remove Query Strings drops `?ver` from this asset URL.
+		 *
+		 * False by default under the uploads root, where page builders and
+		 * consent plugins rewrite generated CSS/JS in place and `ver` is its
+		 * only cache-buster. Return false to protect a generator that writes
+		 * somewhere else, true to force stripping.
+		 *
+		 * @param bool   $strip Whether `ver` will be removed.
+		 * @param string $src   The asset URL as enqueued.
+		 */
+		if ( ! apply_filters( 'xspeed_strip_asset_version', $strip, $src ) ) {
+			return $src;
+		}
+
 		// Only strip 'ver' — keep anything else the asset URL needs.
 		unset( $query['ver'] );
 		$new_query = http_build_query( $query );
-		$new_url   = ( $parts['scheme'] ?? 'http' ) . '://' . ( $parts['host'] ?? '' );
-		if ( isset( $parts['port'] ) ) {
-			$new_url .= ':' . $parts['port'];
+
+		// Rebuild the authority only when the source had one. An enqueued
+		// src is not always absolute: `//cdn.example/x.css` says "the
+		// page's own scheme", and defaulting that to http:// is mixed
+		// content an https page blocks outright; `/wp-includes/x.js` has no
+		// host at all, and pasting one in produced `http:///wp-includes/…`,
+		// which resolves nowhere.
+		$new_url = '';
+		if ( isset( $parts['host'] ) && '' !== $parts['host'] ) {
+			$new_url = isset( $parts['scheme'] ) ? $parts['scheme'] . '://' : '//';
+			$new_url .= $parts['host'];
+			if ( isset( $parts['port'] ) ) {
+				$new_url .= ':' . $parts['port'];
+			}
 		}
 		$new_url .= $parts['path'] ?? '';
 		if ( '' !== $new_query ) {
@@ -657,6 +1130,78 @@ final class Minify_Filters {
 			$new_url .= '#' . $parts['fragment'];
 		}
 		return $new_url;
+	}
+
+	/**
+	 * Memoised uploads root, see uploads_base(). Cleared by reset_state().
+	 *
+	 * @var array{host:string,path:string}|null
+	 */
+	private static $uploads_base = null;
+
+	/**
+	 * The uploads root as a URL host + PATH, read from wp_get_upload_dir()
+	 * rather than hardcoded so a moved uploads dir, the `UPLOADS` constant and
+	 * the legacy multisite `/files/` layout all work.
+	 *
+	 * On multisite wp_get_upload_dir() answers with the per-site
+	 * `…/uploads/sites/<id>`. Generated assets live under the network root
+	 * too, so the suffix comes off and the whole tree matches.
+	 *
+	 * @return array{host:string,path:string}
+	 */
+	private static function uploads_base(): array {
+		if ( null !== self::$uploads_base ) {
+			return self::$uploads_base;
+		}
+		$base = '';
+		if ( function_exists( 'wp_get_upload_dir' ) ) {
+			$dir  = wp_get_upload_dir();
+			$base = is_array( $dir ) && isset( $dir['baseurl'] ) ? (string) $dir['baseurl'] : '';
+		}
+		$host = '';
+		$path = '';
+		if ( '' !== $base ) {
+			$host = strtolower( (string) wp_parse_url( $base, PHP_URL_HOST ) );
+			$path = (string) wp_parse_url( $base, PHP_URL_PATH );
+		}
+		$path = (string) preg_replace( '#/sites/\d+/?$#', '', rtrim( $path, '/' ) );
+		if ( '' === $path && '' === $host ) {
+			// Unreadable. An empty prefix would match every asset on the
+			// site, so fall back to where uploads normally is.
+			$path = '/wp-content/uploads';
+		}
+		self::$uploads_base = array(
+			'host' => $host,
+			'path' => $path,
+		);
+		return self::$uploads_base;
+	}
+
+	/**
+	 * Does this URL sit under the uploads root — i.e. is it a file some plugin
+	 * generates at runtime and rewrites in place?
+	 *
+	 * @param array<string,mixed> $parts wp_parse_url() output for the asset.
+	 */
+	private static function is_regenerated_asset( array $parts ): bool {
+		$base = self::uploads_base();
+
+		if ( '' !== $base['path'] ) {
+			// Path only, never host: a pull-zone CDN, a protocol-relative URL
+			// and an http/https flip all leave the path alone.
+			$path = (string) ( $parts['path'] ?? '' );
+			return '' !== $path && 0 === strpos( $path, $base['path'] . '/' );
+		}
+
+		// Uploads AT the root of their own domain — an offload plugin
+		// pointing `upload_url_path` at https://cdn.example.com. There is no
+		// prefix left to test, and testing the path anyway would have read
+		// every generated file on that CDN as an ordinary release asset and
+		// stripped the one thing telling a browser it had changed. The host
+		// is the whole answer here: everything served from it is an upload.
+		$host = strtolower( (string) ( $parts['host'] ?? '' ) );
+		return '' !== $host && $host === $base['host'];
 	}
 
 	/**
@@ -728,6 +1273,27 @@ final class Minify_Filters {
 	 * minus exclusions). Same matching semantics as the exclusion list:
 	 * exact handle match OR case-insensitive URL substring.
 	 */
+	/**
+	 * Whether the user's delay_js_targets list matches this haystack.
+	 *
+	 * The inline-snippet pass needs the target list WITHOUT
+	 * is_delay_target()'s empty-list-means-everything default — an inline
+	 * body is only ever delayed on a positive match.
+	 *
+	 * @param string $haystack Script body (or URL) to match fragments against.
+	 */
+	private static function matches_user_targets( string $haystack ): bool {
+		$opts    = self::opts();
+		$targets = is_array( $opts['delay_js_targets'] ?? null ) ? $opts['delay_js_targets'] : array();
+		foreach ( $targets as $needle ) {
+			$needle = (string) $needle;
+			if ( '' !== $needle && false !== stripos( $haystack, $needle ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static function is_delay_target( string $handle, string $src ): bool {
 		$opts    = self::opts();
 		$targets = is_array( $opts['delay_js_targets'] ?? null ) ? $opts['delay_js_targets'] : array();
@@ -737,6 +1303,114 @@ final class Minify_Filters {
 		}
 		foreach ( $targets as $needle ) {
 			if ( self::target_matches( $needle, $handle, $src ) ) {
+				return true;
+			}
+		}
+		// The user's list is an ALLOW-list, so a target they never thought to
+		// add is not delayed — and the scripts worth delaying are third-party
+		// tags nobody enumerates by hand. Falling back to the built-in vendor
+		// list means a site that lists one heavy embed still gets the obvious
+		// analytics and widget tags postponed, instead of silently keeping
+		// them on the main thread. (A user who wants one of these to run
+		// early excludes it; the exclusion list is checked before this.)
+		return self::matches_known_third_party( $src );
+	}
+
+	/**
+	 * Whether a URL belongs to a third-party tag that is safe to postpone.
+	 *
+	 * These are analytics, tag managers, chat widgets, review embeds, session
+	 * recorders and error trackers: scripts that never paint anything above
+	 * the fold and that no first-party code holds a synchronous reference to.
+	 * They are also the scripts that dominate a real page's blocking time —
+	 * on embedpress.com one chat widget alone accounted for ~450ms of TBT and
+	 * a 22-point score swing between runs, purely on whether it happened to
+	 * arrive inside the measurement window.
+	 *
+	 * Matched on URL only, never on handle: these tags are printed straight
+	 * into wp_head / wp_footer by their vendors' snippets and usually have no
+	 * WordPress handle at all. Host fragments rather than whole domains, so a
+	 * regional or versioned CDN path still matches.
+	 *
+	 * Deliberately NOT here: anything from the site's own origin, jQuery, or
+	 * any wp-* core script. Those carry inline consumers, and delaying them
+	 * is what breaks pages — see inline_bound_handles().
+	 */
+	private const KNOWN_THIRD_PARTY_SRC = array(
+		// Tag managers and analytics.
+		'googletagmanager.com',
+		'google-analytics.com',
+		'analytics.google.com',
+		'/gtag/js',
+		'gtm4wp',
+		'plausible.io',
+		'matomo',
+		'segment.com/analytics.js',
+		'stats.wp.com',
+		// Advertising and conversion pixels.
+		'connect.facebook.net',
+		'fbevents.js',
+		'ads-twitter.com',
+		'snap.licdn.com',
+		'analytics.tiktok.com',
+		'googleadservices.com',
+		'doubleclick.net',
+		// Session recording and heatmaps.
+		'hotjar.com',
+		'clarity.ms',
+		'mouseflow.com',
+		'fullstory.com',
+		'luckyorange',
+		// Chat and support widgets.
+		'client.crisp.chat',
+		'widget.intercom.io',
+		'js.driftt.com',
+		'tawk.to',
+		'livechatinc.com',
+		'zdassets.com',
+		'helpscout.net',
+		// Reviews, social proof and marketing.
+		'tp.widget.bootstrap',
+		'trustpilot.com',
+		'static.klaviyo.com',
+		'js.hs-scripts.com',
+		'list-manage.com',
+		'sumo.com',
+		// Error and performance monitoring.
+		'sentry-cdn.com',
+		'browser.sentry',
+		'bugsnag.com',
+		'newrelic.com',
+	);
+
+	/**
+	 * Match a script URL against the built-in third-party list.
+	 *
+	 * @param string $src Script source URL.
+	 */
+	private static function matches_known_third_party( string $src ): bool {
+		if ( '' === $src ) {
+			return false;
+		}
+
+		$known = self::KNOWN_THIRD_PARTY_SRC;
+
+		/**
+		 * URL fragments the delay pass treats as safe-to-postpone third-party
+		 * tags when the user's target list does not match.
+		 *
+		 * Append a vendor this list does not know yet, or remove one the site
+		 * genuinely needs early. Entries are case-insensitive substrings of
+		 * the script URL.
+		 *
+		 * @param string[] $known Built-in fragments.
+		 * @param string   $src   The script URL being tested.
+		 */
+		$known = (array) apply_filters( 'xspeed_delay_known_third_party', $known, $src );
+
+		foreach ( $known as $needle ) {
+			$needle = (string) $needle;
+			if ( '' !== $needle && false !== stripos( $src, $needle ) ) {
 				return true;
 			}
 		}
@@ -755,8 +1429,155 @@ final class Minify_Filters {
 	 */
 	public static function reset_state(): void {
 		self::$opts                    = null;
+		self::$uploads_base            = null;
 		self::$delay_bootstrap_printed = false;
 		self::$js_measured_layout      = null;
+		self::$inline_bound_handles    = null;
+	}
+
+	/**
+	 * Per-request memo for inline_bound_handles(). Null = not resolved.
+	 *
+	 * @var array<string,true>|null
+	 */
+	private static $inline_bound_handles = null;
+
+	/**
+	 * Handles that cannot be deferred because inline code depends on them.
+	 *
+	 * #234 fixed the case where a handle carries its OWN inline block: the
+	 * tag WordPress hands the filter is `before_inline + external +
+	 * after_inline`, so defer goes on the external <script> and order holds.
+	 * That leaves the cross-handle case, which is the one that actually
+	 * breaks sites: `wp_add_inline_script( 'foo', … )` prints a bare inline
+	 * block that runs at parse time and calls into whatever `foo` — or any
+	 * of foo's DEPENDENCIES — defined. Inline scripts can never be deferred
+	 * (the HTML spec ignores the attribute), so deferring anything they read
+	 * from inverts the order WordPress guarantees and throws on a global
+	 * that is not there yet.
+	 *
+	 * jQuery is the canonical victim: one `wp_add_inline_script( 'jquery',
+	 * 'jQuery(function($){…})' )` anywhere on the page makes `jquery-core`
+	 * undeferrable, and every hand-maintained exclusion list in the wild
+	 * exists to say so. The registry already knows it, so read it instead of
+	 * asking the user.
+	 *
+	 * Walks each handle carrying `after`/`before` inline data and marks the
+	 * handle plus its transitive dependency chain. Cycles are guarded by the
+	 * seen-map, so a self- or mutually-referential deps array terminates.
+	 *
+	 * Pure aside from the global registry read; memoised per request and
+	 * cleared by reset_state().
+	 *
+	 * @return array<string,true> Handle => true, for O(1) lookup.
+	 */
+	public static function inline_bound_handles(): array {
+		if ( null !== self::$inline_bound_handles ) {
+			return self::$inline_bound_handles;
+		}
+
+		$bound = array();
+		if ( function_exists( 'wp_scripts' ) ) {
+			$scripts = wp_scripts();
+			if ( $scripts instanceof \WP_Scripts ) {
+				foreach ( array_keys( (array) $scripts->registered ) as $handle ) {
+					$handle = (string) $handle;
+					if ( ! self::handle_carries_inline( $scripts, $handle ) ) {
+						continue;
+					}
+					self::mark_with_deps( $scripts, $handle, $bound );
+				}
+			}
+		}
+
+		/**
+		 * Handles auto-excluded from defer because inline code reads them.
+		 *
+		 * Return a handle => true map. Add an entry to protect a script whose
+		 * inline consumer this cannot see (one printed directly by a theme
+		 * rather than through wp_add_inline_script), or remove one to defer a
+		 * handle whose inline block is known not to touch it.
+		 *
+		 * @param array<string,true> $bound Detected handles.
+		 */
+		$bound = (array) apply_filters( 'xspeed_defer_inline_bound_handles', $bound );
+
+		self::$inline_bound_handles = $bound;
+
+		return self::$inline_bound_handles;
+	}
+
+	/**
+	 * Whether a handle must be kept out of a combined bundle.
+	 *
+	 * Combining re-homes a script's code under a different handle, so every
+	 * protection keyed to the ORIGINAL handle or URL stops matching: the
+	 * user's `defer_js_excluded` entry, and the inline-bound set above. The
+	 * combiner already refuses a handle carrying its own inline data, which
+	 * is why the gap is invisible until you look for it — a DEPENDENCY of an
+	 * inline consumer carries none of its own, so `jquery-core` lands in the
+	 * bundle while the exclusion list still reads as though it were honoured.
+	 *
+	 * Returning true here is enough on its own: the combiner drops any
+	 * dependent of an uncombinable handle transitively, so the whole chain
+	 * stays in the queue where WordPress prints it in the right order.
+	 *
+	 * @param string $handle Script handle.
+	 * @param string $src    Registered source URL.
+	 */
+	public static function is_protected_from_bundling( string $handle, string $src ): bool {
+		if ( self::is_excluded_script( $handle, $src ) ) {
+			return true;
+		}
+		return isset( self::inline_bound_handles()[ $handle ] );
+	}
+
+	/**
+	 * Whether a handle has inline JS attached in either position.
+	 *
+	 * `get_data()` returns the raw value, which is an array of code chunks
+	 * for `after` and a string for `before`; both are falsy when absent, and
+	 * an empty chunk array must not count as inline code.
+	 *
+	 * @param \WP_Scripts $scripts Registry.
+	 * @param string      $handle  Handle to inspect.
+	 */
+	private static function handle_carries_inline( \WP_Scripts $scripts, string $handle ): bool {
+		foreach ( array( 'after', 'before' ) as $position ) {
+			$data = $scripts->get_data( $handle, $position );
+			if ( is_array( $data ) ) {
+				foreach ( $data as $chunk ) {
+					if ( '' !== trim( (string) $chunk ) ) {
+						return true;
+					}
+				}
+				continue;
+			}
+			if ( '' !== trim( (string) $data ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Mark a handle and everything it depends on, transitively.
+	 *
+	 * @param \WP_Scripts        $scripts Registry.
+	 * @param string             $handle  Handle to mark.
+	 * @param array<string,true> $seen    Accumulator, by reference.
+	 */
+	private static function mark_with_deps( \WP_Scripts $scripts, string $handle, array &$seen ): void {
+		if ( isset( $seen[ $handle ] ) ) {
+			return;
+		}
+		$seen[ $handle ] = true;
+		if ( ! isset( $scripts->registered[ $handle ]->deps ) ) {
+			return;
+		}
+		foreach ( (array) $scripts->registered[ $handle ]->deps as $dep ) {
+			self::mark_with_deps( $scripts, (string) $dep, $seen );
+		}
 	}
 
 	/**

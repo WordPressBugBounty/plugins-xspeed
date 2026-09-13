@@ -29,9 +29,9 @@ final class BrowserCacheModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'Browser Cache',
+			'label'       => __( 'Browser Cache', 'xspeed' ),
 			'icon'        => 'Clock',
-			'description' => 'Tell browsers (and intermediate CDNs) how long to cache static assets and HTML.',
+			'description' => __( 'Tell browsers (and intermediate CDNs) how long to cache static assets and HTML.', 'xspeed' ),
 		);
 	}
 
@@ -40,17 +40,17 @@ final class BrowserCacheModule extends Module {
 			'enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable browser cache headers',
-				'description' => 'On Apache/LiteSpeed this writes Cache-Control + Expires rules into .htaccess. On nginx it just stores the settings — you paste the snippet into your server block manually.',
+				'label'       => __( 'Enable browser cache headers', 'xspeed' ),
+				'description' => __( 'On Apache/LiteSpeed this writes Cache-Control + Expires rules into .htaccess. On nginx it just stores the settings — you paste the snippet into your server block manually.', 'xspeed' ),
 			),
 			'asset_ttl' => array(
 				'type'        => 'int',
 				'default'     => Browser_Cache::DEFAULT_ASSET_TTL,
 				'min'         => 0,
 				'max'         => 31536000,
-				'label'       => 'Static asset TTL (seconds)',
+				'label'       => __( 'Static asset TTL (seconds)', 'xspeed' ),
 				'unit'        => 'seconds',
-				'description' => 'Cache lifetime for CSS, JS, fonts, images. Defaults to 1 year + immutable (the industry-standard "fingerprinted assets never change" pattern).',
+				'description' => __( 'Cache lifetime for CSS, JS, fonts, images. Defaults to 1 year + immutable (the industry-standard "fingerprinted assets never change" pattern).', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'html_ttl' => array(
@@ -58,9 +58,9 @@ final class BrowserCacheModule extends Module {
 				'default'     => Browser_Cache::DEFAULT_HTML_TTL,
 				'min'         => 0,
 				'max'         => 31536000,
-				'label'       => 'HTML TTL (seconds)',
+				'label'       => __( 'HTML TTL (seconds)', 'xspeed' ),
 				'unit'        => 'seconds',
-				'description' => 'Cache lifetime for the HTML document itself. Keep short (default 1h) so post edits roll out same-day.',
+				'description' => __( 'Cache lifetime for the HTML document itself. Keep short (default 1h) so post edits roll out same-day.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);
@@ -173,8 +173,9 @@ final class BrowserCacheModule extends Module {
 	}
 
 	/**
-	 * Cache-Control / Expires directives for the unified nginx
-	 * server-block snippet. Null when the module is disabled — no
+	 * Cache-Control directives for the unified nginx server-block
+	 * snippet. nginx sends no Expires — `expires off;` pins the block so
+	 * only the explicit `add_header` speaks (#259). Null when the module is disabled — no
 	 * directives to install.
 	 */
 	public function nginx_directives(): ?string {

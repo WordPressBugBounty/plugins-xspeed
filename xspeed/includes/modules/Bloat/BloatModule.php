@@ -35,9 +35,9 @@ final class BloatModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'Bloat Control',
+			'label'       => __( 'Bloat Control', 'xspeed' ),
 			'icon'        => 'Sliders',
-			'description' => 'Turn off WordPress defaults you do not use — saves bytes, requests, and attack surface.',
+			'description' => __( 'Turn off WordPress defaults you do not use — saves bytes, requests, and attack surface.', 'xspeed' ),
 		);
 	}
 
@@ -46,43 +46,62 @@ final class BloatModule extends Module {
 			'disable_dashicons_frontend' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Disable Dashicons on Frontend',
-				'description' => 'Drop the dashicons stylesheet from non-admin pages. Most themes do not need it. Saves ~45 KB per visitor.',
+				'label'       => __( 'Disable Dashicons on Frontend', 'xspeed' ),
+				'description' => __( 'Drop the dashicons stylesheet from non-admin pages. Most themes do not need it. Saves ~45 KB per visitor.', 'xspeed' ),
 			),
 			'disable_oembed' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Disable oEmbed Discovery + wp-embed.min.js',
-				'description' => 'Strip the auto-embed handlers + the embed script. Posts that paste a YouTube URL will no longer auto-render the player — embed it via a block instead. Saves a request per page.',
+				'label'       => __( 'Disable oEmbed Discovery + wp-embed.min.js', 'xspeed' ),
+				'description' => __( 'Strip the auto-embed handlers + the embed script. Posts that paste a YouTube URL will no longer auto-render the player — embed it via a block instead. Saves a request per page.', 'xspeed' ),
 			),
 			'disable_rss_feeds' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Disable RSS Feeds',
-				'description' => 'Return a 404 on /feed/ and similar endpoints. Useful for sites that do not publish feeds and want to cut feed-fetcher traffic.',
+				'label'       => __( 'Disable RSS Feeds', 'xspeed' ),
+				'description' => __( 'Return a 404 on /feed/ and similar endpoints. Useful for sites that do not publish feeds and want to cut feed-fetcher traffic.', 'xspeed' ),
 			),
 			'disable_xmlrpc' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Disable XML-RPC',
-				'description' => 'Disable the legacy xmlrpc.php endpoint. Cuts pingback brute-force noise; safe to disable unless you use a remote WP client (Jetpack, WordPress mobile app).',
+				'label'       => __( 'Disable XML-RPC', 'xspeed' ),
+				'description' => __( 'Disable the legacy xmlrpc.php endpoint. Cuts pingback brute-force noise; safe to disable unless you use a remote WP client (Jetpack, WordPress mobile app).', 'xspeed' ),
 			),
 			'strip_jquery_migrate' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Strip jQuery Migrate on Frontend',
-				'description' => 'Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins.',
+				'label'       => __( 'Strip jQuery Migrate on Frontend', 'xspeed' ),
+				'description' => __( 'Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins.', 'xspeed' ),
 			),
 			'restrict_rest_to_authed' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Restrict REST API to Logged-In Users',
-				'description' => 'Block /wp-json/ for anonymous requests. WooCommerce checkout, contact-form submissions, and many block-editor previews need anonymous REST — keep this off unless you know your site does not depend on it.',
+				'label'       => __( 'Restrict REST API to Logged-In Users', 'xspeed' ),
+				'description' => __( 'Block /wp-json/ for anonymous requests. WooCommerce checkout, contact-form submissions, and many block-editor previews need anonymous REST — keep this off unless you know your site does not depend on it.', 'xspeed' ),
 			),
 		);
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init` priority 0. This reads the module's settings,
+		 * which builds settings_schema(), whose labels go through __(), and
+		 * boot() runs on `plugins_loaded` — before `after_setup_theme`, the
+		 * earliest point WordPress 6.7+ treats as safe to translate.
+		 *
+		 * Priority 0 (not the default 10) because the body itself registers
+		 * an `init` callback at priority 9: adding a hook to the action that
+		 * is currently running only takes effect if the new priority is still
+		 * ahead of the running position, so we have to be first. Every other
+		 * hook it registers fires later than `init`.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ), 0 );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		$opts = Settings_Manager::get( self::SLUG );
 
 		if ( ! empty( $opts['disable_dashicons_frontend'] ) ) {

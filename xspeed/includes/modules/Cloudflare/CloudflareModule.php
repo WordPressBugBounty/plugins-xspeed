@@ -37,9 +37,9 @@ final class CloudflareModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Cloudflare',
+			'label'        => __( 'Cloudflare', 'xspeed' ),
 			'icon'         => 'Cloud',
-			'description'  => 'Connect a Cloudflare zone for automatic edge purging when xSpeed clears its cache, plus a dev-mode toggle.',
+			'description'  => __( 'Connect a Cloudflare zone for automatic edge purging when xSpeed clears its cache, plus a dev-mode toggle.', 'xspeed' ),
 			'custom_panel' => 'CloudflarePanel',
 		);
 	}
@@ -62,8 +62,8 @@ final class CloudflareModule extends Module {
 			'enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable Cloudflare integration',
-				'description' => 'Use the credentials below to verify your zone and run purges.',
+				'label'       => __( 'Enable Cloudflare integration', 'xspeed' ),
+				'description' => __( 'Use the credentials below to verify your zone and run purges.', 'xspeed' ),
 			),
 			'auth_method' => array(
 				'type'          => 'enum',
@@ -73,15 +73,15 @@ final class CloudflareModule extends Module {
 					'token' => 'API Token',
 					'key'   => 'Global API Key',
 				),
-				'label'         => 'Authentication',
-				'description'   => 'API Tokens (scoped, recommended) or the legacy Global API Key with your account email.',
+				'label'         => __( 'Authentication', 'xspeed' ),
+				'description'   => __( 'API Tokens (scoped, recommended) or the legacy Global API Key with your account email.', 'xspeed' ),
 				'dependsOn'     => array( 'field' => 'enabled' ),
 			),
 			'api_token' => array(
 				'type'        => 'secret',
 				'default'     => '',
-				'label'       => 'API Token',
-				'description' => 'Create a token at dash.cloudflare.com → My Profile → API Tokens. Needs "Zone → Cache Purge" + "Zone Settings" permissions.',
+				'label'       => __( 'API Token', 'xspeed' ),
+				'description' => __( 'Create a token at dash.cloudflare.com → My Profile → API Tokens. Needs "Zone → Cache Purge" + "Zone Settings" permissions.', 'xspeed' ),
 				// Only the token auth branch (and only while CF is enabled, via
 				// the transitive gate on auth_method → enabled).
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'token' ),
@@ -89,29 +89,29 @@ final class CloudflareModule extends Module {
 			'email' => array(
 				'type'        => 'string',
 				'default'     => '',
-				'label'       => 'Account Email',
-				'description' => 'Only used when Authentication is set to Global API Key.',
+				'label'       => __( 'Account Email', 'xspeed' ),
+				'description' => __( 'Only used when Authentication is set to Global API Key.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'key' ),
 			),
 			'api_key' => array(
 				'type'        => 'secret',
 				'default'     => '',
-				'label'       => 'Global API Key',
-				'description' => 'Found at dash.cloudflare.com → My Profile → API Tokens → Global API Key.',
+				'label'       => __( 'Global API Key', 'xspeed' ),
+				'description' => __( 'Found at dash.cloudflare.com → My Profile → API Tokens → Global API Key.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'key' ),
 			),
 			'zone_id' => array(
 				'type'        => 'string',
 				'default'     => '',
-				'label'       => 'Zone ID',
-				'description' => 'The 32-character hex Zone ID from your domain overview page.',
+				'label'       => __( 'Zone ID', 'xspeed' ),
+				'description' => __( 'The 32-character hex Zone ID from your domain overview page.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'auto_purge_on_update' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Auto-purge Cloudflare on xSpeed purge',
-				'description' => 'When xSpeed clears its own cache (post save, settings change, manual purge), trigger a Cloudflare purge too.',
+				'label'       => __( 'Auto-purge Cloudflare on xSpeed purge', 'xspeed' ),
+				'description' => __( 'When xSpeed clears its own cache (post save, settings change, manual purge), trigger a Cloudflare purge too.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);
@@ -172,6 +172,25 @@ final class CloudflareModule extends Module {
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		$opts = $this->get_settings();
 		if ( empty( $opts['enabled'] ) ) {
 			return;
@@ -185,27 +204,101 @@ final class CloudflareModule extends Module {
 	}
 
 	public function on_xspeed_purge(): void {
-		$opts = $this->get_settings();
-		if ( empty( $opts['enabled'] ) || empty( $opts['zone_id'] ) ) {
+		/*
+		 * `wp xspeed purge` purges the edge itself, as its own reported line
+		 * item, and the page step it runs first fires this action. Without
+		 * this guard the zone is purged twice per command, and the SECOND
+		 * call's outcome — the one nobody reported — is what lands in the
+		 * health record the panel reads.
+		 *
+		 * Gated on covers(), not merely is_running(): on `--type=page` the
+		 * action still fires but no edge target runs, so standing down there
+		 * would leave the zone stale with nothing in the report to say so.
+		 * That run is exactly the one this listener exists for.
+		 */
+		if ( class_exists( '\\XSpeed\\Purge_Runner' ) && \XSpeed\Purge_Runner::covers( 'cloudflare' ) ) {
 			return;
 		}
-		$result = Cloudflare::purge_all( $opts );
+		if ( true !== $this->can_purge_edge() ) {
+			return;
+		}
+		$this->purge_edge( 'auto-purge' );
+	}
+
+	/**
+	 * Whether this site can purge its Cloudflare zone right now.
+	 *
+	 * @return true|string True, or the reason it cannot — for the skip line
+	 *                     in `wp xspeed purge`, which has to explain itself
+	 *                     rather than silently do nothing.
+	 */
+	public function can_purge_edge() {
+		$opts = $this->get_settings();
+		if ( empty( $opts['enabled'] ) ) {
+			return __( 'the Cloudflare integration is switched off', 'xspeed' );
+		}
+		if ( ! $this->has_credentials( $opts ) ) {
+			return __( 'no zone ID or API credentials are configured', 'xspeed' );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Purge the whole zone and record the outcome.
+	 *
+	 * The one edge-purge path: the auto-purge listener, `wp xspeed cf purge`
+	 * and `wp xspeed purge` all land here, so the health record and the
+	 * activity log say the same thing whichever one ran.
+	 *
+	 * @param string $cause Who asked.
+	 * @return array{ok:bool,reason:string,status:int,body:mixed} The engine
+	 *               result plus a normalised `reason`, so the `cf` command can
+	 *               still print the raw body it always has.
+	 */
+	public function purge_edge( string $cause = 'manual' ): array {
+		$result = Cloudflare::purge_all( $this->get_settings() );
 		$ok     = ! empty( $result['ok'] );
+		$reason = $ok ? '' : $this->message_of( $result );
 
 		// A GET /zones verify can pass with a token that still lacks the
 		// "Zone → Cache Purge" permission, so the real purge is the only
 		// authoritative signal for purge capability. Record it either way so
 		// a silent auth failure becomes a visible, unresolved warning on the
 		// module rather than an entry buried in the activity log. (#119)
-		$this->record_health( $ok, 'purge', $ok ? '' : $this->message_of( $result ) );
+		$this->record_health( $ok, 'purge', $reason );
 
-		if ( ! $ok && class_exists( '\\XSpeed\\Activity_Log' ) ) {
-			\XSpeed\Activity_Log::record(
-				'cloudflare_purge_failed',
-				'Cloudflare auto-purge failed: ' . ( $result['body']['message'] ?? 'unknown error' ),
-				\XSpeed\Activity_Log::WARN
-			);
+		if ( class_exists( '\\XSpeed\\Activity_Log' ) ) {
+			if ( $ok ) {
+				\XSpeed\Activity_Log::record(
+					'cache_purged',
+					sprintf(
+						/* translators: %s: what asked for the purge. */
+						__( 'Purged the Cloudflare edge cache (%s)', 'xspeed' ),
+						$cause
+					),
+					\XSpeed\Activity_Log::INFO
+				);
+			} else {
+				\XSpeed\Activity_Log::record(
+					'cloudflare_purge_failed',
+					sprintf(
+						/* translators: 1: what asked for the purge, 2: failure reason. */
+						__( 'Cloudflare purge failed (%1$s): %2$s', 'xspeed' ),
+						$cause,
+						$reason ? $reason : __( 'unknown error', 'xspeed' )
+					),
+					\XSpeed\Activity_Log::WARN
+				);
+			}
 		}
+
+		return array(
+			'ok'     => $ok,
+			'reason' => $reason,
+			'status' => (int) ( $result['status'] ?? 0 ),
+			'body'   => $result['body'] ?? array(),
+		);
 	}
 
 	/**
@@ -382,7 +475,11 @@ final class CloudflareModule extends Module {
 				$res = Cloudflare::verify( $opts );
 				break;
 			case 'purge':
-				$res = Cloudflare::purge_all( $opts );
+				// Through purge_edge() so a CLI purge records the same health
+				// and activity-log entries as an auto-purge or `wp xspeed
+				// purge`. Calling the engine directly left the panel's health
+				// record showing whatever the last NON-CLI call found.
+				$res = $this->purge_edge( 'CLI' );
 				break;
 			case 'dev-on':
 				$res = Cloudflare::set_dev_mode( $opts, true );

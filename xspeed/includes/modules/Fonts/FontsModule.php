@@ -32,9 +32,9 @@ final class FontsModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'Fonts',
+			'label'       => __( 'Fonts', 'xspeed' ),
 			'icon'        => 'Type',
-			'description' => 'Stop web fonts from blocking text. Adds display=swap to Google Fonts and preloads the fonts you mark critical.',
+			'description' => __( 'Stop web fonts from blocking text. Adds display=swap to Google Fonts and preloads the fonts you mark critical.', 'xspeed' ),
 		);
 	}
 
@@ -43,20 +43,39 @@ final class FontsModule extends Module {
 			'font_display_swap' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Add font-display: swap',
-				'description' => 'Append display=swap to Google Fonts URLs so text renders immediately in a fallback face while the web font loads. No effect on URLs that already declare a display value.',
+				'label'       => __( 'Add font-display: swap', 'xspeed' ),
+				'description' => __( 'Append display=swap to Google Fonts URLs so text renders immediately in a fallback face while the web font loads. Blocking values already on the URL (auto, block) are rewritten to swap; a deliberate non-blocking choice (fallback, optional) is left alone.', 'xspeed' ),
 			),
 			'preload_fonts'     => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'url',
-				'label'       => 'Preload Font URLs',
-				'description' => 'One absolute font URL per line (woff2/woff/ttf/otf). Each becomes a <link rel="preload" as="font" crossorigin> in the head so the browser starts downloading before the CSS parses. Use only for fonts that render above the fold.',
+				'label'       => __( 'Preload Font URLs', 'xspeed' ),
+				'description' => __( 'One absolute font URL per line (woff2/woff/ttf/otf). Each becomes a <link rel="preload" as="font" crossorigin> in the head so the browser starts downloading before the CSS parses. Use only for fonts that render above the fold.', 'xspeed' ),
 			),
 		);
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		// Frontend-only rewriting. Admin / cron / AJAX / REST never
 		// render <link rel="stylesheet"> tags we should touch.
 		if ( is_admin()
@@ -110,16 +129,26 @@ final class FontsModule extends Module {
 
 		$href = $m[2];
 
-		// Already has a display param — leave it alone (respect the theme /
-		// plugin that set it). The href here has been through esc_url(),
-		// which encodes "&" as the entity "&#038;", so a real URL like
-		// ...?family=Roboto&display=optional arrives as
-		// ...?family=Roboto&#038;display=optional — the char before
-		// "display=" is then ";" (tail of the entity), not "&", and the old
-		// [?&]display= guard missed it, double-appending a second display.
-		// Decode entities before the check so it matches either form.
-		// (FBS-82161)
+		// A display param the theme set is respected ONLY when it is one of
+		// the non-blocking choices (swap / fallback / optional) — someone
+		// picked those deliberately and each is a defensible trade. `auto`
+		// and `block` are the values this setting exists to remove: `auto`
+		// IS block behavior in every engine, and it is almost never a
+		// choice — it is the default a theme's enqueue happened to emit.
+		// "Respecting" it turned the switch into a no-op on exactly the
+		// sites that need it: a live text-LCP measured a 5.5s render delay
+		// behind flatsome's `display=auto` Poppins URL while this option
+		// was on and its label promised the opposite. WP Rocket and
+		// LiteSpeed rewrite these too. The href here has been through
+		// esc_url(), which encodes "&" as "&#038;" — decode before
+		// matching, rewrite on the ORIGINAL encoded href so str_replace
+		// finds it in the tag verbatim. (FBS-82161)
 		$href_decoded = html_entity_decode( $href, ENT_QUOTES | ENT_HTML5 );
+		if ( preg_match( '/([?&])display=(auto|block)(&|$)/i', $href_decoded ) ) {
+			$new_href = preg_replace( '/((?:[?&]|&#0*38;|&#[xX]0*26;|&amp;)display=)(?:auto|block)(?=&|$)/i', '$1swap', $href );
+
+			return str_replace( $href, $new_href, $tag );
+		}
 		if ( preg_match( '/[?&]display=/i', $href_decoded ) ) {
 			return $tag;
 		}

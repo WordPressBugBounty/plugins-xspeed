@@ -39,10 +39,10 @@ final class LazyModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Media Optimization',
-			'tab_label'    => 'Lazy Loading', // its own tab on the Media Optimization page
+			'label'        => __( 'Media Optimization', 'xspeed' ),
+			'tab_label'    => __( 'Lazy Loading', 'xspeed' ), // its own tab on the Media Optimization page
 			'icon'         => 'Image',
-			'description'  => 'Control how images, iframes, and videos load — lazy-loading, missing dimensions, and format optimization.',
+			'description'  => __( 'Control how images, iframes, and videos load — lazy-loading, missing dimensions, and format optimization.', 'xspeed' ),
 			// Host page: Lazy Loading (this module) + Image Optimization (Pro)
 			// + AI Suggestions (Pro) as tabs — everything a page loads on one
 			// page instead of separate rows (FBS-83633). Fonts is NOT here: it
@@ -56,47 +56,47 @@ final class LazyModule extends Module {
 			'lazy_images'            => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Lazy-load Images',
-				'description' => 'Add loading="lazy" + decoding="async" to <img> tags in post content. The first images on the page get loading="eager" so the LCP image is not deferred.',
+				'label'       => __( 'Lazy-load Images', 'xspeed' ),
+				'description' => __( 'Add loading="lazy" + decoding="async" to <img> tags in post content. The first images on the page get loading="eager" so the LCP image is not deferred.', 'xspeed' ),
 			),
 			'lazy_iframes'           => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Lazy-load Iframes',
-				'description' => 'Add loading="lazy" to <iframe> tags. Useful for YouTube / Vimeo embeds + map widgets that pull a lot of bytes.',
+				'label'       => __( 'Lazy-load Iframes', 'xspeed' ),
+				'description' => __( 'Add loading="lazy" to <iframe> tags. Useful for YouTube / Vimeo embeds + map widgets that pull a lot of bytes.', 'xspeed' ),
 			),
 			'video_facade'           => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Click-to-Play Video Facade',
-				'description' => 'Replace YouTube and Vimeo embeds — and self-hosted <video> tags that have a poster — with the poster image and a play button. The video only loads when a visitor clicks it, so a page with embeds no longer pays ~1MB of third-party JavaScript, or the full weight of a hosted video file, for visitors who never press play. Autoplaying videos are left alone. Falls back to the normal embed when JavaScript is off.',
+				'label'       => __( 'Click-to-Play Video Facade', 'xspeed' ),
+				'description' => __( 'Replace YouTube and Vimeo embeds — and self-hosted <video> tags that have a poster — with the poster image and a play button. The video only loads when a visitor clicks it, so a page with embeds no longer pays ~1MB of third-party JavaScript, or the full weight of a hosted video file, for visitors who never press play. Autoplaying videos are left alone. Falls back to the normal embed when JavaScript is off.', 'xspeed' ),
 			),
 			'lazy_videos'            => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Lazy-load HTML5 Videos',
-				'description' => 'Set preload="none" on self-hosted <video> tags, overriding a player\'s own preload="auto"/"metadata". Autoplaying videos are left alone — they need their bytes regardless. Browsers do not yet support loading="lazy" on video; preload="none" is the closest equivalent.',
+				'label'       => __( 'Lazy-load HTML5 Videos', 'xspeed' ),
+				'description' => __( 'Set preload="none" on self-hosted <video> tags, overriding a player\'s own preload="auto"/"metadata". Autoplaying videos are left alone — they need their bytes regardless. Browsers do not yet support loading="lazy" on video; preload="none" is the closest equivalent.', 'xspeed' ),
 			),
 			'eager_first_n'          => array(
 				'type'        => 'int',
 				'default'     => 1,
 				'min'         => 0,
 				'max'         => 10,
-				'label'       => 'Eager-load First N Images',
-				'description' => 'How many images at the top of the post get loading="eager". 1 is usually right (the LCP hero image). 0 to lazy-load everything.',
+				'label'       => __( 'Eager-load First N Images', 'xspeed' ),
+				'description' => __( 'How many images at the top of the post get loading="eager". 1 is usually right (the LCP hero image). 0 to lazy-load everything.', 'xspeed' ),
 			),
 			'add_missing_dimensions' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Add Missing Image Dimensions',
-				'description' => 'When an <img class="wp-image-N"> has no width/height, look the values up from the media library and inject them. Prevents the page-layout shift that hurts CLS scores.',
+				'label'       => __( 'Add Missing Image Dimensions', 'xspeed' ),
+				'description' => __( 'When an <img class="wp-image-N"> has no width/height, look the values up from the media library and inject them. Prevents the page-layout shift that hurts CLS scores.', 'xspeed' ),
 			),
 			'excluded_images'        => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => 'Excluded Images',
-				'description' => 'Substring patterns that, if found anywhere in the <img> / <iframe> tag (typically a class or filename), exempt that element from lazy-loading. Useful for hero / logo / sprite images. Or add data-skip-lazy to the tag directly.',
+				'label'       => __( 'Excluded Images', 'xspeed' ),
+				'description' => __( 'Substring patterns that, if found anywhere in the <img> / <iframe> tag (typically a class or filename), exempt that element from lazy-loading. Useful for hero / logo / sprite images. Or add data-skip-lazy to the tag directly.', 'xspeed' ),
 			),
 		);
 	}
@@ -119,6 +119,25 @@ final class LazyModule extends Module {
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		// Bail entirely on admin / feed / cron / REST — same scope as
 		// Minifier. Lazy-loading rendered HTML only matters on real
 		// frontend page renders.

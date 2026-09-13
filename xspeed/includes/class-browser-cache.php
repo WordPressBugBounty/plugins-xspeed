@@ -2,7 +2,8 @@
 /**
  * Browser_Cache — writes/removes browser-cache directives in the site
  * root .htaccess so static assets get long Cache-Control + Expires
- * headers, and serves an nginx snippet for non-Apache hosts.
+ * headers, and serves an nginx snippet for non-Apache hosts (that one
+ * sends Cache-Control only — see nginx_snippet()).
  *
  * Same shape as Gzip: marker block, insert_with_markers, snippet
  * fallback. Independent toggle so users can enable browser caching
@@ -93,10 +94,6 @@ final class Browser_Cache {
 		);
 	}
 
-	/**
-	 * nginx snippet — uses `expires` directive (the canonical nginx way)
-	 * plus an `add_header` line for the immutable flag.
-	 */
 	/**
 	 * Probe whether long-lived caching headers are actually reaching the
 	 * browser. Picks a recognisable static asset (anything in
@@ -209,18 +206,55 @@ final class Browser_Cache {
 		return false;
 	}
 
+	/**
+	 * nginx snippet — one `add_header Cache-Control` per location, with
+	 * `expires off;` pinned in front of it.
+	 *
+	 * nginx's `expires Ns;` emits its own `Cache-Control: max-age=N` (plus
+	 * `Expires`), and `add_header` appends rather than replaces, so pairing
+	 * the two — as this block used to — put two Cache-Control fields on
+	 * every static asset it matched, WP core's own included (issue #259).
+	 * `expires` can't say `immutable` and `immutable` is the point, so
+	 * `add_header` is the one that stays.
+	 *
+	 * `off` rather than simply dropping the directive: `expires` is
+	 * inherited from `server {}`, so a host template that sets one there
+	 * would recreate the duplicate inside this location.
+	 *
+	 * Losing `Expires:` on nginx costs nothing — `max-age` outranks it in
+	 * any HTTP/1.1 cache, and Apache still emits both via mod_expires.
+	 *
+	 * Deliberately no `always`. Without it nginx applies `add_header` only
+	 * to the statuses its header filter treats as safe — 200, 201, 204,
+	 * 206, 301, 302, 303, 304, 307, 308 — which is the coverage we want,
+	 * and the same coverage Apache gives: `Header set` in apache_rules()
+	 * runs under the default `onsuccess` condition, so it is off on error
+	 * responses too. `always` would put `max-age=31536000, immutable` on a
+	 * 404, and minified asset URLs are deterministic (Minifier keys them on
+	 * path + mtime), so a file that 404s in the window after a purge comes
+	 * back at the URL a client has already cached the 404 for — for a year,
+	 * with no revalidation.
+	 */
 	public static function nginx_snippet( array $opts = array() ): string {
 		$asset = (int) ( $opts['asset_ttl'] ?? self::DEFAULT_ASSET_TTL );
 		$html  = (int) ( $opts['html_ttl'] ?? self::DEFAULT_HTML_TTL );
+		// Same guard as apache_rules(): a negative TTL would otherwise
+		// reach the vhost as `max-age=-1`.
+		if ( $asset < 0 ) {
+			$asset = self::DEFAULT_ASSET_TTL;
+		}
+		if ( $html < 0 ) {
+			$html = self::DEFAULT_HTML_TTL;
+		}
 		return implode(
 			"\n",
 			array(
 				'location ~* \.(css|js|jpg|jpeg|png|gif|webp|avif|svg|ico|woff2|woff|ttf|otf|eot|mp4|webm|mp3|ogg)$ {',
-				'    expires ' . $asset . 's;',
+				'    expires off;',
 				'    add_header Cache-Control "public, max-age=' . $asset . ', immutable";',
 				'}',
 				'location ~* \.html$ {',
-				'    expires ' . $html . 's;',
+				'    expires off;',
 				'    add_header Cache-Control "public, max-age=' . $html . '";',
 				'}',
 			)

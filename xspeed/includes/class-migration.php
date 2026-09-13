@@ -679,6 +679,20 @@ final class Migration {
 		'object-cache',
 		'cdn',
 		'preloader',
+		/*
+		 * `cache` is optional for the HANDOVER decision specifically, and it
+		 * has to be, because the source itself is usually why it failed: the
+		 * source holds advanced-cache.php, so page cache cannot apply, so we
+		 * refuse to deactivate the source, so it keeps holding the drop-in.
+		 * That loop is what left sites with no cache at all (#391).
+		 *
+		 * Deactivating first and enabling after is the resolution -- see
+		 * MigrationModule::restore_own_environment(), which now turns caching
+		 * on once the field is free. A cache failure is still reported to the
+		 * user either way; it just no longer vetoes the switch-off the notice
+		 * already promised.
+		 */
+		'cache',
 	);
 
 	/**

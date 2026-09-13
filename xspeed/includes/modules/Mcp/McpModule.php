@@ -108,9 +108,9 @@ final class McpModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'MCP Server',
+			'label'        => __( 'MCP Server', 'xspeed' ),
 			'icon'         => 'Sparkles',
-			'description'  => 'Control this site\'s cache from Claude and other AI agents.',
+			'description'  => __( 'Control this site\'s cache from Claude and other AI agents.', 'xspeed' ),
 			'custom_panel' => 'McpPanel',
 		);
 	}

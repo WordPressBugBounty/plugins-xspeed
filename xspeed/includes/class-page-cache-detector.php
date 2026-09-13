@@ -43,6 +43,13 @@ final class Page_Cache_Detector {
 	public const STATE_CONTESTED = 'contested';
 	/** A drop-in (or a live WP_CACHE) exists that we cannot attribute to anyone. */
 	public const STATE_UNKNOWN_OCCUPIED = 'unknown-occupied';
+	/**
+	 * A drop-in is present that nothing is running to defend: it is empty, or
+	 * unnameable with every page-cache plugin switched off. We may take the
+	 * field, but the field is NOT clear -- a file is still there, and
+	 * is_field_clear() must keep saying so to the host plugins that ask. (#391)
+	 */
+	public const STATE_ABANDONED = 'abandoned';
 	/** We could not read what we needed to decide. */
 	public const STATE_UNAVAILABLE = 'unavailable';
 
@@ -51,6 +58,10 @@ final class Page_Cache_Detector {
 	public const OWNER_XSPEED  = 'xspeed';
 	public const OWNER_FOREIGN = 'foreign';
 	public const OWNER_UNKNOWN = 'unknown';
+	/** The file is present but holds nothing — empty, or whitespace only. */
+	public const OWNER_ABANDONED = 'abandoned';
+	/** Our own row in the plugin catalog, keyed by this exact file name. */
+	private const SELF_PLUGIN_FILE = 'xspeed/xspeed.php';
 
 	/*
 	 * Blocker codes, not sentences.
@@ -260,6 +271,20 @@ final class Page_Cache_Detector {
 
 		$state['hash'] = hash( 'sha256', $contents );
 
+		/*
+		 * An EMPTY file owns nothing. WP Rocket truncates advanced-cache.php
+		 * to 0 bytes on deactivate, and a whitespace-only file is the same
+		 * nothing. Both matched no vendor signature and fell through to
+		 * OWNER_UNKNOWN below, which blocks acquisition permanently — a site
+		 * could be left with the source plugin off, xSpeed refused, and no
+		 * page cache at all, clearable only over SSH. There is nothing here
+		 * to break and nobody to ask. (#391)
+		 */
+		if ( '' === trim( $contents ) ) {
+			$state['owner'] = self::OWNER_ABANDONED;
+			return $state;
+		}
+
 		if ( self::has_xspeed_signature( $contents ) ) {
 			$state['owner'] = self::OWNER_XSPEED;
 			$state['label'] = 'xSpeed';
@@ -403,6 +428,32 @@ final class Page_Cache_Detector {
 	 * no drop-in, no active plugin — and refusing there would strand every
 	 * site that ever tried another cache plugin.
 	 */
+	/**
+	 * Is some OTHER page-cache plugin active right now?
+	 *
+	 * "Is anything running that replacing this file would break?" is the
+	 * question that decides an acquisition, and it has to exclude US. We are
+	 * in the catalog too and we are nearly always active while asking, so
+	 * counting ourselves answered yes on every site -- which is why an
+	 * unnameable drop-in could never be recognised as abandoned. (#391, #393)
+	 *
+	 * Deliberately narrow, so callers that need only this (Cache::dropin_owner())
+	 * do not have to run the whole of classify() -- which reads wp-config.php
+	 * and the drop-in, and would couple an ownership answer to failures that
+	 * have nothing to do with it.
+	 */
+	public static function another_page_cache_is_active(): bool {
+		foreach ( self::inspect()['plugins'] as $plugin ) {
+			if ( self::SELF_PLUGIN_FILE === (string) $plugin['plugin'] ) {
+				continue;
+			}
+			if ( ! empty( $plugin['page_cache'] ) && ! empty( $plugin['active'] ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public static function is_field_clear(): bool {
 		$verdict = self::classify();
 
@@ -442,6 +493,54 @@ final class Page_Cache_Detector {
 	public static function dropin_owner_label(): ?string {
 		$dropin = self::inspect()['dropin'];
 		return is_string( $dropin['label'] ) ? $dropin['label'] : null;
+	}
+
+	/**
+	 * What the dashboard must tell the user BEFORE it turns page caching on.
+	 *
+	 * Enabling writes wp-content/advanced-cache.php, which WordPress gives to
+	 * exactly one plugin. When a file is already there, the write REPLACES it
+	 * — so the dashboard says whose file it is BEFORE the click rather than
+	 * taking it silently:
+	 *
+	 *   - `exists`      a drop-in is on disk right now
+	 *   - `replaceable` enabling would overwrite it
+	 *   - `label`       who it belongs to, when that can be named
+	 *                   ("WP Rocket"), null when it genuinely cannot
+	 *
+	 * Ownership is no longer what decides this. A competitor's live drop-in
+	 * used to be refused outright, which left a user who had asked for our
+	 * cache unable to get it — turning the page cache on is the instruction
+	 * to serve pages from cache, and that cannot be done without this file.
+	 * So a foreign drop-in is replaceable like any other, and the prompt is
+	 * how the user is told what they are taking over.
+	 *
+	 * Two states still disclose nothing. A drop-in we already own is a plain
+	 * re-enable with nothing to replace, and an UNREADABLE one is refused by
+	 * install_dropin() — promising a replacement that the writer will then
+	 * refuse is the split brain this method exists to avoid.
+	 *
+	 * @return array{exists:bool,replaceable:bool,owner:string,label:string|null}
+	 */
+	public static function dropin_disclosure(): array {
+		$dropin = self::inspect()['dropin'];
+		$owner  = (string) $dropin['owner'];
+
+		/*
+		 * `replaceable` is a PROMISE, kept by install_dropin(), so this list
+		 * must stay in step with the refusals there: everything except our
+		 * own file and one we cannot read.
+		 */
+		$replaceable = (bool) $dropin['exists']
+			&& self::OWNER_XSPEED !== $owner
+			&& $dropin['readable'];
+
+		return array(
+			'exists'      => (bool) $dropin['exists'],
+			'replaceable' => $replaceable,
+			'owner'       => $owner,
+			'label'       => is_string( $dropin['label'] ) ? $dropin['label'] : null,
+		);
 	}
 
 	/**
@@ -505,11 +604,28 @@ final class Page_Cache_Detector {
 				'label'  => $dropin['label'],
 			);
 		} elseif ( self::OWNER_UNKNOWN === $dropin['owner'] ) {
-			$blockers[] = array(
-				'code'   => $dropin['readable'] ? self::BLOCKER_UNKNOWN_DROPIN : self::BLOCKER_UNREADABLE_DROPIN,
-				'plugin' => null,
-				'label'  => null,
-			);
+			/*
+			 * A file we cannot name blocks only while a page cache is
+			 * actually running. With every candidate switched off there is
+			 * nothing to break by replacing it, and refusing anyway strands
+			 * the site with no cache and no route back that is not SSH.
+			 *
+			 * An UNREADABLE file is different and still blocks outright: we
+			 * cannot even see what we would destroy. (#391, #393)
+			 */
+			if ( ! $dropin['readable'] ) {
+				$blockers[] = array(
+					'code'   => self::BLOCKER_UNREADABLE_DROPIN,
+					'plugin' => null,
+					'label'  => null,
+				);
+			} elseif ( self::another_page_cache_is_active() ) {
+				$blockers[] = array(
+					'code'   => self::BLOCKER_UNKNOWN_DROPIN,
+					'plugin' => null,
+					'label'  => null,
+				);
+			}
 		}
 
 		$wp_cache_blocker = array(
@@ -550,7 +666,20 @@ final class Page_Cache_Detector {
 		}
 
 		if ( self::OWNER_UNKNOWN === $dropin['owner'] ) {
-			return self::verdict( self::STATE_UNKNOWN_OCCUPIED, $blockers, $notes, $report );
+			// Live competitor -> occupied and refused. Nothing running ->
+			// abandoned: acquirable, but still not a clear field. Ourselves
+			// excluded: $active counts US too, and we are active while
+			// asking, so this could never be false. (#391/#393)
+			return self::verdict(
+				self::another_page_cache_is_active() ? self::STATE_UNKNOWN_OCCUPIED : self::STATE_ABANDONED,
+				$blockers,
+				$notes,
+				$report
+			);
+		}
+
+		if ( self::OWNER_ABANDONED === $dropin['owner'] ) {
+			return self::verdict( self::STATE_ABANDONED, $blockers, $notes, $report );
 		}
 
 		if ( self::OWNER_FOREIGN === $dropin['owner'] ) {
@@ -714,7 +843,7 @@ final class Page_Cache_Detector {
 
 		return in_array(
 			$verdict['state'],
-			array( self::STATE_UNCLAIMED, self::STATE_XSPEED_OWNED, self::STATE_FOREIGN_RESIDUAL ),
+			array( self::STATE_UNCLAIMED, self::STATE_XSPEED_OWNED, self::STATE_FOREIGN_RESIDUAL, self::STATE_ABANDONED ),
 			true
 		);
 	}
@@ -760,6 +889,22 @@ final class Page_Cache_Detector {
 	 * a drop-in must call this.
 	 */
 	public static function invalidate(): void {
+		/*
+		 * Drop PHP's stat cache with our own memo. Both describe the same
+		 * files, and the caller invalidating us has just changed them --
+		 * often from inside another plugin's deactivation hook, in the same
+		 * request. file_exists()/filesize()/is_readable() would otherwise
+		 * keep answering from before the change, so a drop-in truncated to
+		 * 0 bytes a moment ago still reads as the source plugin's live cache
+		 * and the handover refuses. (#391)
+		 *
+		 * No unit test: file_put_contents() clears the entry for the path it
+		 * writes, so a single-process test cannot reproduce a stale stat --
+		 * the real case is another plugin's teardown writing through a
+		 * different path string. Verified end to end against a live WP Rocket
+		 * install instead.
+		 */
+		clearstatcache();
 		self::$report = null;
 		Cache_Plugin_Catalog::invalidate();
 	}

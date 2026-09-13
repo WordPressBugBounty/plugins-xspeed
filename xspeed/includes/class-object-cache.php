@@ -37,6 +37,7 @@ final class Object_Cache {
 	 *
 	 * @return array{
 	 *   drop_in_installed: bool,
+	 *   drop_in_is_ours: bool,   // installed AND carries our tag
 	 *   drop_in_path: string,
 	 *   drop_in_label: string,
 	 *   backend: string,        // redis|memcached|apcu|wp_default|unknown
@@ -104,6 +105,11 @@ final class Object_Cache {
 
 		return array(
 			'drop_in_installed' => $has_drop_in,
+			// Whether the installed drop-in is OURS. A foreign one (W3TC,
+			// Redis Object Cache, LiteSpeed) means the object cache belongs to
+			// another plugin: we must not offer to configure or disable it,
+			// and "installed" must not be read as "xSpeed is running".
+			'drop_in_is_ours'   => $has_drop_in && self::is_our_dropin_present(),
 			'drop_in_path'      => $dropin,
 			'drop_in_label'     => $label,
 			'backend'           => $backend,
@@ -142,7 +148,7 @@ final class Object_Cache {
 			$user    = self::str( $opts, 'redis_user', '' );
 			$pass    = self::str( $opts, 'redis_password', '' );
 			$db      = self::int( $opts, 'redis_database', 0 );
-			$prefix  = self::str( $opts, 'key_prefix', '' );
+			$prefix  = self::effective_salt( $opts );
 			$timeout = self::int( $opts, 'connection_timeout', 1 );
 			$persist = ! empty( $opts['persistent'] );
 
@@ -157,20 +163,16 @@ final class Object_Cache {
 				$lines[] = "define( 'WP_REDIS_PASSWORD', '" . self::esc( $pass ) . "' );";
 			}
 			$lines[] = "define( 'WP_REDIS_DATABASE', " . $db . ' );';
-			if ( '' !== $prefix ) {
-				$lines[] = "define( 'WP_CACHE_KEY_SALT', '" . self::esc( $prefix ) . "' );";
-			}
+			$lines[] = "define( 'WP_CACHE_KEY_SALT', '" . self::esc( $prefix ) . "' );";
 			$lines[] = "define( 'WP_REDIS_TIMEOUT', " . $timeout . ' );';
 			$lines[] = "define( 'WP_REDIS_PERSISTENT', " . ( $persist ? 'true' : 'false' ) . ' );';
 		} elseif ( 'memcached' === $backend ) {
 			$host    = self::str( $opts, 'memcached_host', '127.0.0.1' );
 			$port    = self::int( $opts, 'memcached_port', 11211 );
-			$prefix  = self::str( $opts, 'key_prefix', '' );
+			$prefix  = self::effective_salt( $opts );
 			$lines[] = "global \$memcached_servers;";
 			$lines[] = "\$memcached_servers = array( array( '" . self::esc( $host ) . "', " . $port . ' ) );';
-			if ( '' !== $prefix ) {
-				$lines[] = "define( 'WP_CACHE_KEY_SALT', '" . self::esc( $prefix ) . "' );";
-			}
+			$lines[] = "define( 'WP_CACHE_KEY_SALT', '" . self::esc( $prefix ) . "' );";
 		} else {
 			$lines[] = '// No snippet for backend: ' . $backend;
 		}
@@ -294,7 +296,7 @@ final class Object_Cache {
 				if ( ! $set || '1' !== (string) $got ) {
 					return self::test_result( false, $backend, self::write_denied_message( $opts, $host, $port ), $start );
 				}
-				return self::test_result( true, $backend, "Connected to Redis at {$host}:{$port} (phpredis).", $start );
+				return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$host}:{$port} (phpredis).", $opts ), $start );
 			}
 
 			// Pure-PHP fallback — our own client, zero dependencies.
@@ -328,10 +330,56 @@ final class Object_Cache {
 			if ( ! $set || '1' !== (string) $got ) {
 				return self::test_result( false, $backend, self::write_denied_message( $opts, $host, $port ), $start );
 			}
-			return self::test_result( true, $backend, "Connected to Redis at {$host}:{$port} (built-in client).", $start );
+			return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$host}:{$port} (built-in client).", $opts ), $start );
 		} catch ( \Throwable $e ) {
 			return self::test_result( false, $backend, 'Connection error: ' . $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Redis glob metacharacters that must never appear unescaped in a SCAN
+	 * MATCH pattern. `\` is the escape character itself.
+	 */
+	private const GLOB_METACHARS = '*?[]\\';
+
+	/**
+	 * Whether a salt contains Redis glob metacharacters.
+	 *
+	 * The salt is interpolated into the drop-in's scoped-flush patterns. The
+	 * drop-in escapes it, so caching and purging are correct either way — but
+	 * an explicit Cache Key Prefix exists to match a host's ACL namespace
+	 * byte-for-byte, and a wildcard in it is almost always a typo rather than
+	 * a real namespace. Reporting it on Test connection is the one place the
+	 * user is already looking at their prefix.
+	 *
+	 * @param string $salt Effective salt.
+	 * @return bool
+	 */
+	public static function salt_has_glob_metachars( string $salt ): bool {
+		return strcspn( $salt, self::GLOB_METACHARS ) !== strlen( $salt );
+	}
+
+	/**
+	 * Append a prefix advisory to an otherwise-successful connection message.
+	 *
+	 * @param string $message Success message.
+	 * @param array  $opts    Settings array.
+	 * @return string
+	 */
+	private static function with_prefix_advisory( string $message, array $opts ): string {
+		// Deliberately the TYPED prefix, not effective_salt(): this advisory
+		// says "the field you are looking at probably has a typo in it". A
+		// host-pinned WP_CACHE_KEY_SALT is not editable from this screen and
+		// purges are correctly scoped regardless (the drop-in escapes it), so
+		// warning about a host's own namespace would be noise on every ACL
+		// host. A derived salt is glob-free by construction.
+		$prefix = self::str( $opts, 'key_prefix', '' );
+		if ( '' === $prefix || ! self::salt_has_glob_metachars( $prefix ) ) {
+			return $message;
+		}
+		return $message . ' Note: the Cache Key Prefix contains one of * ? [ ] \\.'
+			. ' Purges stay scoped to this site, but these are wildcard characters'
+			. ' in Redis — check the prefix matches your host\'s key exactly.';
 	}
 
 	private static function test_result( bool $ok, string $backend, string $message, ?float $start = null ): array {
@@ -372,20 +420,139 @@ final class Object_Cache {
 	}
 
 	/**
+	 * Resolve the salt that namespaces this site's cache keys.
+	 *
+	 * An explicit Cache Key Prefix always wins — on ACL/namespaced hosts
+	 * (xCloud) it MUST match the host's "Redis Object Cache Key" or writes are
+	 * denied (NOPERM), so we never override what the user typed.
+	 *
+	 * When the field is blank we derive a stable, per-site salt instead of
+	 * falling back to an empty one. An empty salt makes every key look like
+	 * `:{prefix}:{group}:{key}` — identical on every install — so two sites
+	 * sharing one Redis/Memcached server collide. That is not a theoretical
+	 * clash: `blog-details` / `blog-lookup` are how WordPress resolves which
+	 * site a request belongs to, so the second site reads the first site's
+	 * entries and redirects to it.
+	 *
+	 * The derived value is a hash of the site URL plus the DB name/prefix, so
+	 * it is unique per install, stable across requests (no cache churn), and
+	 * safe to embed in wp-config.php.
+	 *
+	 * @param array $opts Settings array.
+	 * @return string Non-empty salt.
+	 */
+	public static function effective_salt( array $opts ): string {
+		$prefix = self::str( $opts, 'key_prefix', '' );
+		if ( '' !== $prefix ) {
+			return $prefix;
+		}
+
+		// A salt WE already wrote is authoritative over a fresh derivation.
+		// The keys in the backend are named after it, so re-deriving a
+		// different value would orphan every one of them — a needless
+		// cache-cooling on an install that is already correctly namespaced.
+		// This matters because derive_salt()'s rule was corrected (see there):
+		// without this branch, the next wp-config sync would rewrite the block
+		// with a new salt and throw away a warm cache on every existing site.
+		if ( defined( 'XSPEED_OC_SALT' ) && '' !== (string) constant( 'XSPEED_OC_SALT' ) ) {
+			return (string) constant( 'XSPEED_OC_SALT' );
+		}
+
+		// A salt the HOST pinned in its own wp-config (outside our block) is
+		// the next authority. On ACL/namespaced Redis the host grants write
+		// access to that namespace and no other, so replacing it with a
+		// derived value gets every write denied (NOPERM) and the site silently
+		// stops caching.
+		// WP_REDIS_PREFIX is checked alongside WP_CACHE_KEY_SALT and before it,
+		// matching the order the schema and the drop-in resolve (#398). It is
+		// the name Redis Object Cache uses and the one managed hosts actually
+		// write, so honouring only the older alias left the commonest
+		// ACL-namespaced case deriving a salt the host denies writes to.
+		foreach ( array( 'WP_REDIS_PREFIX', 'WP_CACHE_KEY_SALT' ) as $name ) {
+			if ( defined( $name ) && '' !== (string) constant( $name ) ) {
+				return (string) constant( $name );
+			}
+		}
+
+		return self::derive_salt();
+	}
+
+	/**
+	 * Build a stable per-site salt for installs that left Cache Key Prefix
+	 * blank. Distinct per install: the site URL separates sites sharing a
+	 * database, and DB name + table prefix separate installs sharing a domain
+	 * (e.g. subdirectory installs).
+	 *
+	 * This MUST stay byte-identical to the drop-in's xspeed_oc_salt(), which
+	 * is the harder constraint of the two: the drop-in loads from
+	 * wp-settings.php before `$wpdb` exists, so it can only read constants and
+	 * the `$table_prefix` global that wp-config.php itself assigns. Normally
+	 * the two never both run — enable() writes XSPEED_OC_SALT and both sides
+	 * read that constant — but where wp-config is NOT writable no constant is
+	 * ever written, and then both fallbacks are live at once in different
+	 * processes. Seeding them differently made "Test connection" verify a
+	 * different key space than the cache actually writes to: on ACL/namespaced
+	 * Redis (xCloud) that reports success while writes are refused, or reports
+	 * a failure while caching is fine. (PR #390 QA round 2, issue 2)
+	 *
+	 * Two specific traps this alignment closes:
+	 *
+	 *   - WP_HOME / WP_SITEURL are OPTIONAL and absent from a stock
+	 *     wp-config.php, so the drop-in's URL part is usually EMPTY while
+	 *     get_site_url() always returns a real URL. Using get_site_url() here
+	 *     therefore diverged on virtually every default install, not just an
+	 *     exotic one — so this reads the same constants, and appends ABSPATH
+	 *     on the same condition, rather than reaching for the richer value.
+	 *   - `$wpdb->prefix` is PER-BLOG on multisite (`wp_2_` on a sub-site)
+	 *     while `$table_prefix` is always the base prefix. The drop-in reads
+	 *     the salt once and separates sub-sites with blog_prefix instead, so
+	 *     `$table_prefix` is the value that matches; `$wpdb->prefix` would
+	 *     hand every sub-site a different salt.
+	 *
+	 * @return string
+	 */
+	private static function derive_salt(): string {
+		global $table_prefix;
+
+		$url = '';
+		if ( defined( 'WP_HOME' ) ) {
+			$url = (string) WP_HOME;
+		} elseif ( defined( 'WP_SITEURL' ) ) {
+			$url = (string) WP_SITEURL;
+		}
+
+		$parts = array(
+			$url,
+			defined( 'DB_NAME' ) ? (string) DB_NAME : '',
+			isset( $table_prefix ) ? (string) $table_prefix : '',
+		);
+		if ( '' === $url ) {
+			$parts[] = defined( 'ABSPATH' ) ? (string) ABSPATH : '';
+		}
+
+		$seed = implode( '|', $parts );
+		if ( '' === trim( $seed, '|' ) ) {
+			// Nothing identifying available. Mirrors the drop-in's own
+			// last-resort seed so the two still agree.
+			$seed = 'xspeed';
+		}
+
+		return 'xs' . substr( md5( $seed ), 0, 12 );
+	}
+
+	/**
 	 * Build a probe key for the write-verification round-trip. It must land in
 	 * the same key space the drop-in writes to, so an ACL namespace restriction
 	 * (~<prefix>:*) is exercised. The drop-in salts keys as
-	 * `{salt}:{prefix}:{group}:{key}` where the salt is the user's key prefix,
-	 * so prefixing the probe with that value makes it match the allowed pattern
-	 * on namespaced hosts (xCloud) while staying harmless everywhere else.
+	 * `{salt}:{prefix}:{group}:{key}`, so prefixing the probe with the same
+	 * salt makes it match the allowed pattern on namespaced hosts (xCloud)
+	 * while staying harmless everywhere else.
 	 *
 	 * @param array $opts Settings array.
 	 * @return string
 	 */
 	private static function probe_key( array $opts ): string {
-		$prefix = self::str( $opts, 'key_prefix', '' );
-		$suffix = 'xspeed-oc-probe';
-		return '' !== $prefix ? $prefix . ':' . $suffix : $suffix;
+		return self::effective_salt( $opts ) . ':xspeed-oc-probe';
 	}
 
 	/**
@@ -468,8 +635,34 @@ final class Object_Cache {
 	 * @return array{ok:bool,message:string,steps:array<string,bool>,detect:array}
 	 */
 	public static function disable(): array {
+		// A drop-in owned by another plugin is left in place by
+		// remove_dropin(), which then reports success because nothing of ours
+		// is there to remove. Reporting "disabled" for that is a lie: the site
+		// still has someone else's object cache running. Say so instead.
+		$dropin = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/object-cache.php' : '';
+		if ( '' !== $dropin && file_exists( $dropin ) && ! self::is_our_dropin_present() ) {
+			return array(
+				'ok'      => false,
+				'message' => 'The object-cache drop-in belongs to another plugin, so xSpeed left it alone. Turn its object cache off in that plugin instead.',
+				'steps'   => array(
+					'drop_in'   => false,
+					'wp_config' => false,
+				),
+				'detect'  => self::detect(),
+			);
+		}
+
 		$dropin_removed = self::remove_dropin();
 		$config_removed = self::remove_wp_config();
+
+		/*
+		 * The sidecar is the config on a host where wp-config.php is read-only,
+		 * and it carries the Redis password. Leaving it behind would keep a
+		 * plaintext credential on disk for a feature the admin just switched
+		 * off, and a later re-enable would silently pick up stale credentials
+		 * from a file nothing in this path had touched.
+		 */
+		self::delete_sidecar();
 
 		return array(
 			'ok'      => $dropin_removed,
@@ -560,19 +753,297 @@ final class Object_Cache {
 	 * Write the XSPEED_OC_* constants between our markers in wp-config.php.
 	 * Idempotent: replaces an existing block. Reversible via remove_wp_config().
 	 */
-	public static function write_wp_config( array $opts ): bool {
+	/** Sidecar holding the config when wp-config.php cannot be written. */
+	private const SIDECAR_FILE = 'xspeed-object-cache.php';
+
+	/**
+	 * Absolute path of the config sidecar.
+	 *
+	 * Lives beside the drop-in in wp-content/ rather than under
+	 * wp-content/cache/, which a purge empties -- losing the settings on the
+	 * next purge would be a far stranger bug than the one this solves.
+	 */
+	public static function sidecar_path(): string {
+		return WP_CONTENT_DIR . '/' . self::SIDECAR_FILE;
+	}
+
+	/**
+	 * Write the config sidecar. Used when wp-config.php is not writable, which
+	 * is the norm on several managed hosts -- there the panel could otherwise
+	 * only ever tell the user to paste a snippet by hand.
+	 *
+	 * Written as PHP, not JSON: wp-content/ is web-reachable, and a .json here
+	 * would serve the Redis password to anyone who guessed the filename. A PHP
+	 * file with an ABSPATH guard returns nothing when requested directly.
+	 *
+	 * @param array<string,mixed> $opts Effective settings to persist.
+	 */
+	public static function write_sidecar( array $opts ): bool {
+		$fs = self::fs();
+		if ( ! $fs ) {
+			return false;
+		}
+
+		$payload = array();
+		foreach ( self::SIDECAR_KEYS as $key ) {
+			if ( array_key_exists( $key, $opts ) ) {
+				$payload[ $key ] = $opts[ $key ];
+			}
+		}
+
+		$body = "<?php\n"
+			. "/**\n"
+			. " * xSpeed object-cache configuration.\n"
+			. " *\n"
+			. " * Written by xSpeed because wp-config.php is not writable on this host.\n"
+			. " * The drop-in reads this before WordPress loads. Edit the Object Cache\n"
+			. " * panel rather than this file -- it is rewritten on every save.\n"
+			. " */\n"
+			. "defined( 'ABSPATH' ) || exit;\n\n"
+			. 'return ' . var_export( $payload, true ) . ";\n";
+
+		/*
+		 * Write to a temp file and rename() into place. The drop-in `include`s
+		 * this file BEFORE WordPress loads, so a reader that catches a
+		 * half-written copy gets a PHP parse error -- a white screen on every
+		 * request, not a degraded cache. rename() within the same directory is
+		 * atomic on every filesystem WordPress supports, so a reader sees
+		 * either the whole old file or the whole new one.
+		 */
+		$path = self::sidecar_path();
+		$tmp  = $path . '.' . wp_generate_password( 8, false ) . '.tmp';
+
+		if ( ! $fs->put_contents( $tmp, $body, FS_CHMOD_FILE ) ) {
+			return false;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- WP_Filesystem has no atomic move; rename() is the whole point here.
+		if ( ! @rename( $tmp, $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- failure is reported by the return value.
+			$fs->delete( $tmp );
+			return false;
+		}
+
+		/*
+		 * Managed hosts -- the ones this sidecar exists for -- often run
+		 * opcache with validate_timestamps off, where `include` would keep
+		 * returning the previously compiled array however many times we
+		 * rewrite the file. That is the exact panel-says-one-thing,
+		 * runtime-does-another failure this change exists to remove.
+		 */
+		if ( function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $path, true ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- opcache may be disabled or restricted; nothing to do either way.
+		}
+
+		self::forget_sidecar();
+		return true;
+	}
+
+	/**
+	 * Remove the sidecar. Called when wp-config.php becomes writable again, so
+	 * two sources can never disagree about the same setting.
+	 */
+	public static function delete_sidecar(): bool {
+		$path = self::sidecar_path();
+		if ( ! file_exists( $path ) ) {
+			return true;
+		}
+		$fs = self::fs();
+		$ok = $fs ? (bool) $fs->delete( $path ) : false;
+		if ( $ok ) {
+			self::forget_sidecar();
+		}
+		return $ok;
+	}
+
+	/**
+	 * Settings the sidecar carries. Mirrors the fields wp_config_block()
+	 * emits, so the two storage paths describe the same configuration.
+	 */
+	private const SIDECAR_KEYS = array(
+		'backend',
+		'redis_host',
+		'redis_port',
+		'redis_user',
+		'redis_password',
+		'redis_database',
+		'memcached_host',
+		'memcached_port',
+		'key_prefix',
+		'connection_timeout',
+		'persistent',
+	);
+
+	/** Memoized sidecar contents; null until first read. */
+	private static $sidecar_cache = null;
+
+	/** Forget the memoized sidecar. */
+	public static function forget_sidecar(): void {
+		self::$sidecar_cache = null;
+	}
+
+	/**
+	 * Read the sidecar, or an empty array when there is none.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public static function read_sidecar(): array {
+		if ( null !== self::$sidecar_cache ) {
+			return self::$sidecar_cache;
+		}
+		$path = self::sidecar_path();
+		if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+			self::$sidecar_cache = array();
+			return self::$sidecar_cache;
+		}
+		$data = include $path;
+		self::$sidecar_cache = is_array( $data ) ? $data : array();
+		return self::$sidecar_cache;
+	}
+
+	/**
+	 * Host and port of the first server in a `$memcached_servers` global.
+	 *
+	 * Memcached has no constant convention the way Redis has WP_REDIS_*; this
+	 * global IS the convention, and hosts write it in two shapes:
+	 *
+	 *     array( array( 'host', 11211 ) )              // W3TC pair form
+	 *     array( 'default' => array( 'host:11211' ) )  // Memcached Object Cache
+	 *
+	 * Reading only the first left the second taking the whole "host:port"
+	 * string as the hostname, or missing it entirely because its bucket is
+	 * keyed `default` rather than 0.
+	 *
+	 * The drop-in carries `xspeed_oc_first_memcached_server()`, which must
+	 * behave identically -- it loads before WordPress and cannot call this
+	 * class. ObjectCacheConstantParityTest holds the two together. (#398)
+	 *
+	 * @param mixed $servers The global's value, unvalidated.
+	 * @return array{0:?string,1:?int}|null Host and port, either possibly null.
+	 */
+	public static function first_memcached_server( $servers ): ?array {
+		if ( ! is_array( $servers ) || array() === $servers ) {
+			return null;
+		}
+
+		$bucket = array_key_exists( 0, $servers ) ? $servers[0] : reset( $servers );
+
+		/*
+		 * A bucket is EITHER a [host, port] pair or a list of server entries.
+		 * Telling them apart by shape, not by nesting depth: descending into
+		 * `array( 'mc.example', 11211 )` yields the host string and drops the
+		 * port on the floor, which is the commonest form there is.
+		 */
+		$entry = $bucket;
+		if ( is_array( $bucket ) && isset( $bucket[0] ) && is_array( $bucket[0] ) ) {
+			$entry = $bucket[0];
+		}
+
+		if ( is_array( $entry ) ) {
+			$host = isset( $entry[0] ) && ! is_array( $entry[0] ) ? (string) $entry[0] : null;
+			$port = isset( $entry[1] ) && ! is_array( $entry[1] ) ? (int) $entry[1] : null;
+			// A single-element list, array( 'host:port' ), is the keyed form's
+			// bucket rather than a pair -- fall through to the string parser.
+			if ( null !== $host && null === $port && is_string( $entry[0] ) && false !== strpos( $entry[0], ':' ) ) {
+				$entry = $entry[0];
+			} else {
+				return ( null === $host && null === $port ) ? null : array( $host, $port );
+			}
+		}
+
+		if ( ! is_string( $entry ) || '' === $entry ) {
+			return null;
+		}
+
+		// "host:port", or a bare host. Split only the LAST colon, and only when
+		// what follows is numeric -- a unix socket path is a host with no port.
+		$at = strrpos( $entry, ':' );
+		if ( false !== $at && ctype_digit( substr( $entry, $at + 1 ) ) ) {
+			return array( substr( $entry, 0, $at ), (int) substr( $entry, $at + 1 ) );
+		}
+		return array( $entry, null );
+	}
+
+	/**
+	 * Names of the constants xSpeed itself wrote into wp-config.php.
+	 *
+	 * Ownership is decided by LOCATION, not by name. Our block is fenced by
+	 * CONFIG_BEGIN / CONFIG_END, so a define inside it is one we wrote and a
+	 * define anywhere else belongs to the host -- even when both are called
+	 * `XSPEED_OC_HOST`, which is exactly what a user pasting our own snippet
+	 * by hand produces.
+	 *
+	 * Judging by prefix instead is what made the panel treat xSpeed's own
+	 * values as host-pinned: the field locked, the "manage this here" control
+	 * could not unlock it, and Revert handed the field back to our snapshot
+	 * rather than to the host. (#398)
+	 *
+	 * @return string[] Constant names, empty when the block is absent.
+	 */
+
+	public static function our_constants(): array {
+		if ( null !== self::$our_constants_cache ) {
+			return self::$our_constants_cache;
+		}
+		$cache = array();
+
+		$wp_config = ABSPATH . 'wp-config.php';
+		if ( ! file_exists( $wp_config ) || ! is_readable( $wp_config ) ) {
+			self::$our_constants_cache = $cache;
+			return $cache;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading our own block; WP_Filesystem is not always initialised on the read path.
+		$config = (string) @file_get_contents( $wp_config ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- an unreadable wp-config just means "we own nothing".
+		if ( '' === $config ) {
+			self::$our_constants_cache = $cache;
+			return $cache;
+		}
+
+		$pattern = '/' . preg_quote( self::CONFIG_BEGIN, '/' ) . '(.*?)' . preg_quote( self::CONFIG_END, '/' ) . '/s';
+		if ( ! preg_match( $pattern, $config, $m ) ) {
+			self::$our_constants_cache = $cache;
+			return $cache;
+		}
+		if ( preg_match_all( "/define\\(\\s*'([A-Z0-9_]+)'/", $m[1], $names ) ) {
+			$cache = $names[1];
+		}
+		self::$our_constants_cache = $cache;
+		return $cache;
+	}
+
+	/**
+	 * Memoized result of our_constants(); null until the block is first read.
+	 *
+	 * @var string[]|null
+	 */
+	private static $our_constants_cache = null;
+
+	/**
+	 * Forget the memoized block scan. Every write that changes the block must
+	 * call this, or the same request keeps answering from the pre-write copy.
+	 */
+	public static function forget_our_constants(): void {
+		self::$our_constants_cache = null;
+	}
+
+	public static function write_wp_config( array $opts, array $force = array() ): bool {
 		$fs = self::fs();
 		$wp_config = ABSPATH . 'wp-config.php';
 		if ( ! $fs || ! file_exists( $wp_config ) || ! $fs->is_writable( $wp_config ) ) {
-			return false;
+			/*
+			 * wp-config.php is read-only on several managed hosts. Fall back to
+			 * a sidecar in wp-content/ -- writable wherever the drop-in itself
+			 * could be installed, so the panel keeps working instead of telling
+			 * the user to paste a snippet by hand. (#398)
+			 */
+			return self::write_sidecar( $opts );
 		}
+
 
 		$config = $fs->get_contents( $wp_config );
 		if ( ! is_string( $config ) ) {
 			return false;
 		}
 
-		$block = self::wp_config_block( $opts );
+		$block = self::wp_config_block( $opts, $force );
 
 		// Replace an existing xSpeed block if present, else insert after <?php.
 		// IMPORTANT: $block is inserted via preg_replace_callback returning it
@@ -604,7 +1075,21 @@ final class Object_Cache {
 			);
 		}
 
-		return (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
+		$written = (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
+		if ( $written ) {
+			// The block just changed; a memoized scan from earlier in this
+			// request would still name the previous set. (#398)
+			self::forget_our_constants();
+
+			// Only NOW is the block durable, so only now is a sidecar left
+			// from an earlier read-only spell safely redundant. Deleting it
+			// before the write -- is_writable() is not a promise the write
+			// lands; get_contents() can fail, and put_contents() can fail on a
+			// full disk or an SELinux denial -- would drop the live config and
+			// leave the site on built-in defaults.
+			self::delete_sidecar();
+		}
+		return $written;
 	}
 
 	/**
@@ -625,7 +1110,15 @@ final class Object_Cache {
 		}
 		$pattern = '/' . preg_quote( self::CONFIG_BEGIN, '/' ) . '.*?' . preg_quote( self::CONFIG_END, '/' ) . "\s*/s";
 		$config  = preg_replace( $pattern, '', $config );
-		return (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
+		$removed = (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
+		if ( $removed ) {
+			// A scan from earlier in this request would still name the
+			// constants we just deleted, so origins() would report a field as
+			// ours -- editable -- when a host define is now the only source
+			// and the field should read as pinned.
+			self::forget_our_constants();
+		}
+		return $removed;
 	}
 
 	/**
@@ -633,35 +1126,130 @@ final class Object_Cache {
 	 * XSPEED_OC_* names (our drop-in reads these first, then falls back to
 	 * WP_REDIS_* for interop).
 	 */
-	private static function wp_config_block( array $opts ): string {
+	private static function wp_config_block( array $opts, array $force = array() ): string {
+		// Fields the caller has decided we own, whatever pinned_elsewhere()
+		// would otherwise say. Used when an admin saved an override: they were
+		// told the host's define would stop applying, and this is the write
+		// that makes that true. (#398)
+		self::$force_fields = $force;
 		$backend = (string) ( $opts['backend'] ?? 'redis' );
 		$lines   = array( self::CONFIG_BEGIN );
 		$lines[] = "define( 'XSPEED_OC_BACKEND', '" . self::esc( $backend ) . "' );";
 
 		if ( 'memcached' === $backend ) {
-			$lines[] = "define( 'XSPEED_OC_HOST', '" . self::esc( self::str( $opts, 'memcached_host', '127.0.0.1' ) ) . "' );";
-			$lines[] = "define( 'XSPEED_OC_PORT', " . self::int( $opts, 'memcached_port', 11211 ) . ' );';
+			// XSPEED_OC_MC_*, not the Redis pair: one shared name meant enabling
+			// Redis overwrote the Memcached host/port. (#398)
+			if ( ! self::pinned_elsewhere( 'memcached_host' ) ) {
+				$lines[] = "define( 'XSPEED_OC_MC_HOST', '" . self::esc( self::str( $opts, 'memcached_host', '127.0.0.1' ) ) . "' );";
+			}
+			if ( ! self::pinned_elsewhere( 'memcached_port' ) ) {
+				$lines[] = "define( 'XSPEED_OC_MC_PORT', " . self::int( $opts, 'memcached_port', 11211 ) . ' );';
+			}
 		} else {
-			$lines[] = "define( 'XSPEED_OC_HOST', '" . self::esc( self::str( $opts, 'redis_host', '127.0.0.1' ) ) . "' );";
-			$lines[] = "define( 'XSPEED_OC_PORT', " . self::int( $opts, 'redis_port', 6379 ) . ' );';
+			if ( ! self::pinned_elsewhere( 'redis_host' ) ) {
+				$lines[] = "define( 'XSPEED_OC_HOST', '" . self::esc( self::str( $opts, 'redis_host', '127.0.0.1' ) ) . "' );";
+			}
+			if ( ! self::pinned_elsewhere( 'redis_port' ) ) {
+				$lines[] = "define( 'XSPEED_OC_PORT', " . self::int( $opts, 'redis_port', 6379 ) . ' );';
+			}
 			$user    = self::str( $opts, 'redis_user', '' );
-			if ( '' !== $user ) {
+			if ( '' !== $user && ! self::pinned_elsewhere( 'redis_user' ) ) {
 				$lines[] = "define( 'XSPEED_OC_USER', '" . self::esc( $user ) . "' );";
 			}
 			$pass    = self::str( $opts, 'redis_password', '' );
-			if ( '' !== $pass ) {
+			if ( '' !== $pass && ! self::pinned_elsewhere( 'redis_password' ) ) {
 				$lines[] = "define( 'XSPEED_OC_PASSWORD', '" . self::esc( $pass ) . "' );";
 			}
-			$lines[] = "define( 'XSPEED_OC_DATABASE', " . self::int( $opts, 'redis_database', 0 ) . ' );';
-			$lines[] = "define( 'XSPEED_OC_TIMEOUT', " . self::int( $opts, 'connection_timeout', 1 ) . ' );';
-			$lines[] = "define( 'XSPEED_OC_PERSISTENT', " . ( ! empty( $opts['persistent'] ) ? 'true' : 'false' ) . ' );';
+			if ( ! self::pinned_elsewhere( 'redis_database' ) ) {
+				$lines[] = "define( 'XSPEED_OC_DATABASE', " . self::int( $opts, 'redis_database', 0 ) . ' );';
+			}
+			if ( ! self::pinned_elsewhere( 'connection_timeout' ) ) {
+				$lines[] = "define( 'XSPEED_OC_TIMEOUT', " . self::int( $opts, 'connection_timeout', 1 ) . ' );';
+			}
+			if ( ! self::pinned_elsewhere( 'persistent' ) ) {
+				$lines[] = "define( 'XSPEED_OC_PERSISTENT', " . ( ! empty( $opts['persistent'] ) ? 'true' : 'false' ) . ' );';
+			}
 		}
-		$prefix = self::str( $opts, 'key_prefix', '' );
-		if ( '' !== $prefix ) {
-			$lines[] = "define( 'XSPEED_OC_SALT', '" . self::esc( $prefix ) . "' );";
+		// Always emit a salt (#390): a blank Cache Key Prefix derives a per-site
+		// value rather than leaving keys unnamespaced, which collides when
+		// several sites share one Redis/Memcached server.
+		//
+		// Unless a foreign define already owns it (#398). Emitting ours would
+		// outrank the host's WP_REDIS_PREFIX, and on an ACL/namespaced Redis a
+		// prefix that does not match the host's exactly means every write is
+		// denied with NOPERM -- so a derived salt there is worse than none.
+		// The host's define IS the namespace in that case, and it is already
+		// non-empty, so the collision #390 closes cannot reopen.
+		if ( ! self::pinned_elsewhere( 'key_prefix' ) ) {
+			$lines[] = "define( 'XSPEED_OC_SALT', '" . self::esc( self::effective_salt( $opts ) ) . "' );";
 		}
 		$lines[] = self::CONFIG_END;
+		self::$force_fields = array();
 		return implode( "\n", $lines ) . "\n";
+	}
+
+	/**
+	 * Fields the current block write owns outright. Set for the duration of one
+	 * wp_config_block() call; see the $force parameter there.
+	 *
+	 * @var string[]
+	 */
+	private static array $force_fields = array();
+
+	/**
+	 * Is this field already pinned by a constant we are not about to write?
+	 *
+	 * Enable() resolves settings through Settings_Manager, so on a
+	 * host-provisioned site those values came FROM wp-config in the first
+	 * place -- typically WP_REDIS_*. Writing them back out under our own
+	 * XSPEED_OC_* names, which outrank every alias, would freeze a snapshot:
+	 * when the host later rotated the password, the site would keep
+	 * authenticating with our stale copy and silently drop to a
+	 * non-persistent cache. It would also re-emit a credential as a second
+	 * plaintext literal, which is the thing sourcing it from a constant
+	 * avoids. So leave the host's define alone and emit nothing for it. (#398)
+	 */
+	private static function pinned_elsewhere( string $field ): bool {
+		if ( in_array( $field, self::$force_fields, true ) ) {
+			return false;
+		}
+		if ( ! class_exists( '\\XSpeed\\Settings_Manager' ) ) {
+			return false;
+		}
+		$module = \XSpeed\Module_Registry::get( 'object-cache' );
+		if ( ! $module ) {
+			return false;
+		}
+
+		// An admin who deliberately overrode this field asked us to shadow the
+		// host's define -- they were told so in as many words before the field
+		// unlocked. Protecting it here would silently drop their value on the
+		// next enable, which is the same silent-no-op failure the whole
+		// pinned-field contract exists to prevent. (#398)
+		if ( \XSpeed\Settings_Manager::is_overridden( 'object-cache', $field ) ) {
+			return false;
+		}
+
+		// Somebody else's define, anywhere in this field's list, is protected --
+		// even when our own XSPEED_OC_* copy currently outranks it. Testing only
+		// the WINNING constant made an override permanent in a subtler way: on
+		// revert we rewrote our copy with the host's value, our copy still
+		// outranked theirs, and a later rotation on their side was shadowed
+		// forever. Emitting nothing for the field lets the host's define surface
+		// again and keep surfacing. (#398)
+		return null !== \XSpeed\Settings_Manager::foreign_constant( 'object-cache', $field );
+	}
+
+	/**
+	 * Is our marker block present in wp-config.php?
+	 *
+	 * Public so a caller can tell "we already manage constants here" from
+	 * "this site never enabled the object cache" -- rewriting the block is
+	 * right in the first case and would be an unasked-for file edit in the
+	 * second. (#398)
+	 */
+	public static function wp_config_has_our_block(): bool {
+		return self::wp_config_has_block();
 	}
 
 	private static function wp_config_has_block(): bool {

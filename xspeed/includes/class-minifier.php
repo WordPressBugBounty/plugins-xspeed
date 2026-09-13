@@ -101,9 +101,20 @@ class Minifier {
 			// the cache file, so it replays on static hits where PHP never
 			// boots.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'delay_raw_script_tags' ), 20 );
+			// The vendors' own install snippets are INLINE (no src at all),
+			// so the src sweep above never sees them; this one parks an
+			// inline body that names a known third-party host.
+			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'delay_inline_snippets' ), 21 );
 		}
 		if ( ! empty( $opts['async_css'] ) ) {
 			add_filter( 'style_loader_tag',  array( Minify_Filters::class, 'async_style_tag' ), 20, 2 );
+			// style_loader_tag only fires for wp_enqueue_style()'d sheets.
+			// Themes print Google/Bunny/Typekit font CSS as literal <link>
+			// markup in the head, so those sheets never reach the filter and
+			// stay render-blocking — sweep the finished buffer for the known
+			// font-CSS hosts. Baked into the cache file, so it replays on
+			// static hits where PHP never boots.
+			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'async_raw_font_css_links' ), 22 );
 		}
 
 		/*
@@ -516,13 +527,32 @@ class Minifier {
 	}
 
 	private static function balanced( string $source, string $minified ): bool {
-		$pairs = array( '(', ')', '{', '}', '[', ']', '`' );
-		foreach ( $pairs as $token ) {
-			if ( substr_count( $source, $token ) !== substr_count( $minified, $token ) ) {
-				return false;
-			}
-		}
-		return true;
+		unset( $source );
+
+		// Judge the OUTPUT, not the difference between input and output.
+		//
+		// This used to compare token counts across the pair, on the stated
+		// assumption that "literal braces inside strings survive minification
+		// unchanged, so they cancel out". Comments do not: stripping them is
+		// the minifier's whole job, and every brace, bracket and backtick
+		// inside one disappears with it. So any file whose comments contain a
+		// delimiter — a commented-out block, a URL in a docblock, an SVG in a
+		// note — failed the check and silently shipped unminified.
+		//
+		// It is not a rare shape. EmbedPress's front.js counts 372 braces
+		// against 368, 61 brackets against 58 and 110 backticks against 102
+		// purely from comment removal, so 67 KB shipped raw where 46 KB was
+		// correct — and `node --check` confirms that rejected output parses
+		// fine. A guard that refuses valid work is not conservative, it is
+		// broken: it costs bytes on every request and reports nothing.
+		//
+		// What the guard is FOR still stands (#2): matthiasmullie/minify can
+		// truncate inside a template literal on complex modern JS and return a
+		// body that looks minified but is structurally broken. That failure is
+		// visible in the output alone — an unterminated literal leaves an odd
+		// backtick count and unmatched braces — which is exactly what
+		// self_consistent() measures, without the false positives.
+		return self::self_consistent( $minified );
 	}
 
 	/**
@@ -568,17 +598,38 @@ class Minifier {
 			array( includes_url(),                 ABSPATH . WPINC ),
 		);
 
+		// The host check above normalised the HOST but not the SCHEME, and the
+		// prefix match below is a plain string compare — so an https asset URL
+		// never matched an http base and the file silently shipped unminified.
+		// That is not a corner case: WP_CONTENT_URL is derived from a stored
+		// option, `plugins_url()` from another, and a site moved to https
+		// without rewriting every row (or one behind a TLS-terminating proxy
+		// where `is_ssl()` reads false) serves https pages off http-rooted
+		// bases all day. Comparing scheme-less is the whole fix; the host
+		// equality test already did the security work of refusing anything
+		// off-site, and this runs after it.
+		$strip_scheme = static function ( string $value ): string {
+			return (string) preg_replace( '#^https?://#i', '//', $value );
+		};
+		$clean_match  = $strip_scheme( $clean );
+
 		foreach ( $candidates as $pair ) {
 			list( $url_base, $path_base ) = $pair;
 			if ( ! $url_base || ! $path_base ) {
 				continue;
 			}
-			$url_base = rtrim( $url_base, '/' );
-			if ( 0 !== strpos( $clean, $url_base . '/' ) && $clean !== $url_base ) {
+			$url_base  = rtrim( $url_base, '/' );
+			$base_match = $strip_scheme( $url_base );
+			if ( 0 !== strpos( $clean_match, $base_match . '/' ) && $clean_match !== $base_match ) {
 				continue;
 			}
 
-			$relative  = ltrim( substr( $clean, strlen( $url_base ) ), '/' );
+			// Slice the scheme-less pair, not the original. `https://…` and
+			// `http://…` differ by one byte, so an offset taken from the base
+			// as written would cut one character short of (or past) the path
+			// when the two schemes disagree — which is the case this fix
+			// exists for.
+			$relative  = ltrim( substr( $clean_match, strlen( $base_match ) ), '/' );
 			$candidate = trailingslashit( $path_base ) . $relative;
 
 			$real_base = realpath( $path_base );
@@ -608,8 +659,14 @@ class Minifier {
 		}
 	}
 
+	/**
+	 * Clear every minified / combined asset.
+	 *
+	 * @return int Files removed. Most callers are `add_action` callbacks and
+	 *             ignore it; `wp xspeed purge` reports it as a line item.
+	 */
 	public static function purge_minified() {
-		self::rmtree_files( self::min_dir() );
+		return self::rmtree_files( self::min_dir() );
 	}
 
 	/**
@@ -620,17 +677,20 @@ class Minifier {
 	 * combined-<hash>.css the regenerated page no longer referenced.
 	 * (FBS-83114 / FBS-83116)
 	 */
-	private static function rmtree_files( string $dir ): void {
+	private static function rmtree_files( string $dir ): int {
 		if ( ! is_dir( $dir ) ) {
-			return;
+			return 0;
 		}
+		$removed = 0;
 		foreach ( (array) glob( $dir . '/*' ) as $path ) {
 			if ( is_dir( $path ) ) {
-				self::rmtree_files( $path );
+				$removed += self::rmtree_files( $path );
 				@rmdir( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir, WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort cleanup of our own cache subdir; WP_Filesystem is unavailable on the frontend purge path.
 				continue;
 			}
 			wp_delete_file( $path );
+			++$removed;
 		}
+		return $removed;
 	}
 }

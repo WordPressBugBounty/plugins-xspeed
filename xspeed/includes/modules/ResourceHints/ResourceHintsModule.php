@@ -57,10 +57,10 @@ final class ResourceHintsModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Resource Hints',
-			'tab_label'    => 'Hints', // its own tab on the Resource Hints page
+			'label'        => __( 'Resource Hints', 'xspeed' ),
+			'tab_label'    => __( 'Hints', 'xspeed' ), // its own tab on the Resource Hints page
 			'icon'         => 'Zap',
-			'description'  => 'Preload the LCP hero image and preconnect to font hosts so the largest element paints sooner.',
+			'description'  => __( 'Preload the LCP hero image and preconnect to font hosts so the largest element paints sooner.', 'xspeed' ),
 			// Host page: Hints (this module) + a Speculation Rules section
 			// (SmartPredict, Pro). SmartPredict prefetches the next page in
 			// the visitor's browser — same family as preload/preconnect, so
@@ -74,47 +74,73 @@ final class ResourceHintsModule extends Module {
 			'enabled'          => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Enable Resource Hints',
-				'description' => 'Master switch for the LCP-image preload + preconnect resource hints. On by default — these are safe, no-config optimizations that help every theme.',
+				'label'       => __( 'Enable Resource Hints', 'xspeed' ),
+				'description' => __( 'Master switch for the LCP-image preload + preconnect resource hints. On by default — these are safe, no-config optimizations that help every theme.', 'xspeed' ),
 			),
 			'lcp_preload'      => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Preload LCP Image',
-				'description' => 'Detect the largest above-the-fold image and emit a <link rel="preload" as="image" fetchpriority="high"> in the head, plus fetchpriority="high" on the image. This is the highest-impact fix for Largest Contentful Paint — it beats any lazy-load the theme applied.',
+				'label'       => __( 'Preload LCP Image', 'xspeed' ),
+				'description' => __( 'Detect the largest above-the-fold image and emit a <link rel="preload" as="image" fetchpriority="high"> in the head, plus fetchpriority="high" on the image. This is the highest-impact fix for Largest Contentful Paint — it beats any lazy-load the theme applied.', 'xspeed' ),
 			),
 			'lcp_image_count'  => array(
 				'type'        => 'int',
 				'default'     => 1,
 				'min'         => 0,
 				'max'         => 3,
-				'label'       => 'Images to Preload',
-				'description' => 'How many of the first images on the page to preload. 1 is right for most sites (the single hero). Raise it only if the fold shows a small gallery.',
+				'label'       => __( 'Images to Preload', 'xspeed' ),
+				'description' => __( 'How many of the first images on the page to preload. 1 is right for most sites (the single hero). Raise it only if the fold shows a small gallery.', 'xspeed' ),
 			),
 			'lcp_exclusions'   => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => 'Exclude From Preload',
-				'description' => 'Substring patterns (filename or class) that, if found in an <img>, exempt it from being treated as the LCP image. Useful for tracking pixels, spacers, or a decorative first image that is not the hero.',
+				'label'       => __( 'Exclude From Preload', 'xspeed' ),
+				'description' => __( 'Substring patterns (filename or class) that, if found in an <img>, exempt it from being treated as the LCP image. Useful for tracking pixels, spacers, or a decorative first image that is not the hero.', 'xspeed' ),
+			),
+			'preload_images'   => array(
+				'type'        => 'list',
+				'default'     => array(),
+				'item_type'   => 'string',
+				'label'       => __( 'Always Preload These Images', 'xspeed' ),
+				'description' => __( 'Image URLs (full or site-relative) to preload with high priority on every page. This is the escape hatch for an LCP image the detector cannot see — most often a hero section\'s CSS background-image, which carries none of the signals the automatic pick reads. Keep it to one or two images: preloading many hands them all top network priority and the page itself loses. The first three entries are used.', 'xspeed' ),
 			),
 			'preconnect'       => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Preconnect to Font Hosts',
-				'description' => 'When Google Fonts are detected, emit <link rel="preconnect"> to fonts.googleapis.com and fonts.gstatic.com so the DNS + TLS handshake happens ahead of the font request instead of on the critical path.',
+				'label'       => __( 'Preconnect to Font Hosts', 'xspeed' ),
+				'description' => __( 'When Google Fonts are detected, emit <link rel="preconnect"> to fonts.googleapis.com and fonts.gstatic.com so the DNS + TLS handshake happens ahead of the font request instead of on the critical path.', 'xspeed' ),
 			),
 			'preconnect_hosts' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'url',
-				'label'       => 'Extra Preconnect Hosts',
-				'description' => 'One origin per line (e.g. https://cdn.example.com) to preconnect in addition to the auto-detected font hosts. Use for a CDN or third-party origin that serves above-the-fold assets.',
+				'label'       => __( 'Extra Preconnect Hosts', 'xspeed' ),
+				'description' => __( 'One origin per line (e.g. https://cdn.example.com) to preconnect in addition to the auto-detected font hosts. Use for a CDN or third-party origin that serves above-the-fold assets.', 'xspeed' ),
 			),
 		);
 	}
 
 	public function boot(): void {
+		/*
+		 * Deferred to `init`. This module reads its own settings to decide
+		 * what to hook, and reading settings builds settings_schema(), whose
+		 * labels are declared through __(). boot() runs on `plugins_loaded`,
+		 * before `after_setup_theme` — the point WordPress 6.7+ treats as the
+		 * earliest safe moment to translate — so doing that here fires
+		 * _load_textdomain_just_in_time on every request AND resolves the
+		 * labels against a domain that is not loaded yet.
+		 *
+		 * Everything below hooks actions that fire after `init`, so running
+		 * one hook later is equivalent.
+		 */
+		add_action( 'init', array( $this, 'boot_on_init' ) );
+	}
+
+	/**
+	 * The real boot body — see boot() for why it runs on `init`.
+	 */
+	public function boot_on_init(): void {
 		// Frontend page renders only. Admin / feed / cron / AJAX / REST never
 		// produce an HTML document we should rewrite.
 		if ( is_admin()
@@ -227,6 +253,7 @@ final class ResourceHintsModule extends Module {
 		\WP_CLI::log( sprintf( '%-20s %s', 'lcp_preload', ! empty( $opts['lcp_preload'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %d', 'lcp_image_count', (int) ( $opts['lcp_image_count'] ?? 1 ) ) );
 		\WP_CLI::log( sprintf( '%-20s %d pattern(s)', 'lcp_exclusions', count( (array) ( $opts['lcp_exclusions'] ?? array() ) ) ) );
+		\WP_CLI::log( sprintf( '%-20s %d url(s)', 'preload_images', count( (array) ( $opts['preload_images'] ?? array() ) ) ) );
 		\WP_CLI::log( sprintf( '%-20s %s', 'preconnect', ! empty( $opts['preconnect'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %d host(s)', 'preconnect_hosts', count( (array) ( $opts['preconnect_hosts'] ?? array() ) ) ) );
 	}

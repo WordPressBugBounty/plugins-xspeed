@@ -35,9 +35,9 @@ final class HeartbeatModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'Heartbeat',
+			'label'       => __( 'Heartbeat', 'xspeed' ),
 			'icon'        => 'Activity',
-			'description' => 'Control the WordPress Heartbeat API per context.',
+			'description' => __( 'Control the WordPress Heartbeat API per context.', 'xspeed' ),
 		);
 	}
 
@@ -61,32 +61,32 @@ final class HeartbeatModule extends Module {
 				'default'       => self::BEHAVIOR_THROTTLE,
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
-				'label'         => 'Dashboard',
-				'description'   => 'Heartbeat behavior on /wp-admin/ screens (autosave, notifications).',
+				'label'         => __( 'Dashboard', 'xspeed' ),
+				'description'   => __( 'Heartbeat behavior on /wp-admin/ screens (autosave, notifications).', 'xspeed' ),
 			),
 			'behavior_editor'    => array(
 				'type'          => 'enum',
 				'default'       => self::BEHAVIOR_THROTTLE,
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
-				'label'         => 'Editor',
-				'description'   => 'Heartbeat in the post / block editor. Disable only if you do not need autosave or co-edit locks.',
+				'label'         => __( 'Editor', 'xspeed' ),
+				'description'   => __( 'Heartbeat in the post / block editor. Disable only if you do not need autosave or co-edit locks.', 'xspeed' ),
 			),
 			'behavior_frontend'  => array(
 				'type'          => 'enum',
 				'default'       => self::BEHAVIOR_DISABLE,
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
-				'label'         => 'Frontend',
-				'description'   => 'Controls the Heartbeat API on the public site. Only takes effect when a plugin or theme actually loads heartbeat on the frontend (e.g. WooCommerce cart fragments, membership/notification plugins) — a default WordPress site loads none there, so this has no visible effect on such sites. Recommended: Disable, to stop the admin-ajax polling those plugins add.',
+				'label'         => __( 'Frontend', 'xspeed' ),
+				'description'   => __( 'Controls the Heartbeat API on the public site. Only takes effect when a plugin or theme actually loads heartbeat on the frontend (e.g. WooCommerce cart fragments, membership/notification plugins) — a default WordPress site loads none there, so this has no visible effect on such sites. Recommended: Disable, to stop the admin-ajax polling those plugins add.', 'xspeed' ),
 			),
 			'frequency'          => array(
 				'type'        => 'int',
 				'default'     => 60,
 				'min'         => 15,
 				'max'         => 300,
-				'label'       => 'Throttle Frequency',
-				'description' => 'Interval in seconds for contexts set to Throttle. 60 is a sane default; lower = faster sync but more requests.',
+				'label'       => __( 'Throttle Frequency', 'xspeed' ),
+				'description' => __( 'Interval in seconds for contexts set to Throttle. 60 is a sane default; lower = faster sync but more requests.', 'xspeed' ),
 			),
 		);
 	}

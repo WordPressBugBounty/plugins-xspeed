@@ -33,9 +33,9 @@ final class CacheCoverageModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Advanced Cache',
+			'label'        => __( 'Advanced Cache', 'xspeed' ),
 			'icon'         => 'Layers',
-			'description'  => 'Cache 404s, search, feeds, and the REST API, plus custom rules and maintenance bypass.',
+			'description'  => __( 'Cache 404s, search, feeds, and the REST API, plus custom rules and maintenance bypass.', 'xspeed' ),
 			'custom_panel' => 'CacheCoveragePanel',
 		);
 	}

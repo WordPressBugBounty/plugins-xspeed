@@ -234,6 +234,33 @@ final class Score_Store {
 	}
 
 	/**
+	 * The most recent SUCCESSFUL run, straight from the table.
+	 *
+	 * Score::latest() used to scan the capped history window for the first
+	 * `ok` row, which meant a run of failures could push the last real audit
+	 * out of the window and leave the site reporting no score at all — the
+	 * exact outcome the optimize report exists to prevent, and most likely on
+	 * the sites with no PSI key, since the shared quota refuses often.
+	 * Asking the store for the newest `ok` row cannot be crowded out.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public static function latest_ok(): ?array {
+		global $wpdb;
+
+		if ( ! self::has_db() ) {
+			return null;
+		}
+
+		$table = self::table();
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- own table, no user input in the query.
+		$row = $wpdb->get_row( "SELECT * FROM {$table} WHERE ok = 1 ORDER BY ran_at DESC, id DESC LIMIT 1", ARRAY_A );
+
+		return is_array( $row ) ? self::to_run( $row ) : null;
+	}
+
+	/**
 	 * Whether a run with this provider + timestamp is already stored.
 	 *
 	 * The Hub is polled repeatedly while a test runs, and the finished result

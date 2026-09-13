@@ -377,7 +377,10 @@ final class Preloader {
 			return;
 		}
 
-		if ( ! preg_match_all( '#<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\'][^>]*>#i', $html, $m, PREG_SET_ORDER ) ) {
+		// Match any <img>, not only one carrying `src`. The URL worth warming
+		// may live in a lazy attribute instead — which is the whole point of
+		// #328 — and resolvable_image_url() below is what knows where to look.
+		if ( ! preg_match_all( '#<img\b[^>]*>#i', $html, $m, PREG_SET_ORDER ) ) {
 			return;
 		}
 
@@ -386,11 +389,28 @@ final class Preloader {
 		foreach ( $m as $tag ) {
 			// Only tags MISSING a dimension are worth resolving — one that
 			// already declares both needs nothing.
-			if ( preg_match( '#\bwidth\s*=#i', $tag[0] ) && preg_match( '#\bheight\s*=#i', $tag[0] ) ) {
+			// Same lookbehind as Lazy_Loader::ensure_dimensions(): a bare
+			// `\bwidth=` also matches `data-width=`, so a slider carrying its
+			// own metadata looked already-sized and was skipped from warming.
+			// The two must agree, or the collector skips exactly the tags the
+			// renderer still needs measured. (#333 review round 3, issue 2)
+			if ( preg_match( '#(?<![-\w])width\s*=#i', $tag[0] ) && preg_match( '#(?<![-\w])height\s*=#i', $tag[0] ) ) {
 				continue;
 			}
-			$src = $tag[1];
-			if ( ! preg_match( '#^https?://#i', $src ) ) {
+			// Ask the same resolver the render path uses, rather than reading
+			// `src` directly. A slider parks a spacer in `src` and the real
+			// URL in `data-lazy`/`data-src`/`data-original`, so a collector
+			// looking only at `src` warmed the SPACER and never the image —
+			// leaving remotely-hosted slider images unresolvable at render
+			// time, the exact markup #328 is about. (#333 review round 2,
+			// issue 3)
+			// `false`: do not let the resolver settle a name-refused URL by
+			// MEASURING it. That is circular here — remote measurement is
+			// gated until warm_dimensions() sets $warming, and this collector
+			// is what feeds warm_dimensions(). Take the URL the tag offers and
+			// let the warm pass decide. (#333 review round 3, issue 3)
+			$src = Lazy_Loader::resolvable_image_url( $tag[0], false );
+			if ( '' === $src || ! preg_match( '#^https?://#i', $src ) ) {
 				continue;
 			}
 			$host = wp_parse_url( $src, PHP_URL_HOST );

@@ -115,7 +115,17 @@ final class Host {
 	 * decision about shared WordPress state on the user's behalf.
 	 */
 	public static function enable_page_cache(): ?string {
-		$state = Cache::toggle( true );
+		/*
+		 * Not consented, deliberately. A host plugin calling this is acting
+		 * on its OWN user's click in its own onboarding — nobody has been
+		 * shown whose advanced-cache.php is about to be replaced, which is
+		 * the disclosure that makes a takeover legitimate in the dashboard.
+		 *
+		 * So a competitor's drop-in comes back as a reason the host can
+		 * render, exactly as it did before, and the takeover stays something
+		 * the site owner does knowingly in xSpeed's own UI.
+		 */
+		$state = Cache::toggle( true, false );
 
 		if ( ! empty( $state['blocked'] ) ) {
 			return is_string( $state['blocked_reason'] ) && '' !== $state['blocked_reason']

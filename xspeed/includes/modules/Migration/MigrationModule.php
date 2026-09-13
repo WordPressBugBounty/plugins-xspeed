@@ -27,9 +27,9 @@ final class MigrationModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Migration',
+			'label'        => __( 'Migration', 'xspeed' ),
 			'icon'         => 'Import',
-			'description'  => 'Import settings from WP Rocket, W3 Total Cache, or WP Super Cache.',
+			'description'  => __( 'Import settings from WP Rocket, W3 Total Cache, or WP Super Cache.', 'xspeed' ),
 			'custom_panel' => 'MigrationPanel',
 		);
 	}
@@ -1134,6 +1134,19 @@ final class MigrationModule extends Module {
 		$network_wide = is_multisite() && is_plugin_active_for_network( $file );
 		deactivate_plugins( $file, false, $network_wide );
 
+		/*
+		 * The source's teardown just rewrote the very state the detector
+		 * memoizes for the request -- WP Rocket truncates advanced-cache.php
+		 * to 0 bytes and W3TC strips WP_CACHE, both from inside the call
+		 * above. Without dropping the memo, restore_own_environment() asks a
+		 * report taken while the source still held the field, sees "foreign",
+		 * and refuses -- so the handover deactivated the source and then
+		 * declined to take over, which is the outcome #391 describes.
+		 */
+		if ( class_exists( '\\XSpeed\\Page_Cache_Detector' ) ) {
+			\XSpeed\Page_Cache_Detector::invalidate();
+		}
+
 		return ! is_plugin_active( $file );
 	}
 
@@ -1151,20 +1164,34 @@ final class MigrationModule extends Module {
 	 * slow in-PHP path — measured at 78ms vs 16ms TTFB on an otherwise
 	 * identical request.
 	 *
-	 * Only runs when the user has caching ON, and only re-asserts what we
-	 * already own, so it cannot resurrect a cache the user turned off.
-	 * (#218, #219)
+	 * Runs at exactly one moment -- the user asked to import from another
+	 * plugin AND switch it off, and we just switched it off -- so it turns
+	 * caching ON rather than only re-asserting an existing setting. It used
+	 * to return early unless cache_enabled was already set, which it almost
+	 * never is here: the site was being cached by the plugin we just
+	 * deactivated. That is how a migration could end with the source gone
+	 * and nothing serving. (#218, #219, #391)
+	 *
+	 * Not a licence to trample: toggle() still refuses on an occupied field,
+	 * so a page cache we were not asked to replace is left alone.
 	 */
 	private function restore_own_environment(): void {
 		if ( ! class_exists( '\\XSpeed\\Cache' ) || ! class_exists( '\\XSpeed\\Settings' ) ) {
 			return;
 		}
 
-		$opts = \XSpeed\Settings::get();
-		if ( empty( $opts['cache_enabled'] ) ) {
-			return;
-		}
-
+		/*
+		 * Turn caching ON, rather than only re-asserting it when it was
+		 * already on. This runs at exactly one moment: the user asked us to
+		 * import from another plugin AND switch it off, and we just did. A
+		 * handover that ends with the old cache gone and no new one is not a
+		 * handover -- and cache_enabled is nearly always empty here, because
+		 * the site was being cached by the plugin we just deactivated. That
+		 * early return is why #391 ended with nothing serving.
+		 *
+		 * toggle() still refuses if the field is genuinely occupied, so this
+		 * cannot trample a cache we were not asked to replace.
+		 */
 		\XSpeed\Cache::toggle( true );
 	}
 
@@ -1276,6 +1303,13 @@ final class MigrationModule extends Module {
 					if ( $this->deactivate_source( $src ) ) {
 						\WP_CLI::log( sprintf( 'Deactivated %s.', $src ) );
 						$still_on = false;
+						// Same handover the REST route performs. Without it
+						// the CLI switched the source off and stopped there,
+						// leaving the husk of its drop-in and no page cache
+						// at all -- reported as "Success: Import complete."
+						// CLI and REST must not disagree about what
+						// --deactivate-source means. (#391)
+						$this->restore_own_environment();
 					} else {
 						\WP_CLI::warning( sprintf( 'Could not deactivate %s.', $src ) );
 					}

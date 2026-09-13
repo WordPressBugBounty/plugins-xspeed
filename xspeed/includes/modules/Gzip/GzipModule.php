@@ -32,10 +32,10 @@ final class GzipModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Compression',
-			'tab_label'    => 'GZIP', // its own tab on the Compression page
+			'label'        => __( 'Compression', 'xspeed' ),
+			'tab_label'    => __( 'GZIP', 'xspeed' ), // its own tab on the Compression page
 			'icon'         => 'Layers',
-			'description'  => 'Compress responses to reduce transfer size.',
+			'description'  => __( 'Compress responses to reduce transfer size.', 'xspeed' ),
 			// Host panel merges GZIP (this module) + Brotli (Pro) into one
 			// page — they are one decision with a fallback chain, not two
 			// sidebar rows (FBS-83633). The panel renders this module's own
@@ -49,7 +49,7 @@ final class GzipModule extends Module {
 			'gzip_enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => 'Enable GZIP Compression',
+				'label'       => __( 'Enable GZIP Compression', 'xspeed' ),
 				// Server-conditional. The old copy said "On nginx the snippet
 				// below must be added to your server config" — unconditionally,
 				// and there is no snippet below: the Compression page is a tab

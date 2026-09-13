@@ -15,6 +15,15 @@ xspeed_uninstall_cleanup();
  * Run all uninstall cleanup. Wrapped in a function so locals don't pollute global scope.
  */
 function xspeed_uninstall_cleanup() {
+	/*
+	 * Everything here is ours to delete. `wpdeveloper_xspeed_offer` is NOT — it
+	 * is the site's answer about whether it wants this plugin, written by
+	 * whichever WPDeveloper plugin offered it. Removing xSpeed is itself an
+	 * answer — the siblings read it as one, from that row plus the absent plugin
+	 * files. Deleting it here would make every one of them offer xSpeed again to
+	 * the user who just took it off.
+	 * See docs/guides/installing-from-another-plugin.md.
+	 */
 	delete_option( 'xspeed_options' );
 
 	/*
@@ -40,6 +49,9 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_activity_log' );
 	delete_option( 'xspeed_server_type' );
 	delete_option( 'xspeed_oc_dropin_synced' );
+	delete_option( 'xspeed_oc_generation' );
+	delete_option( 'xspeed_oc_sync_attempts' );
+	delete_option( 'xspeed_overridden_constants' );
 	delete_option( 'xspeed_last_mobile_separate' );
 	delete_option( 'xspeed_redirect_to_onboarding' );
 	delete_option( 'xspeed_onboarding_complete' );

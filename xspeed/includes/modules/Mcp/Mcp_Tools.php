@@ -30,6 +30,7 @@ use XSpeed\Server;
 use XSpeed\Admin;
 use XSpeed\Settings;
 use XSpeed\Settings_Manager;
+use XSpeed\Module_Registry;
 use XSpeed\Pro_Audit;
 use XSpeed\Cache_Benchmark;
 use XSpeed\Tier_Registry;
@@ -40,7 +41,7 @@ defined( 'ABSPATH' ) || exit;
 final class Mcp_Tools {
 
 	/** Valid cache purge types. */
-	public const PURGE_TYPES = array( 'all', 'page', 'assets', 'object', 'rest' );
+	public const PURGE_TYPES = array( 'all', 'page', 'assets', 'object', 'rest', 'cloudflare', 'cdn' );
 
 	/**
 	 * Per-call read-only override. Null means "defer to the pairing token's
@@ -145,7 +146,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'get_site_info' ),
 			),
 			'optimize_site'    => array(
-				'description' => 'Make this site faster, end to end: measure, apply the recommended settings ONE AT A TIME, check the page still renders after each, and undo any change that breaks it. Returns what was applied, the site\'s last recorded score, `next_steps` (riskier settings that could help but are NOT applied automatically), and `unfixable` (problems no caching plugin can reach). ALWAYS relay all three to the user: report the score and what is still wrong, then — if `next_steps` is non-empty — describe each one WITH its stated `risk` and ASK whether to run again with aggressiveness "aggressive". Never enable aggressive settings without the user agreeing first, and never present `unfixable` items as things you can solve; they need the site owner or the host. A site where nothing was left to do is a real, good answer — say so plainly rather than apologising or retrying. Use `dry_run` to preview the plan.',
+				'description' => 'Make this site faster, end to end: measure, apply the recommended settings ONE AT A TIME, check the page still renders after each, and undo any change that breaks it. Returns what was applied, the site\'s performance score, `next_steps` (riskier settings that could help but are NOT applied automatically), and `unfixable` (problems no caching plugin can reach). ALWAYS relay all three to the user: report the score and what is still wrong, then — if `next_steps` is non-empty — describe each one WITH its stated `risk` and ASK whether to run again with aggressiveness "aggressive". Never enable aggressive settings without the user agreeing first, and never present `unfixable` items as things you can solve; they need the site owner or the host. A site where nothing was left to do is a real, good answer — say so plainly rather than apologising or retrying. Use `dry_run` to preview the plan. The `score` object carries `age_seconds` and `stale`: quote the score WITH how recently it was measured, and never describe a stale score as the result this run produced — when a measurement could not be taken, say the number is old rather than implying it is current. WHEN CHANGES WERE APPLIED the response carries `verify_urls` and `verify_note`: the safety checks read HTML in PHP and cannot execute JavaScript, so a page can pass every one of them and still be broken in a browser. Before reporting success, OPEN each URL in `verify_urls` if you have any way to load a page and confirm it renders with no console errors; if you cannot, tell the user those URLs need checking and what a problem would look like. `verified: true` means the HTML checks passed — it is not a statement that the site works.',
 				'inputSchema' => self::object_schema(
 					array(
 						'aggressiveness' => array(
@@ -156,6 +157,22 @@ final class Mcp_Tools {
 						'dry_run'        => array(
 							'type'        => 'boolean',
 							'description' => 'Return the plan without changing anything.',
+						),
+						'measure_score'  => array(
+							'type'        => 'string',
+							'enum'        => array( 'auto', 'never', 'always' ),
+							'description' => 'Whether to take a fresh PageSpeed measurement. auto (default) measures when the stored score is stale and after changes land; never reuses the stored score; always measures even for a dry run. Measurements are rate-limited, so a run inside the cooldown returns the stored score with its age rather than a new one.',
+						),
+						'target_score'   => array(
+							'type'        => 'integer',
+							'minimum'     => 1,
+							'maximum'     => 100,
+							'description' => 'Repeat the optimize cycle toward this score instead of running a single pass. Each round costs a real PageSpeed measurement and up to two minutes, so pass it only when the user asked for a specific number. Requires the iterative tuner; without it the run is a single pass and the report says so in `stopped_because`. The run also stops early when further rounds stop helping — either way, read `stopped_because` and relay it rather than retrying.',
+						),
+						'max_rounds'     => array(
+							'type'        => 'integer',
+							'minimum'     => 1,
+							'description' => 'Ceiling on rounds when target_score is set. Clamped to what the tuner allows.',
 						),
 					),
 					array()
@@ -176,7 +193,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'get_pro_audit' ),
 			),
 			'purge_cache'      => array(
-				'description' => 'Purge the site cache. "type" selects what to purge: all, page, assets, object, or rest. Defaults to all.',
+				'description' => 'Purge the site cache and report what was actually cleared, what was skipped and why. "type" selects what to purge: all, page, assets, object, rest, cloudflare, or cdn. Defaults to all.',
 				'inputSchema' => self::object_schema(
 					array(
 						'type' => array(
@@ -280,7 +297,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'start_preloader' ),
 			),
 			'run_score'        => array(
-				'description' => 'Run an external performance audit (PageSpeed Insights, or GTmetrix when configured) against this site and return the score plus Core Web Vitals. Available on every install. Spends the site\'s own configured API quota. Use get_score_history to read past runs without starting a new one.',
+				'description' => 'Run an external performance audit (PageSpeed Insights, or GTmetrix when configured) against this site. Running it counts as the opt-in for external scores. With the site\'s own API key the score plus Core Web Vitals come back in the response; a keyless PageSpeed audit on a Hub-connected site is queued instead — the response says so, and the result lands in the history a minute or two later (poll with run_command "score status", or read get_score_history). Spends the site\'s own configured API quota when a key is set.',
 				'inputSchema' => self::object_schema(
 					array(
 						'target'   => array(
@@ -318,7 +335,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'run_score' ),
 			),
 			'run_pagespeed'    => array(
-				'description' => 'Run an external performance audit (PageSpeed Insights, or GTmetrix when configured) and return the score + Core Web Vitals. Defaults to the site home page, mobile strategy. Requires external scores to be enabled in settings — the plugin makes no outbound calls otherwise.',
+				'description' => 'Run an external performance audit (PageSpeed Insights, or GTmetrix when configured) and return the score + Core Web Vitals. Defaults to the site home page, mobile strategy. Running it counts as the opt-in for external scores; a keyless PageSpeed audit routes through xSpeed Hub when the site is connected.',
 				'inputSchema' => self::object_schema(
 					array(
 						'url'      => array(
@@ -620,6 +637,7 @@ final class Mcp_Tools {
 			'run_pagespeed'     => 'xspeed psi',
 			'get_health'        => 'xspeed health',
 			'get_score_history' => 'xspeed score',
+			'purge_cache'       => 'xspeed purge',
 		);
 
 		$commands = Cli_Bridge::commands();
@@ -1158,12 +1176,27 @@ final class Mcp_Tools {
 	 * @return array<string,mixed>|\WP_Error
 	 */
 	public static function optimize_site( array $args = array() ) {
-		return \XSpeed\Optimize_Runner::run(
-			array(
-				'aggressiveness' => (string) ( $args['aggressiveness'] ?? 'standard' ),
-				'dry_run'        => (bool) ( $args['dry_run'] ?? false ),
-			)
+		$run = array(
+			'aggressiveness' => (string) ( $args['aggressiveness'] ?? 'standard' ),
+			'dry_run'        => (bool) ( $args['dry_run'] ?? false ),
+			'measure_score'  => (string) ( $args['measure_score'] ?? 'auto' ),
 		);
+
+		// Tuning arguments are forwarded ONLY when present, and are not
+		// understood by Free — a listener on `xspeed_optimize_report` reads
+		// them from that filter's `$context`. Passing them through rather
+		// than naming them in the array above is deliberate: this handler
+		// builds an explicit whitelist, so an argument it does not list is
+		// silently dropped. A caller asking to reach a score would have got a
+		// single pass and a success response — wrong behaviour with no error,
+		// which is the expensive kind to diagnose.
+		foreach ( array( 'target_score', 'max_rounds' ) as $key ) {
+			if ( isset( $args[ $key ] ) && is_numeric( $args[ $key ] ) ) {
+				$run[ $key ] = (int) $args[ $key ];
+			}
+		}
+
+		return \XSpeed\Optimize_Runner::run( $run );
 	}
 
 	/**
@@ -1213,10 +1246,41 @@ final class Mcp_Tools {
 		// Named source, not the default "manual": the purge log's whole job
 		// is to let an admin see that the cache cleared because an assistant
 		// asked, not because someone clicked.
-		$count = Cache::purge_type( $type, __( 'AI assistant', 'xspeed' ) );
+		$cause = __( 'AI assistant', 'xspeed' );
+
+		/*
+		 * `page`, `assets` and `rest` are fine-grained slices of the local
+		 * sweep with no target of their own, and they predate this tool's
+		 * per-store report — an assistant asking for `page` means the HTML,
+		 * not the HTML plus the minified bundles plus every purge listener.
+		 * They stay on purge_type() so their meaning does not change under
+		 * callers already relying on it.
+		 *
+		 * Everything else routes through the runner — the same core function
+		 * the CLI and the REST callback use — so an assistant told "cache
+		 * cleared" is reading the same per-store verdict a human would get,
+		 * including a Cloudflare zone that refused the purge.
+		 */
+		if ( in_array( $type, array( 'page', 'assets', 'rest' ), true ) ) {
+			return array(
+				'purged' => $type,
+				'count'  => Cache::purge_type( $type, $cause ),
+				'ok'     => true,
+				'stats'  => Cache::get_stats(),
+			);
+		}
+
+		$report = \XSpeed\Purge_Runner::run( array( $type ), $cause );
+		$count  = 0;
+		foreach ( $report['types'] as $row ) {
+			$count += (int) $row['entries'];
+		}
+
 		return array(
 			'purged' => $type,
 			'count'  => $count,
+			'ok'     => $report['ok'],
+			'report' => $report['types'],
 			'stats'  => Cache::get_stats(),
 		);
 	}
@@ -1498,11 +1562,24 @@ final class Mcp_Tools {
 	 */
 	private static function inspect_or_error( string $module, array $values ) {
 		$report = Settings_Manager::inspect_input( $module, $values );
-		if ( empty( $report['unknown'] ) && empty( $report['invalid'] ) ) {
+		if ( empty( $report['unknown'] ) && empty( $report['invalid'] ) && empty( $report['locked'] ) ) {
 			return true;
 		}
 
 		$parts = array();
+		// A field pinned by a wp-config.php constant cannot be written. Say so
+		// rather than returning a success the agent relays as "changed" over a
+		// write that update() would silently drop. (#398)
+		foreach ( $report['locked'] as $key ) {
+			$spec     = ( Module_Registry::get( $module ) ? Module_Registry::get( $module )->settings_schema()[ $key ] ?? array() : array() );
+			$constant = Settings_Manager::effective_constant( $module, $key, is_array( $spec ) ? $spec : array() );
+			$parts[]  = sprintf(
+				/* translators: 1: setting key, 2: wp-config.php constant name. */
+				__( '"%1$s" is defined in wp-config.php as %2$s and cannot be changed here', 'xspeed' ),
+				$key,
+				(string) $constant
+			);
+		}
 		foreach ( $report['unknown'] as $key ) {
 			$detail = sprintf(
 				/* translators: 1: setting key, 2: module slug. */
@@ -1545,6 +1622,7 @@ final class Mcp_Tools {
 				'status'          => 400,
 				'refused_unknown' => $report['unknown'],
 				'refused_invalid' => $report['invalid'],
+				'refused_locked'  => $report['locked'],
 				'would_apply'     => $report['applied'],
 			)
 		);

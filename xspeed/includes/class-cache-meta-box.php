@@ -89,6 +89,34 @@ final class Cache_Meta_Box {
 			<?php esc_html_e( 'Override the global cache expiry for this post (1–720 hours). Leave at 0 to inherit the site default.', 'xspeed' ); ?>
 		</p>
 		<?php
+		self::render_purge_action( $post );
+	}
+
+	/**
+	 * "Purge this post's cache" under the rules.
+	 *
+	 * Shown only for a published, publicly viewable post — a draft has no
+	 * cached page to clear, so the button could only ever report that it
+	 * removed nothing. It leaves the editor rather than submitting the post
+	 * form, so an unsaved draft is never silently published by a purge.
+	 */
+	private static function render_purge_action( \WP_Post $post ): void {
+		if ( ! Purge_Ui::user_can_purge() ) {
+			return;
+		}
+		if ( '' === Purge_Ui::permalink_of( (int) $post->ID ) ) {
+			return;
+		}
+		?>
+		<p style="margin:14px 0 0;padding-top:12px;border-top:1px solid #dcdcde;">
+			<a href="<?php echo esc_url( Purge_Ui::post_purge_link( (int) $post->ID ) ); ?>" class="button button-secondary">
+				<?php esc_html_e( 'Purge this post’s cache', 'xspeed' ); ?>
+			</a>
+		</p>
+		<p style="font-size:12px;color:#666;margin:6px 0 0;">
+			<?php esc_html_e( 'Clears this post and the pages that list it — the homepage, its archive and the neighbouring posts. The rest of the site keeps its cache.', 'xspeed' ); ?>
+		</p>
+		<?php
 	}
 
 	/**

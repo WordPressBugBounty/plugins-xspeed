@@ -54,11 +54,14 @@ final class Optimize_Diagnosis {
 	 *     human_fixable:array<int,array<string,mixed>>
 	 * }
 	 */
-	public static function build( array $settings ): array {
+	public static function build( array $settings, ?array $score = null ): array {
 		$opportunities = self::routed_opportunities( $settings );
 
 		return array(
-			'score'         => self::latest_score(),
+			// A caller that already measured passes its result in rather than
+			// letting this re-read history — that is what makes a post-run
+			// score describe the site the run just changed. (#306)
+			'score'         => null === $score ? self::latest_score() : $score,
 			'agent_fixable' => array_merge( self::agent_fixable( $settings ), $opportunities['agent'] ),
 			'human_fixable' => array_merge( self::human_fixable(), $opportunities['human'] ),
 		);
@@ -217,15 +220,195 @@ final class Optimize_Diagnosis {
 	}
 
 	/**
+	 * How old a stored score may be before it is worth spending a measurement.
+	 *
+	 * Six hours. Short enough that a score quoted after an optimize run
+	 * reflects the site as it is now, long enough that the repeated calls an
+	 * assistant makes while working on one site reuse a single measurement
+	 * rather than one each.
+	 */
+	public const STALE_AFTER = 6 * HOUR_IN_SECONDS;
+
+	/**
+	 * Shortest gap between two measurements this class will start.
+	 *
+	 * The cooldown, not the staleness window, is what bounds spend. An agent
+	 * that calls optimize_site in a loop would otherwise start a PSI run per
+	 * call and drain the account's quota in a minute — the exact cost the
+	 * original "read from history" comment was written to avoid. Staleness
+	 * decides whether a fresh number is WANTED; this decides whether one is
+	 * ALLOWED.
+	 */
+	public const MEASURE_COOLDOWN = 15 * MINUTE_IN_SECONDS;
+
+	/** Transient holding the timestamp of the last measurement we started. */
+	private const COOLDOWN_KEY = 'xspeed_optimize_measured_at';
+
+	/**
+	 * Measure now, if a measurement is both wanted and affordable.
+	 *
+	 * Returns the same shape as `latest_score()` so callers can treat a fresh
+	 * and a stored score identically — the difference is visible in
+	 * `age_seconds`, never in the structure.
+	 *
+	 * A failure here is deliberately NOT fatal. A missing API key, a quota
+	 * refusal or a timeout means we fall back to the stored score, which is
+	 * the behaviour this method replaced; a run that would have succeeded must
+	 * not start failing because the score service is down.
+	 *
+	 * @param bool $force        Skip the staleness check AND the cooldown — an
+	 *                           explicit "measure now" from
+	 *                           `--measure-score=always` or a multi-round
+	 *                           tuner. Requires `score.enabled`: nothing
+	 *                           bypasses that.
+	 * @param bool $assume_stale Skip only the staleness check, keeping the
+	 *                           cooldown. For the post-apply path, where
+	 *                           changes just landed so the stored score is
+	 *                           known to describe a site that no longer
+	 *                           exists — but the caller did not ask to spend
+	 *                           a measurement. Passing $force there billed
+	 *                           every applying run against the quota the
+	 *                           cooldown exists to protect. (#306 QA issue 1)
+	 * @return array<string,mixed>|null
+	 */
+	public static function measure_fresh( bool $force = false, bool $assume_stale = false ): ?array {
+		$stored = self::latest_score();
+
+		if ( ! $force && ! $assume_stale && is_array( $stored ) && empty( $stored['stale'] ) ) {
+			return $stored;
+		}
+
+		if ( ! class_exists( '\XSpeed\Score' ) ) {
+			return $stored;
+		}
+
+		$opts = Settings_Manager::get( 'score' );
+
+		// External scores are OFF unless the site owner turned them on, and
+		// that is the only thing standing between this plugin and a third
+		// party. readme.txt promises "if the feature is left off — which is
+		// the default — no request is ever made", and the dashboard repeats
+		// it on screen.
+		//
+		// This call site read `psi_api_key`, `test_url` and `default_strategy`
+		// out of the Score settings and then never looked at `enabled`, so an
+		// optimize run sent the site's address to Google on a site configured
+		// never to contact anyone — including sites set up for GTmetrix. Every
+		// other PSI caller checks it (ScoreModule::rest_run,
+		// ScoreModule's CLI). (QA #306, issue 1)
+		if ( empty( $opts['enabled'] ) ) {
+			return $stored;
+		}
+
+		// Measure with the provider the OWNER chose, or not at all.
+		//
+		// This method only knows how to run PSI, which answers synchronously.
+		// GTmetrix does not: start_gtmetrix() returns a pending marker and the
+		// result arrives later via poll_gtmetrix(), so there is no score to
+		// hand back inside one run. Ignoring the setting meant a site
+		// configured for GTmetrix — with no Google key at all — still had its
+		// address sent to Google, and that PSI result then became the headline
+		// score on the dashboard, displacing the GTmetrix history the owner
+		// set up. Every other part of the plugin honours `provider`; this call
+		// site never read it. (#306 QA issue 2)
+		//
+		// Falling back to the stored score is the same degradation this method
+		// already applies to a refused or failed measurement: the run still
+		// reports a number, with its age attached, and says nothing it cannot
+		// support.
+		// Skip only on an AFFIRMATIVE non-PSI choice. `??` alone catches null
+		// but not an empty string, `false`, or a case variant — and a blank
+		// `provider` in the option row (a hand-edited row, a partial
+		// migration, an older schema) would then disable post-run measurement
+		// permanently, with no diagnostic. Unset or empty means "the default",
+		// and the default is PSI.
+		$provider = strtolower( trim( (string) ( $opts['provider'] ?? '' ) ) );
+		if ( '' !== $provider && 'psi' !== $provider ) {
+			return $stored;
+		}
+
+		// The cooldown stops two runs racing into a paid measurement, but it
+		// must not silence an EXPLICIT request. `$force` is what
+		// `--measure-score=always` and a multi-round tuner send, and applying
+		// the full 15 minutes there meant round 2 reused round 1's number
+		// while the summary said "measured just now" — so a tuner planned its
+		// next round from before-the-first-round data and concluded its own
+		// changes had achieved nothing. (QA #306, issue 2)
+		//
+		// The quota protection is not traded away, because `$force` is not
+		// something a caller drifts into: it comes only from
+		// `--measure-score=always` — a person or a tuner saying "measure now"
+		// on purpose. The default path (`auto`) still waits the full cooldown,
+		// which is what an agent looping on optimize_site actually hits.
+		if ( ! $force && get_transient( self::COOLDOWN_KEY ) ) {
+			return $stored;
+		}
+
+		$api_key = (string) ( $opts['psi_api_key'] ?? '' );
+
+		/**
+		 * Filter whether an optimize run may start a fresh measurement.
+		 *
+		 * Without a key PSI still answers, but on a shared unauthenticated
+		 * quota that a busy host can exhaust for everyone on the IP. Sites
+		 * that would rather never spend a measurement here can return false.
+		 *
+		 * @since 1.2.0
+		 *
+		 * @param bool   $allowed Whether to measure.
+		 * @param string $api_key The configured PSI key, empty if none.
+		 */
+		if ( ! apply_filters( 'xspeed_optimize_may_measure', true, $api_key ) ) {
+			return $stored;
+		}
+
+		// Set the cooldown BEFORE the request, not after. PSI takes up to a
+		// minute; two calls arriving inside that window would both see no
+		// transient and both spend a measurement.
+		set_transient( self::COOLDOWN_KEY, time(), self::MEASURE_COOLDOWN );
+
+		// Measure what the site is configured to measure. Both this and the
+		// Score module's own runs write to the SAME history, so hardcoding
+		// the home page on mobile filed a result the dashboard then showed
+		// as the site's latest score — silently replacing the desktop or
+		// custom-URL audit the owner had set up (#306 review, issue 3).
+		$test_url = trim( (string) ( $opts['test_url'] ?? '' ) );
+		if ( '' === $test_url ) {
+			$test_url = (string) home_url( '/' );
+		}
+
+		$strategy = (string) ( $opts['default_strategy'] ?? 'mobile' );
+		if ( ! in_array( $strategy, array( 'mobile', 'desktop' ), true ) ) {
+			$strategy = 'mobile';
+		}
+
+		$row = Score::run_psi( $test_url, $strategy, $api_key );
+
+		if ( empty( $row['ok'] ) ) {
+			return $stored;
+		}
+
+		return self::latest_score();
+	}
+
+	/**
 	 * The most recent stored audit, reduced to the numbers that decide a score.
 	 *
-	 * Read from history rather than run fresh: an optimize run should not
-	 * silently spend someone's PageSpeed allowance, and a score from this
-	 * morning is enough to say what is wrong.
+	 * Reads history only — it never measures. That was once the whole policy,
+	 * on the reasoning that an optimize run should not silently spend someone's
+	 * PageSpeed allowance and a score from this morning is enough to say what
+	 * is wrong. The first half still holds and is why `measure_fresh()` is
+	 * cooldown-bound rather than unconditional. The second half did not: on a
+	 * site whose last audit was two weeks old, a run applied changes and then
+	 * quoted the old number as its result, which reads as a claim the run had
+	 * produced it.
+	 *
+	 * So this stayed the cheap path, `measure_fresh()` became the honest one,
+	 * and `age_seconds` / `stale` here let every caller tell them apart.
 	 *
 	 * @return array<string,mixed>|null
 	 */
-	private static function latest_score(): ?array {
+	public static function latest_score(): ?array {
 		if ( ! class_exists( '\XSpeed\Score' ) ) {
 			return null;
 		}
@@ -252,11 +435,20 @@ final class Optimize_Diagnosis {
 			);
 		}
 
+		// Age travels WITH the score, always. A number quoted without it is how
+		// a two-week-old 77 gets relayed as the result of a run that just
+		// finished — the reading is not wrong so much as unanswerable, because
+		// nothing in the payload said when it was true.
+		$ran_at = isset( $latest['ts'] ) && is_numeric( $latest['ts'] ) ? (int) $latest['ts'] : null;
+		$age    = null === $ran_at ? null : max( 0, time() - $ran_at );
+
 		return array(
-			'score'    => $latest['score'] ?? null,
-			'strategy' => $latest['strategy'] ?? null,
-			'ran_at'   => $latest['ts'] ?? null,
-			'metrics'  => $metrics,
+			'score'       => $latest['score'] ?? null,
+			'strategy'    => $latest['strategy'] ?? null,
+			'ran_at'      => $ran_at,
+			'age_seconds' => $age,
+			'stale'       => null === $age || $age > self::STALE_AFTER,
+			'metrics'     => $metrics,
 		);
 	}
 

@@ -426,6 +426,11 @@ class Rest_Api {
 				),
 				'rewrite_probe'      => $rewrite_probe,
 				'nginx_server_block' => Cache::full_nginx_server_block(),
+				// What enabling the page cache would do to
+				// wp-content/advanced-cache.php. The dashboard discloses the
+				// replacement BEFORE the write when a leftover drop-in is
+				// already there; see Page_Cache_Detector::dropin_disclosure().
+				'dropin'             => Page_Cache_Detector::dropin_disclosure(),
 				// Separate Mobile Cache visibility (FBS-83145). `blocking` is
 				// true when mobile_separate is what's keeping the device-blind
 				// static fast path from installing on a rewrite-capable server;
@@ -460,11 +465,17 @@ class Rest_Api {
 	}
 
 	public function purge() {
-		// purge_type( 'all' ) rather than purge_all() so the dashboard button
-		// behaves identically to the admin-bar "Purge All" — including
-		// clearing third-party render caches (Render_Caches).
-		Cache::purge_type( 'all', __( 'dashboard', 'xspeed' ) );
-		return rest_ensure_response( array( 'stats' => Cache::get_stats() ) );
+		// The same core function `wp xspeed purge` runs, so the dashboard
+		// button and the CLI cannot clear different sets of stores — and the
+		// per-store report is available here for the UI to surface a store
+		// that was skipped or refused rather than flashing "cache cleared".
+		$report = Purge_Runner::run( array( 'all' ), __( 'dashboard', 'xspeed' ) );
+		return rest_ensure_response(
+			array(
+				'stats'  => Cache::get_stats(),
+				'report' => $report,
+			)
+		);
 	}
 
 	/**

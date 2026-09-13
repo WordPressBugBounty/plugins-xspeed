@@ -27,9 +27,9 @@ final class DatabaseModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'        => 'Database',
+			'label'        => __( 'Database', 'xspeed' ),
 			'icon'         => 'Trash2',
-			'description'  => 'Scan + clean WordPress bloat (revisions, spam, transients, orphan meta) and optimize tables.',
+			'description'  => __( 'Scan + clean WordPress bloat (revisions, spam, transients, orphan meta) and optimize tables.', 'xspeed' ),
 			'custom_panel' => 'DatabaseCleanerPanel',
 		);
 	}
@@ -46,15 +46,15 @@ final class DatabaseModule extends Module {
 					'daily'  => 'Daily',
 					'weekly' => 'Weekly',
 				),
-				'label'         => 'Auto-Cleanup Schedule',
-				'description'   => 'How often to run cleanup automatically. Manual means cleanup only runs when you press the button.',
+				'label'         => __( 'Auto-Cleanup Schedule', 'xspeed' ),
+				'description'   => __( 'How often to run cleanup automatically. Manual means cleanup only runs when you press the button.', 'xspeed' ),
 			),
 			'included_types' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => 'Auto-Cleanup Types',
-				'description' => 'Which cleanup categories run on the schedule above. Leave empty to keep auto-cleanup disabled even if a schedule is set.',
+				'label'       => __( 'Auto-Cleanup Types', 'xspeed' ),
+				'description' => __( 'Which cleanup categories run on the schedule above. Leave empty to keep auto-cleanup disabled even if a schedule is set.', 'xspeed' ),
 			),
 		);
 	}

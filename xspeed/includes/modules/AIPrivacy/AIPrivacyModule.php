@@ -46,9 +46,9 @@ final class AIPrivacyModule extends Module {
 
 	public function ui_metadata(): array {
 		return array(
-			'label'       => 'AI Privacy',
+			'label'       => __( 'AI Privacy', 'xspeed' ),
 			'icon'        => 'Shield',
-			'description' => 'Govern whether AI-powered features (Pro) may collect data from your visitors. The off-switch is here in Free because privacy is a fundamental right, not a paid feature.',
+			'description' => __( 'Govern whether AI-powered features (Pro) may collect data from your visitors. The off-switch is here in Free because privacy is a fundamental right, not a paid feature.', 'xspeed' ),
 		);
 	}
 
@@ -67,14 +67,14 @@ final class AIPrivacyModule extends Module {
 			'gdpr_consent_required' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => 'Require consent before AI data collection',
-				'description' => 'When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made).',
+				'label'       => __( 'Require consent before AI data collection', 'xspeed' ),
+				'description' => __( 'When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made).', 'xspeed' ),
 			),
 			'consent_banner_text'   => array(
 				'type'        => 'string',
 				'default'     => 'We collect anonymized navigation and performance data to make this site faster. Accept to help us optimize your experience.',
-				'label'       => 'Consent banner text',
-				'description' => 'Shown in the cookie consent banner. Keep it factual — what you collect (page navigation, performance metrics) and why.',
+				'label'       => __( 'Consent banner text', 'xspeed' ),
+				'description' => __( 'Shown in the cookie consent banner. Keep it factual — what you collect (page navigation, performance metrics) and why.', 'xspeed' ),
 			),
 		);
 	}

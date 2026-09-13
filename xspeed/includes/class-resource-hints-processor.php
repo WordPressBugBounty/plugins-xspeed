@@ -4,13 +4,16 @@
  *
  * Given a fully-rendered page and the Preload module's options, it:
  *   1. Ranks every eligible <img> by the largest declared size it can read —
- *      width×height attributes, else the widest srcset candidate — and emits
+ *      width×height attributes, else the widest srcset candidate — boosted by
+ *      the author's own priority signals (fetchpriority="high", an explicit
+ *      loading="eager") and lightly weighted by document position, and emits
  *      a <link rel="preload" as="image" fetchpriority="high"> for the top N
  *      in the <head>, carrying srcset/sizes as imagesrcset/imagesizes so the
  *      browser can pick the right candidate — then adds fetchpriority="high"
- *      to the <img> itself so it beats any loading="lazy" the theme set.
- *      Ranking by size rather than document position: the first images on a
- *      real page are usually header chrome, not the hero (#96).
+ *      to the <img> itself. Ranking by size rather than document position:
+ *      the first images on a real page are usually header chrome, not the
+ *      hero (#96). Images inside <footer>/<nav>/<aside>, images the theme
+ *      explicitly lazy-loads, and tiny images never compete (FBS-84576).
  *   2. Emits <link rel="preconnect"> for detected web-font hosts
  *      (fonts.googleapis.com + fonts.gstatic.com) and any user-supplied
  *      hosts, deduped.
@@ -61,6 +64,18 @@ final class Resource_Hints_Processor {
 			$hints .= $preload;
 		}
 
+		// The manual list runs AFTER the automatic pick so it can deduplicate
+		// against it: a URL both name should carry ONE hint, not two. It exists
+		// for the image the detector cannot see — most often a hero section's
+		// CSS background-image, where the LCP element is a <div> with none of
+		// the width/height/fetchpriority signals the scorer reads. On the site
+		// that surfaced this, 3.3s of a 5.3s mobile LCP was pure discovery
+		// delay for exactly such an image. (FBS-84578)
+		$manual = array_filter( array_map( 'strval', (array) ( $opts['preload_images'] ?? array() ) ) );
+		if ( ! empty( $manual ) ) {
+			$hints .= self::build_manual_image_preloads( $manual, $hints );
+		}
+
 		// Full-page eager promotion for Lazy-excluded heroes (FBS-83553 H2). The
 		// Lazy module only filters the_content/thumbnail/avatar/widget, so a
 		// theme/builder hero printed OUTSIDE those keeps WP core's
@@ -78,6 +93,59 @@ final class Resource_Hints_Processor {
 		}
 
 		return self::inject_into_head( $html, $hints );
+	}
+
+	/**
+	 * How many entries of the manual preload list are honoured. Preloading
+	 * competes with the page for its top network priority — a long list
+	 * inverts the benefit, so the cap is deliberately small.
+	 */
+	private const MAX_MANUAL_PRELOADS = 3;
+
+	/**
+	 * One `<link rel="preload" as="image">` per manual list entry.
+	 *
+	 * Entries are full URLs or site-relative paths. Anything that is neither
+	 * (a data: URI, a bare word) is skipped rather than guessed at, and a URL
+	 * the automatic pick already emitted is skipped too — one hint per image,
+	 * whoever names it first.
+	 *
+	 * @param array<int,string> $urls           The configured list.
+	 * @param string            $existing_hints Hints already built this request.
+	 */
+	private static function build_manual_image_preloads( array $urls, string $existing_hints ): string {
+		/**
+		 * Filter the manual image-preload list before it is emitted.
+		 *
+		 * @param array<int,string> $urls Configured URLs, in panel order.
+		 */
+		$urls = (array) apply_filters( 'xspeed_preload_images', $urls );
+
+		$out  = '';
+		$seen = array();
+		foreach ( $urls as $url ) {
+			$url = trim( (string) $url );
+			if ( '' === $url ) {
+				continue;
+			}
+			// A full URL or a site-relative path; nothing else is guessable.
+			$is_absolute = (bool) preg_match( '#^https?://#i', $url );
+			$is_relative = '' !== $url && '/' === $url[0] && ( strlen( $url ) < 2 || '/' !== $url[1] );
+			if ( ! $is_absolute && ! $is_relative ) {
+				continue;
+			}
+			$href = esc_url( $url );
+			if ( '' === $href || isset( $seen[ $href ] ) || false !== strpos( $existing_hints, 'href="' . $href . '"' ) ) {
+				continue;
+			}
+			$seen[ $href ] = true;
+			$out          .= '<link rel="preload" as="image" href="' . $href . '" fetchpriority="high">';
+			if ( count( $seen ) >= self::MAX_MANUAL_PRELOADS ) {
+				break;
+			}
+		}
+
+		return $out;
 	}
 
 	/**
@@ -188,9 +256,12 @@ final class Resource_Hints_Processor {
 		// one that matters, and the feature reported success either way. The
 		// marker list and size gate were heuristics layered on top of the
 		// wrong primitive rather than replacing it. (#96)
-		$candidates = array();
-		if ( preg_match_all( '#<img\b[^>]*>#i', $html, $matches ) ) {
-			foreach ( $matches[0] as $index => $tag ) {
+		$candidates  = array();
+		$skip_ranges = self::chrome_container_ranges( $html );
+		if ( preg_match_all( '#<img\b[^>]*>#i', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $matches[0] as $index => $match ) {
+				[ $tag, $offset ] = $match;
+
 				// Skip anything the user excluded.
 				$excluded = false;
 				foreach ( $exclusions as $needle ) {
@@ -200,6 +271,23 @@ final class Resource_Hints_Processor {
 					}
 				}
 				if ( $excluded ) {
+					continue;
+				}
+
+				// An image inside <footer>/<nav>/<aside> is site chrome by
+				// construction — a footer brand strip or FAQ illustration can
+				// never be the LCP element, whatever size it declares. On the
+				// FBS-84576 repro these decoys outranked the real hero three
+				// times on one layout.
+				if ( self::offset_in_ranges( $offset, $skip_ranges ) ) {
+					continue;
+				}
+
+				// An image the theme explicitly lazy-loads is never the
+				// intended LCP — the author has already said "this can wait".
+				// Preloading it would contradict the markup and steal
+				// bandwidth from the image that matters. (FBS-84576)
+				if ( 'lazy' === strtolower( self::attr( $tag, 'loading' ) ) ) {
 					continue;
 				}
 
@@ -223,7 +311,7 @@ final class Resource_Hints_Processor {
 					'src'    => $src,
 					'srcset' => $srcset,
 					'sizes'  => $sizes,
-					'score'  => self::lcp_score( $tag, $srcset ),
+					'score'  => self::weighted_score( self::lcp_score( $tag, $srcset ), $tag, $index ),
 					'order'  => $index,
 				);
 			}
@@ -237,7 +325,7 @@ final class Resource_Hints_Processor {
 		// happened to be there — measured at 0ms against the feature switched
 		// off, while spending a high-priority fetch on the critical path — or,
 		// on a page with no <img> at all, emitted nothing. (#247)
-		foreach ( self::background_candidates( $html, $exclusions ) as $bg ) {
+		foreach ( self::background_candidates( $html, $exclusions, $skip_ranges ) as $bg ) {
 			$candidates[] = $bg;
 		}
 
@@ -322,17 +410,26 @@ final class Resource_Hints_Processor {
 	 * against an <img> in the SAME units — the whole point being that the
 	 * bigger of the two should win regardless of which kind it is.
 	 *
-	 * @param string   $html       Full page HTML.
-	 * @param string[] $exclusions Substring patterns the user excluded.
-	 * @return array<int,array{tag:string,src:string,srcset:string,sizes:string,score:int,order:int,background:bool}>
+	 * @param string                    $html        Full page HTML.
+	 * @param string[]                  $exclusions  Substring patterns the user excluded.
+	 * @param array<int,array{0:int,1:int}> $skip_ranges Byte ranges of chrome containers.
+	 * @return array<int,array{tag:string,src:string,srcset:string,sizes:string,score:float,order:int,background:bool}>
 	 */
-	private static function background_candidates( string $html, array $exclusions ): array {
-		if ( ! preg_match_all( '#<(?:div|section|header|figure|a|span|li|main|article|aside)\b[^>]*\sstyle\s*=\s*(["\']).*?\1[^>]*>#is', $html, $matches ) ) {
+	private static function background_candidates( string $html, array $exclusions, array $skip_ranges ): array {
+		if ( ! preg_match_all( '#<(?:div|section|header|figure|a|span|li|main|article|aside)\b[^>]*\sstyle\s*=\s*(["\']).*?\1[^>]*>#is', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
 			return array();
 		}
 
 		$found = array();
-		foreach ( $matches[0] as $index => $tag ) {
+		foreach ( $matches[0] as $index => $match ) {
+			[ $tag, $offset ] = $match;
+
+			// The same chrome-container gate as <img>: a background painted
+			// inside <footer>/<nav>/<aside> is never the hero. (FBS-84576)
+			if ( self::offset_in_ranges( $offset, $skip_ranges ) ) {
+				continue;
+			}
+
 			$style = self::attr( $tag, 'style' );
 			if ( '' === $style || false === stripos( $style, 'background' ) ) {
 				continue;
@@ -369,7 +466,7 @@ final class Resource_Hints_Processor {
 				'src'        => $src,
 				'srcset'     => '',
 				'sizes'      => '',
-				'score'      => $area,
+				'score'      => (float) $area,
 				// Offset so a background never ties ahead of an <img> that
 				// appeared earlier in the document; ties still break on order.
 				'order'      => 100000 + $index,
@@ -451,11 +548,11 @@ final class Resource_Hints_Processor {
 	 * @param string $tag    The full <img> tag.
 	 * @param string $srcset Resolved srcset (may come from data-srcset).
 	 */
-	private static function lcp_score( string $tag, string $srcset ): int {
+	private static function lcp_score( string $tag, string $srcset ): float {
 		$w = self::attr( $tag, 'width' );
 		$h = self::attr( $tag, 'height' );
 		if ( '' !== $w && '' !== $h && is_numeric( $w ) && is_numeric( $h ) ) {
-			return (int) $w * (int) $h;
+			return (float) ( (int) $w * (int) $h );
 		}
 
 		$widest = self::widest_srcset_width( $srcset );
@@ -467,10 +564,120 @@ final class Resource_Hints_Processor {
 			// hero (720 000) — a regression on exactly the mixed pages that
 			// document order used to get right, since the hero usually comes
 			// first. Assuming a 16:9 box keeps both sides in the same units.
-			return (int) round( $widest * $widest * self::ASSUMED_ASPECT_RATIO );
+			return round( $widest * $widest * self::ASSUMED_ASPECT_RATIO );
 		}
 
-		return self::UNKNOWN_SIZE_SCORE;
+		return (float) self::UNKNOWN_SIZE_SCORE;
+	}
+
+	/**
+	 * Fold the author's own priority signals and document position into an
+	 * area score. (FBS-84576)
+	 *
+	 * Boosts are ADDITIVE, in area units, so they can rescue an image whose
+	 * size the markup doesn't declare: a hero with no width/height and no
+	 * `w`-descriptor srcset scores UNKNOWN_SIZE_SCORE, and multiplying that
+	 * by any factor still loses to a 548×136 logo that declares itself. This
+	 * is exactly the live miss — the real hero carried loading="eager"
+	 * fetchpriority="high" and lost to three dimension-declaring decoys.
+	 *
+	 *   - fetchpriority="high" is the strongest signal there is: the author
+	 *     (or WP core's own LCP detection) has already named this image the
+	 *     hero. Worth a hero-sized area.
+	 *   - An EXPLICIT loading="eager" is a weaker but deliberate "load me
+	 *     now" (the default is eager, so writing it out is a choice).
+	 *
+	 * Position is a light multiplicative weight — earlier is better, but the
+	 * spread is capped well under 5× so it can only break near-ties, never
+	 * outrank a genuinely larger image further down (the logo-vs-hero case).
+	 *
+	 * @param float  $score Base area score from lcp_score() / style_area().
+	 * @param string $tag   The candidate's full tag (for the signal attrs).
+	 * @param int    $order Document-order index of the candidate.
+	 */
+	private static function weighted_score( float $score, string $tag, int $order ): float {
+		if ( 'high' === strtolower( self::attr( $tag, 'fetchpriority' ) ) ) {
+			$score += self::FETCHPRIORITY_HIGH_BOOST;
+		}
+		if ( 'eager' === strtolower( self::attr( $tag, 'loading' ) ) ) {
+			$score += self::EAGER_BOOST;
+		}
+		return $score * self::position_weight( $order );
+	}
+
+	/**
+	 * Document-position weight: 1.25 for the first image, easing to 1.0 by
+	 * the tenth. The whole spread is 25%, far under the 5× area difference it
+	 * must never override — it exists only to keep the old first-wins
+	 * behaviour for images we can't tell apart.
+	 */
+	private static function position_weight( int $order ): float {
+		return 1.0 + 0.25 * max( 0.0, 1.0 - $order / 10 );
+	}
+
+	/**
+	 * Area-unit boost for fetchpriority="high" — roughly a 940×530 hero, so
+	 * an explicitly-marked image outranks any mid-page decoy even when its
+	 * own size is unreadable, while a genuinely huge unmarked image can still
+	 * beat a marked small one.
+	 */
+	private const FETCHPRIORITY_HIGH_BOOST = 500000.0;
+
+	/**
+	 * Area-unit boost for an explicit loading="eager" — roughly 420×240,
+	 * enough to break ties in favour of the author's intent without letting
+	 * an eager logo outrank a plain hero.
+	 */
+	private const EAGER_BOOST = 100000.0;
+
+	/**
+	 * Byte ranges of <footer>/<nav>/<aside> regions. Nesting-aware per tag
+	 * name (a nav inside a nav extends the range); an unclosed open tag
+	 * poisons through to the end of the document, which errs on the side of
+	 * not preloading — the safe direction, since a wrong preload is worse
+	 * than none. (FBS-84576)
+	 *
+	 * @return array<int,array{0:int,1:int}> [start, end] byte offsets.
+	 */
+	private static function chrome_container_ranges( string $html ): array {
+		$ranges = array();
+		foreach ( array( 'footer', 'nav', 'aside' ) as $name ) {
+			// (?=[\s/>]) rather than \b: a word boundary sits before the `-`
+			// of a custom element, so `<nav\b` would swallow `<nav-menu>`.
+			if ( ! preg_match_all( '#<(/?)' . $name . '(?=[\s/>])[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
+				continue;
+			}
+			$depth = 0;
+			$start = 0;
+			foreach ( $m[0] as $i => $match ) {
+				$closing = '' !== $m[1][ $i ][0];
+				if ( ! $closing ) {
+					if ( 0 === $depth ) {
+						$start = $match[1];
+					}
+					++$depth;
+				} elseif ( $depth > 0 ) {
+					--$depth;
+					if ( 0 === $depth ) {
+						$ranges[] = array( $start, $match[1] );
+					}
+				}
+			}
+			if ( $depth > 0 ) {
+				$ranges[] = array( $start, strlen( $html ) );
+			}
+		}
+		return $ranges;
+	}
+
+	/** Does a byte offset fall inside any of the given [start, end] ranges? */
+	private static function offset_in_ranges( int $offset, array $ranges ): bool {
+		foreach ( $ranges as $range ) {
+			if ( $offset > $range[0] && $offset < $range[1] ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -636,11 +843,19 @@ final class Resource_Hints_Processor {
 	private const NON_HERO_MARKERS = array( 'logo', 'icon', 'avatar', 'gravatar', 'spinner', 'emoji', 'site-icon', 'custom-logo' );
 
 	/**
+	 * Below this declared area (px²) an image is a badge/thumb/divider, never
+	 * an LCP hero — 10 000 is a 100×100 square, or a 500×20 strip. Applied
+	 * only when BOTH dimensions are readable. (FBS-84576)
+	 */
+	private const MIN_LCP_AREA = 10000;
+
+	/**
 	 * Is this <img> too small / too chrome-like to be the LCP hero? True when
 	 * either (a) it carries a logo/icon/avatar marker, (b) an explicit
-	 * `data-no-lcp` opt-out, or (c) BOTH width and height are present and both
-	 * are ≤ the threshold. Missing dimensions are NOT guessed — an image whose
-	 * size we can't read still competes. (FBS-83553 H1 "logo before hero".)
+	 * `data-no-lcp` opt-out, or (c) BOTH width and height are present and
+	 * both are ≤ the dimension threshold, or their area is under
+	 * MIN_LCP_AREA. Missing dimensions are NOT guessed — an image whose size
+	 * we can't read still competes. (FBS-83553 H1 "logo before hero".)
 	 */
 	private static function looks_too_small( string $tag ): bool {
 		if ( false !== stripos( $tag, 'data-no-lcp' ) ) {
@@ -658,6 +873,9 @@ final class Resource_Hints_Processor {
 		$h = self::attr( $tag, 'height' );
 		if ( '' === $w || '' === $h || ! is_numeric( $w ) || ! is_numeric( $h ) ) {
 			return false; // unknown size — don't guess; let it compete.
+		}
+		if ( (int) $w * (int) $h < self::MIN_LCP_AREA ) {
+			return true;
 		}
 		return (int) $w <= self::MIN_LCP_DIMENSION && (int) $h <= self::MIN_LCP_DIMENSION;
 	}
