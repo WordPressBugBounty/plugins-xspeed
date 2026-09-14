@@ -2,14 +2,14 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.0\n"
+"Project-Id-Version: xSpeed Cache 1.3.1\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-13T15:28:39+00:00\n"
+"POT-Creation-Date: 2026-09-14T12:05:45+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
@@ -766,6 +766,7 @@ msgid "%s is not enabled"
 msgstr ""
 
 #: includes/class-purge-runner.php:162
+#: assets/admin.js
 msgid "the purge was refused"
 msgstr ""
 
@@ -2665,6 +2666,11 @@ msgstr ""
 msgid "%s currently owns the page-cache file. xSpeed will replace it and serve the cached pages itself."
 msgstr ""
 
+#. Source: src/components/purgeOutcome.ts:45
+#: assets/admin.js
+msgid "%s: %s"
+msgstr ""
+
 #. Source: src/components/health/HealthCard.tsx:172
 #: assets/admin.js
 msgid "24-hour cache request volume"
@@ -2690,7 +2696,7 @@ msgstr ""
 msgid "A key is saved. Type to replace it; use ✕ to remove it."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:243
+#. Source: src/components/cache/CacheHero.tsx:238
 #: assets/admin.js
 msgid "Absorbed"
 msgstr ""
@@ -2701,15 +2707,15 @@ msgid "Action"
 msgstr ""
 
 #. Source: src/components/Sidebar.tsx:424
-#. Source: src/components/Sidebar.tsx:442
+#. Source: src/components/Sidebar.tsx:445
 #. Source: src/upsell/ProOverview.tsx:73
 #: assets/admin.js
 msgid "Activate License"
 msgstr ""
 
 #. Source: src/upsell/LockedPanel.tsx:104
-#. Source: src/upsell/LockedSection.tsx:87
-#. Source: src/upsell/ProDemo.tsx:91
+#. Source: src/upsell/LockedSection.tsx:88
+#. Source: src/upsell/ProDemo.tsx:92
 #: assets/admin.js
 msgid "Activate your license"
 msgstr ""
@@ -2725,7 +2731,7 @@ msgstr ""
 msgid "Add site form"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:197
+#. Source: src/components/cache/StatDrilldown.tsx:192
 #: assets/admin.js
 msgid "Address not recorded"
 msgstr ""
@@ -2735,7 +2741,7 @@ msgstr ""
 msgid "After"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:168
+#. Source: src/components/cache/StatDrilldown.tsx:163
 #: assets/admin.js
 msgid "Age"
 msgstr ""
@@ -2752,12 +2758,22 @@ msgstr ""
 msgid "AI connection active"
 msgstr ""
 
+#. Source: src/components/TopBar.tsx:175
+#: assets/admin.js
+msgid "Already empty"
+msgstr ""
+
+#. Source: src/components/purgeOutcome.ts:57
+#: assets/admin.js
+msgid "Also cleared: %s."
+msgstr ""
+
 #. Source: src/components/overview/Recommendations.tsx:181
 #: assets/admin.js
 msgid "Also worth a look"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:236
+#. Source: src/components/cache/CacheHero.tsx:231
 #: assets/admin.js
 msgid "An edge cache (Cloudflare) is in front, so this hit ratio is origin-layer only — hits served at the edge never reach the origin and aren’t counted here."
 msgstr ""
@@ -2803,12 +2819,12 @@ msgstr ""
 msgid "Audit failed"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:330
+#. Source: src/components/cache/StatDrilldown.tsx:325
 #: assets/admin.js
 msgid "Automatic cleanup has not run yet — first sweep in %s."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:322
+#. Source: src/components/cache/StatDrilldown.tsx:317
 #: assets/admin.js
 msgid "Automatic cleanup ran %1$s ago — %2$d file(s) removed, %3$d in total."
 msgstr ""
@@ -2848,12 +2864,12 @@ msgstr ""
 msgid "Book a free setup review with our team."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:247
+#. Source: src/components/cache/CacheHero.tsx:242
 #: assets/admin.js
 msgid "bot / 404 requests in 24h — excluded from the hit ratio."
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:77
+#. Source: src/components/TopBar.tsx:81
 #: assets/admin.js
 msgid "Breadcrumb"
 msgstr ""
@@ -2868,7 +2884,26 @@ msgstr ""
 msgid "Cache"
 msgstr ""
 
-#. Source: src/App.tsx:309
+#. Source: src/components/purgeOutcome.ts:84
+#: assets/admin.js
+msgid "Cache cleared: %d file (%s)."
+msgid_plural "Cache cleared: %d files (%s)."
+msgstr[0] ""
+msgstr[1] ""
+
+#. Source: src/components/purgeOutcome.ts:91
+#: assets/admin.js
+msgid "Cache cleared: %d file."
+msgid_plural "Cache cleared: %d files."
+msgstr[0] ""
+msgstr[1] ""
+
+#. Source: src/components/purgeOutcome.ts:80
+#: assets/admin.js
+msgid "Cache cleared."
+msgstr ""
+
+#. Source: src/App.tsx:331
 #: assets/admin.js
 msgid "Cache could not be enabled."
 msgstr ""
@@ -2878,17 +2913,17 @@ msgstr ""
 msgid "Cache coverage"
 msgstr ""
 
-#. Source: src/App.tsx:321
+#. Source: src/App.tsx:343
 #: assets/admin.js
 msgid "Cache disabled"
 msgstr ""
 
-#. Source: src/App.tsx:321
+#. Source: src/App.tsx:343
 #: assets/admin.js
 msgid "Cache enabled"
 msgstr ""
 
-#. Source: src/App.tsx:315
+#. Source: src/App.tsx:337
 #: assets/admin.js
 msgid "Cache enabled, but nothing will be cached until WP_CACHE is added to wp-config.php — copy the line from Health."
 msgstr ""
@@ -2923,7 +2958,12 @@ msgstr ""
 msgid "Cache optimized"
 msgstr ""
 
-#. Source: src/App.tsx:339
+#. Source: src/components/purgeOutcome.ts:53
+#: assets/admin.js
+msgid "Cache partly cleared."
+msgstr ""
+
+#. Source: src/components/purgeOutcome.ts:29
 #: assets/admin.js
 msgid "Cache purged"
 msgstr ""
@@ -2949,7 +2989,7 @@ msgstr ""
 msgid "cached"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:145
+#. Source: src/components/cache/StatDrilldown.tsx:140
 #. Source: src/components/health/HealthHero.tsx:29
 #. Source: src/components/overview/MetricGrid.tsx:45
 #: assets/admin.js
@@ -2972,7 +3012,7 @@ msgid "Caching — loading"
 msgstr ""
 
 #. Source: src/components/CacheSwitch.tsx:261
-#. Source: src/components/cache/CacheHero.tsx:182
+#. Source: src/components/cache/CacheHero.tsx:177
 #: assets/admin.js
 msgid "Cancel"
 msgstr ""
@@ -3010,6 +3050,16 @@ msgstr ""
 #. Source: src/components/score/ScorePanel.tsx:652
 #: assets/admin.js
 msgid "Clear"
+msgstr ""
+
+#. Source: src/components/TopBar.tsx:173
+#: assets/admin.js
+msgid "Cleared"
+msgstr ""
+
+#. Source: src/components/purgeOutcome.ts:62
+#: assets/admin.js
+msgid "Cleared: %s."
 msgstr ""
 
 #. Source: src/components/cache/CacheBenchmark.tsx:126
@@ -3064,7 +3114,7 @@ msgstr ""
 msgid "Connect"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:142
+#. Source: src/components/TopBar.tsx:138
 #: assets/admin.js
 msgid "Connect Hub"
 msgstr ""
@@ -3253,17 +3303,17 @@ msgstr ""
 msgid "failed"
 msgstr ""
 
-#. Source: src/App.tsx:325
+#. Source: src/App.tsx:347
 #: assets/admin.js
 msgid "Failed to disable cache"
 msgstr ""
 
-#. Source: src/App.tsx:325
+#. Source: src/App.tsx:347
 #: assets/admin.js
 msgid "Failed to enable cache"
 msgstr ""
 
-#. Source: src/App.tsx:273
+#. Source: src/App.tsx:286
 #: assets/admin.js
 msgid "Failed to load"
 msgstr ""
@@ -3372,12 +3422,12 @@ msgstr ""
 msgid "Hit ratio"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:222
+#. Source: src/components/cache/CacheHero.tsx:217
 #: assets/admin.js
 msgid "Hit Ratio · 24h"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:222
+#. Source: src/components/cache/CacheHero.tsx:217
 #: assets/admin.js
 msgid "Hit Ratio · 24h · origin"
 msgstr ""
@@ -3407,7 +3457,7 @@ msgstr ""
 msgid "hrs"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:142
+#. Source: src/components/TopBar.tsx:138
 #: assets/admin.js
 msgid "Hub connected"
 msgstr ""
@@ -3437,7 +3487,7 @@ msgstr ""
 msgid "It takes a few seconds."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:225
+#. Source: src/components/cache/CacheHero.tsx:220
 #: assets/admin.js
 msgid "jump to the hit-ratio trend"
 msgstr ""
@@ -3487,8 +3537,8 @@ msgstr ""
 msgid "Learn more about Pro"
 msgstr ""
 
-#. Source: src/upsell/LockedSection.tsx:69
-#. Source: src/upsell/ProDemo.tsx:59
+#. Source: src/upsell/LockedSection.tsx:70
+#. Source: src/upsell/ProDemo.tsx:60
 #: assets/admin.js
 msgid "License"
 msgstr ""
@@ -3508,7 +3558,7 @@ msgstr ""
 msgid "Lighthouse performance, out of 100"
 msgstr ""
 
-#. Source: src/App.tsx:384
+#. Source: src/App.tsx:420
 #. Source: src/components/GroupLanding.tsx:67
 #. Source: src/components/LogsView.tsx:35
 #: assets/admin.js
@@ -3692,7 +3742,7 @@ msgstr ""
 msgid "No performance score measured yet"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:343
+#. Source: src/components/cache/StatDrilldown.tsx:338
 #: assets/admin.js
 msgid "No purges recorded yet."
 msgstr ""
@@ -3727,7 +3777,7 @@ msgstr ""
 msgid "Not now"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:149
+#. Source: src/components/cache/StatDrilldown.tsx:144
 #: assets/admin.js
 msgid "Nothing cached yet. Visit a page as a logged-out visitor to warm the cache."
 msgstr ""
@@ -3737,7 +3787,7 @@ msgstr ""
 msgid "Nothing is sent anywhere until you press this."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:252
+#. Source: src/components/cache/StatDrilldown.tsx:247
 #: assets/admin.js
 msgid "Nothing on disk yet."
 msgstr ""
@@ -3757,7 +3807,7 @@ msgstr ""
 #. Source: src/components/Sidebar.tsx:335
 #. Source: src/components/Sidebar.tsx:370
 #. Source: src/components/Sidebar.tsx:371
-#. Source: src/components/cache/StatDrilldown.tsx:216
+#. Source: src/components/cache/StatDrilldown.tsx:211
 #: assets/admin.js
 msgid "of"
 msgstr ""
@@ -3827,7 +3877,7 @@ msgstr ""
 msgid "Open MCP"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:84
+#. Source: src/components/TopBar.tsx:88
 #: assets/admin.js
 msgid "Open navigation"
 msgstr ""
@@ -3863,7 +3913,7 @@ msgstr ""
 msgid "Over a month old — may not reflect the site now."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:166
+#. Source: src/components/cache/StatDrilldown.tsx:161
 #: assets/admin.js
 msgid "Page"
 msgstr ""
@@ -3873,7 +3923,7 @@ msgstr ""
 msgid "Page, object and browser caching, plus preload."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:283
+#. Source: src/components/cache/StatDrilldown.tsx:278
 #: assets/admin.js
 msgid "Pages without one are compressed by the server when requested."
 msgstr ""
@@ -3893,7 +3943,12 @@ msgstr ""
 msgid "Partial scan — some checks could not run, so the score covers less than the full rubric."
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:795
+#. Source: src/components/TopBar.tsx:177
+#: assets/admin.js
+msgid "Partly cleared"
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:800
 #: assets/admin.js
 msgid "Paste an xSpeed profile JSON here, or choose a .json file below."
 msgstr ""
@@ -3936,7 +3991,7 @@ msgstr ""
 msgid "Pick two runs to compare them."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:282
+#. Source: src/components/cache/StatDrilldown.tsx:277
 #: assets/admin.js
 msgid "Precompressed copies on disk:"
 msgstr ""
@@ -3946,17 +4001,17 @@ msgstr ""
 msgid "Preload"
 msgstr ""
 
-#. Source: src/App.tsx:354
+#. Source: src/App.tsx:390
 #: assets/admin.js
 msgid "Preload could not start"
 msgstr ""
 
-#. Source: src/App.tsx:352
+#. Source: src/App.tsx:388
 #: assets/admin.js
 msgid "Preload started"
 msgstr ""
 
-#. Source: src/upsell/ProDemo.tsx:117
+#. Source: src/upsell/ProDemo.tsx:118
 #: assets/admin.js
 msgid "Preview"
 msgstr ""
@@ -3968,10 +4023,12 @@ msgstr ""
 
 #. Source: src/components/GroupLanding.tsx:32
 #. Source: src/components/ModuleHeader.tsx:23
+#. Source: src/components/Tabs.tsx:97
+#. Source: src/components/migration/MigrationPanel.tsx:650
 #. Source: src/components/overview/FeatureMap.tsx:38
-#. Source: src/upsell/LockedSection.tsx:69
+#. Source: src/upsell/LockedSection.tsx:70
 #. Source: src/upsell/ProAudit.tsx:66
-#. Source: src/upsell/ProDemo.tsx:59
+#. Source: src/upsell/ProDemo.tsx:60
 #. Source: src/upsell/ProTeaser.tsx:45
 #: assets/admin.js
 msgid "Pro"
@@ -4011,7 +4068,7 @@ msgstr ""
 msgid "Pro unlocks this module + every other locked row in the sidebar. Your current Free settings stay unchanged."
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:797
+#. Source: src/components/migration/MigrationPanel.tsx:802
 #: assets/admin.js
 msgid "Profile JSON to import"
 msgstr ""
@@ -4022,17 +4079,28 @@ msgid "pts"
 msgstr ""
 
 #. Source: src/components/CommandPalette.tsx:58
-#. Source: src/components/TopBar.tsx:134
+#. Source: src/components/TopBar.tsx:180
 #: assets/admin.js
 msgid "Purge all"
 msgstr ""
 
-#. Source: src/App.tsx:341
+#. Source: src/App.tsx:370
+#. Source: src/components/TopBar.tsx:179
 #: assets/admin.js
 msgid "Purge failed"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:336
+#. Source: src/App.tsx:370
+#: assets/admin.js
+msgid "Purge failed: %s"
+msgstr ""
+
+#. Source: src/components/purgeOutcome.ts:54
+#: assets/admin.js
+msgid "Purge failed."
+msgstr ""
+
+#. Source: src/components/cache/StatDrilldown.tsx:331
 #: assets/admin.js
 msgid "Purge history"
 msgstr ""
@@ -4100,7 +4168,7 @@ msgstr ""
 msgid "Recommended:"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:109
+#. Source: src/components/cache/StatDrilldown.tsx:104
 #: assets/admin.js
 msgid "Refresh"
 msgstr ""
@@ -4267,8 +4335,8 @@ msgstr ""
 msgid "Score strategy"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:110
-#. Source: src/components/TopBar.tsx:115
+#. Source: src/components/TopBar.tsx:114
+#. Source: src/components/TopBar.tsx:119
 #: assets/admin.js
 msgid "Search"
 msgstr ""
@@ -4329,22 +4397,22 @@ msgstr ""
 msgid "Show less"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:219
+#. Source: src/components/cache/CacheHero.tsx:214
 #: assets/admin.js
 msgid "show what cleared the cache and why"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:212
+#. Source: src/components/cache/CacheHero.tsx:207
 #: assets/admin.js
 msgid "show what is taking the space"
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:205
+#. Source: src/components/cache/CacheHero.tsx:200
 #: assets/admin.js
 msgid "show which pages are cached"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:216
+#. Source: src/components/cache/StatDrilldown.tsx:211
 #: assets/admin.js
 msgid "Showing"
 msgstr ""
@@ -4359,7 +4427,7 @@ msgstr ""
 msgid "Site URL"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:167
+#. Source: src/components/cache/StatDrilldown.tsx:162
 #: assets/admin.js
 msgid "Size"
 msgstr ""
@@ -4379,7 +4447,7 @@ msgstr ""
 msgid "Static rewrite may not be available on this host"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:169
+#. Source: src/components/cache/StatDrilldown.tsx:164
 #: assets/admin.js
 msgid "Stored"
 msgstr ""
@@ -4389,12 +4457,12 @@ msgstr ""
 msgid "succeeded"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:148
+#. Source: src/components/TopBar.tsx:144
 #: assets/admin.js
 msgid "Switch to dark mode"
 msgstr ""
 
-#. Source: src/components/TopBar.tsx:148
+#. Source: src/components/TopBar.tsx:144
 #: assets/admin.js
 msgid "Switch to light mode"
 msgstr ""
@@ -4430,12 +4498,27 @@ msgstr ""
 msgid "Testing…"
 msgstr ""
 
+#. Source: src/components/purgeOutcome.ts:70
+#: assets/admin.js
+msgid "The cache was already empty, so there was nothing to clear."
+msgstr ""
+
 #. Source: src/components/overview/ScoreCard.tsx:207
 #: assets/admin.js
 msgid "The last scan did not complete."
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:156
+#. Source: src/components/purgeOutcome.ts:78
+#: assets/admin.js
+msgid "The page cache was already empty."
+msgstr ""
+
+#. Source: src/components/purgeOutcome.ts:63
+#: assets/admin.js
+msgid "There was nothing to clear."
+msgstr ""
+
+#. Source: src/components/cache/StatDrilldown.tsx:151
 #: assets/admin.js
 msgid "This cache is large enough that the scan stopped early — the list below is a recent sample, not every page."
 msgstr ""
@@ -4517,11 +4600,11 @@ msgid "Under a minute"
 msgstr ""
 
 #. Source: src/components/Sidebar.tsx:424
-#. Source: src/components/Sidebar.tsx:442
+#. Source: src/components/Sidebar.tsx:445
 #. Source: src/upsell/LockedPanel.tsx:116
-#. Source: src/upsell/LockedSection.tsx:97
+#. Source: src/upsell/LockedSection.tsx:98
 #. Source: src/upsell/ProAudit.tsx:113
-#. Source: src/upsell/ProDemo.tsx:101
+#. Source: src/upsell/ProDemo.tsx:102
 #. Source: src/upsell/ProOverview.tsx:83
 #: assets/admin.js
 msgid "Upgrade to Pro"
@@ -4592,7 +4675,7 @@ msgstr ""
 msgid "When"
 msgstr ""
 
-#. Source: src/components/cache/StatDrilldown.tsx:248
+#. Source: src/components/cache/StatDrilldown.tsx:243
 #: assets/admin.js
 msgid "Where the cache size goes"
 msgstr ""

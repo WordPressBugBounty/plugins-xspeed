@@ -30,7 +30,7 @@
   --primary-tint: #E6F5F3;
   --on-primary: #FFFFFF;
   /* Text/heading colour for content sitting ON a primary/info tint. */
-  --on-tint: #1E8079;
+  --on-tint: #1A7770; /* 4.79:1 on --primary-tint, 5.37:1 on --paper — small Pro badge text sits on the tint */
   --primary-glow: 0 2px 12px rgba(42, 167, 160, .30);
 
   /* Surfaces */
@@ -134,10 +134,16 @@
 @keyframes xspeed-boltpulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.82); } }
 @keyframes xspeed-sweep { 0% { background-position: -220px 0; } 100% { background-position: 320px 0; } }
 @keyframes xspeed-ringfill { from { stroke-dashoffset: 326.7; } to { stroke-dashoffset: 26.1; } }
+@keyframes xspeed-drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes xspeed-pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
 
 /* Signature-motion utility classes (reduced-motion aware via the rule below). */
 .xspeed-anim-boltpulse { animation: xspeed-boltpulse 1.8s ease-in-out infinite; }
 .xspeed-anim-sweep { background-size: 220px 100%; animation: xspeed-sweep 1.5s linear infinite; }
+/* Purge result (§24.38). The resting state is the END state, so the reduced-motion
+   rule below leaves the hairline undrawn and the icon simply present. */
+.xspeed-anim-drain { transform: scaleX(0); transform-origin: left; animation: xspeed-drain .6s cubic-bezier(.3, .7, .3, 1) both; }
+.xspeed-anim-pop { animation: xspeed-pop .2s ease-out both; }
 
 @media (prefers-reduced-motion: reduce) {
   #xspeed-app [class*="xspeed-anim"] { animation: none !important; }
