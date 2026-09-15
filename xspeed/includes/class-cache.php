@@ -90,7 +90,10 @@ class Cache {
 	 */
 	private const TARGETED_INVALIDATION_HOOKS = array(
 		'save_post',
+		'before_delete_post',
+		'trashed_post',
 		'comment_post',
+		'wp_set_comment_status',
 		'user_register',
 		'profile_update',
 	);
@@ -156,7 +159,7 @@ class Cache {
 		// left the matching endpoint (and archives) stale for the full TTL.
 		// (FBS-82408)
 		$invalidate_hooks = array(
-			'save_post', 'deleted_post', 'trashed_post',
+			'save_post', 'before_delete_post', 'trashed_post',
 			'comment_post', 'wp_set_comment_status',
 			'switch_theme', 'activated_plugin', 'deactivated_plugin',
 			// Users → /wp/v2/users + author archives.
@@ -188,7 +191,11 @@ class Cache {
 			add_action(
 				$hook,
 				static function () use ( $hook ): void {
-					self::purge_all( 'hook:' . $hook );
+					self::purge_all(
+						'hook:' . $hook,
+						null,
+						self::invalidation_for_hook( $hook )
+					);
 				}
 			);
 			add_action( $hook, array( 'XSpeed\\Minifier', 'purge_minified' ) );
@@ -261,10 +268,19 @@ class Cache {
 		remove_action( 'save_post', array( __CLASS__, 'purge_all' ) );
 		remove_action( 'save_post', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'save_post', array( __CLASS__, 'on_save_post' ), 10, 2 );
+		add_action( 'before_delete_post', array( __CLASS__, 'on_post_removed' ), 10, 2 );
+		add_action( 'trashed_post', array( __CLASS__, 'on_post_removed' ), 10, 2 );
+		// wp_delete_post() hands an attachment to wp_delete_attachment() and
+		// returns BEFORE before_delete_post fires, so deleting media reached
+		// neither hook above. Attachment pages are public and media appears in
+		// galleries, so that left cached pages showing a file that is gone.
+		// (dev caught this via `deleted_post`, which this branch replaced.)
+		add_action( 'delete_attachment', array( __CLASS__, 'on_post_removed' ), 10, 2 );
 
 		remove_action( 'comment_post', array( __CLASS__, 'purge_all' ) );
 		remove_action( 'comment_post', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'comment_post', array( __CLASS__, 'on_comment_post' ), 10, 3 );
+		add_action( 'wp_set_comment_status', array( __CLASS__, 'on_comment_status' ), 10, 2 );
 
 		remove_action( 'user_register', array( __CLASS__, 'purge_all' ) );
 		remove_action( 'user_register', array( 'XSpeed\\Minifier', 'purge_minified' ) );
@@ -1395,7 +1411,8 @@ class Cache {
 	 */
 	public static function current_static_scope(): string {
 		// Same switch_to_blog() caveat as current_host_dir() — see current_host().
-		$dir = self::host_dir( self::current_host() );
+		// Keep the port folded into the segment exactly as store_static() does.
+		$dir = self::static_host_dir( self::current_host() );
 		if ( '' === $dir ) {
 			$dir = 'default';
 		}
@@ -2625,6 +2642,99 @@ class Cache {
 	 *
 	 * @return string[]
 	 */
+	/**
+	 * Could this post change alter anything an anonymous visitor had cached?
+	 *
+	 * Deleting one post fired a full purge for the post AND for every stored
+	 * revision, because wp_delete_post() removes each revision through
+	 * wp_delete_post() again and every one of those fires before_delete_post
+	 * with post_type 'revision'. A post with six revisions cost seven whole-
+	 * site sweeps, each one also announcing to LiteSpeed, purging the object
+	 * cache network-wide on Redis, rewriting the stats option and running
+	 * every xspeed_after_purge_all listener -- including Pro's Cloudflare
+	 * purge, so seven API calls. Trashing cost two, via save_post and then
+	 * trashed_post. (QA #348)
+	 *
+	 * The check lives here, ahead of purge_all(), so one early return covers
+	 * the local sweep, the server-cache announcement and both action hooks.
+	 * It deliberately does NOT live inside purge_all(): a manual, CLI or
+	 * explicit caller asked for a purge and must get one.
+	 *
+	 * @param int    $post_id Post being saved or removed.
+	 * @param mixed  $post    Post object when the hook passed one.
+	 * @param string $event   'save' or 'remove'.
+	 */
+	private static function post_change_is_cacheable_content( $post_id, $post, string $event ): bool {
+		$post_id = (int) $post_id;
+
+		// Only `save_post` and `before_delete_post` hand over a post object.
+		// `trashed_post` passes ( $post_id, $previous_status ) -- a STRING --
+		// so reaching for ->post_status on the second argument finds nothing
+		// and the status rule below would never fire. Read the row instead.
+		if ( ! is_object( $post ) && function_exists( 'get_post' ) ) {
+			$post = get_post( $post_id );
+		}
+
+		$type = is_object( $post ) && isset( $post->post_type )
+			? (string) $post->post_type
+			: (string) ( function_exists( 'get_post_type' ) ? get_post_type( $post_id ) : '' );
+		if ( '' === $type ) {
+			return false;
+		}
+
+		// A revision is a copy of content nobody can browse to.
+		if ( 'revision' === $type ) {
+			return false;
+		}
+		if ( function_exists( 'wp_is_post_revision' ) && wp_is_post_revision( $post_id ) ) {
+			return false;
+		}
+		if ( function_exists( 'wp_is_post_autosave' ) && wp_is_post_autosave( $post_id ) ) {
+			return false;
+		}
+
+		$status = is_object( $post ) && isset( $post->post_status ) ? (string) $post->post_status : '';
+
+		// Clicking "Add New" inserts an auto-draft and fires save_post. There
+		// is nothing cached of a post that has never existed publicly.
+		if ( 'auto-draft' === $status ) {
+			return false;
+		}
+
+		// Unknown/!viewable → nothing anonymous can see changed, UNLESS the
+		// type is itself part of how pages render (#270 regression).
+		if ( function_exists( 'is_post_type_viewable' )
+			&& ! is_post_type_viewable( $type )
+			&& ! in_array( $type, self::presentation_post_types(), true )
+		) {
+			return false;
+		}
+
+		// Deleting something that was already invisible changes no cached
+		// page: the transition that hid it purged at the time. This is what
+		// makes emptying a trash of a hundred posts cost nothing rather than
+		// a hundred full sweeps.
+		//
+		// It also collapses trashing to a single purge: wp_trash_post() fires
+		// save_post first, where the post is genuinely disappearing from
+		// listings and SHOULD purge, then trashed_post, by which point the
+		// row reads 'trash' and is skipped. A status we cannot read, on a row
+		// that still reports a type, means assume viewable -- erring toward
+		// an extra purge, never toward serving a stale page. A row that is
+		// gone entirely reports no type either and was refused above.
+		// 'inherit' is an INTERNAL status in core, so is_post_status_viewable()
+		// says no -- but an attachment carrying it is genuinely public. Judge
+		// those on the post type alone, which is already checked above.
+		if ( 'remove' === $event && '' !== $status && 'inherit' !== $status
+			&& function_exists( 'is_post_status_viewable' )
+			&& ! is_post_status_viewable( $status )
+		) {
+			return false;
+		}
+
+		return true;
+	}
+
 	public static function presentation_post_types(): array {
 		$types = array(
 			'wp_template',      // Site Editor templates.
@@ -2647,6 +2757,35 @@ class Cache {
 	}
 
 	/**
+	 * Describe a broad hook invalidation for response-cache adapters.
+	 *
+	 * Term, menu, theme and plugin changes can alter navigation, archives or
+	 * markup across the site, so they require a site response-cache purge.
+	 * Content saves also require this scope while their local operation is a
+	 * complete bucket sweep.
+	 *
+	 * @return array{scope:string,intent:string,urls:array<int,string>}
+	 */
+	private static function invalidation_for_hook( string $hook ): array {
+		$presentation = array(
+			'switch_theme',
+			'activated_plugin',
+			'deactivated_plugin',
+			'created_term',
+			'edited_term',
+			'delete_term',
+			'wp_update_nav_menu',
+		);
+
+		return array(
+			'scope'  => 'site',
+			'intent' => in_array( $hook, $presentation, true ) ? 'presentation' : 'content',
+			'urls'   => array(),
+		);
+	}
+
+
+	/**
 	 * save_post → purge only when the saved thing can appear on a cached page.
 	 *
 	 * Revisions and autosaves are never rendered. Non-viewable post types —
@@ -2663,36 +2802,86 @@ class Cache {
 	 * @param \WP_Post $post    Saved post object.
 	 */
 	public static function on_save_post( $post_id, $post = null ): void {
-		if ( function_exists( 'wp_is_post_revision' ) && wp_is_post_revision( $post_id ) ) {
-			return;
-		}
-		if ( function_exists( 'wp_is_post_autosave' ) && wp_is_post_autosave( $post_id ) ) {
+		if ( ! self::post_change_is_cacheable_content( $post_id, $post, 'save' ) ) {
 			return;
 		}
 
 		$post_type = is_object( $post ) && isset( $post->post_type )
 			? (string) $post->post_type
 			: (string) get_post_type( $post_id );
-		if ( '' === $post_type ) {
-			return;
-		}
-
-		// Unknown/!viewable → nothing anonymous can see changed, UNLESS the
-		// type is itself part of how pages render (#270 regression).
-		if ( function_exists( 'is_post_type_viewable' )
-			&& ! is_post_type_viewable( $post_type )
-			&& ! in_array( $post_type, self::presentation_post_types(), true )
-		) {
-			return;
-		}
 
 		// Name the trigger rather than logging a bare numeric id — the old
 		// wiring passed the post ID into $cause, so the log read
 		// "Cache purged (46)" with no indication of what caused it. (#243)
-		self::purge_all( 'post:' . $post_type );
+		$presentation = in_array( $post_type, self::presentation_post_types(), true );
+		self::purge_all(
+			'post:' . $post_type,
+			null,
+			array(
+				// purge_all() sweeps every local response in this site's bucket.
+				// Without dependency tracking, the server cache must match that
+				// same boundary or unrelated pages can remain stale there.
+				'scope'  => 'site',
+				'intent' => $presentation ? 'presentation' : 'content',
+				'urls'   => array(),
+			)
+		);
 		if ( class_exists( '\XSpeed\Minifier' ) ) {
 			Minifier::purge_minified();
 		}
+	}
+
+	/**
+	 * Delete/trash invalidation while the post type is still available.
+	 * The local and server response-cache sweeps share the same site boundary.
+	 *
+	 * @param int         $post_id Removed post ID.
+	 * @param object|null $post    Post object supplied by core when available.
+	 */
+	public static function on_post_removed( $post_id, $post = null ): void {
+		if ( ! self::post_change_is_cacheable_content( $post_id, $post, 'remove' ) ) {
+			return;
+		}
+
+		$post_type = is_object( $post ) && isset( $post->post_type )
+			? (string) $post->post_type
+			: (string) get_post_type( $post_id );
+
+		self::purge_all(
+			'post-removed:' . $post_type,
+			null,
+			array(
+				'scope'  => 'site',
+				// Match on_save_post: a presentation type changes how pages
+				// render rather than what they say.
+				'intent' => in_array( $post_type, self::presentation_post_types(), true )
+					? 'presentation'
+					: 'content',
+				'urls'   => array(),
+			)
+		);
+	}
+
+	/** Purge site responses when moderation changes visible comments. */
+	public static function on_comment_status( $comment_id, $status = '' ): void {
+		$comment = function_exists( 'get_comment' ) ? get_comment( (int) $comment_id ) : null;
+		$post_id = is_object( $comment ) && isset( $comment->comment_post_ID ) ? (int) $comment->comment_post_ID : 0;
+		if ( $post_id < 1 || ! function_exists( 'get_permalink' ) ) {
+			return;
+		}
+		$url = get_permalink( $post_id );
+		if ( ! is_string( $url ) || '' === $url ) {
+			return;
+		}
+		self::purge_all(
+			'comment-status:' . (string) $status,
+			null,
+			array(
+				'scope'  => 'site',
+				'intent' => 'content',
+				'urls'   => array(),
+			)
+		);
 	}
 
 	/**
@@ -2848,10 +3037,301 @@ class Cache {
 		self::purge_product( $product );
 	}
 
+	/**
+	 * Re-entry guard for the purge-event contract.
+	 *
+	 * A listener on `xspeed_after_purge_url` legitimately purges its own
+	 * layer, and a server-cache or CDN adapter that calls back into xSpeed
+	 * while doing so re-enters this method — unbounded, because each pass
+	 * looks like a fresh purge.
+	 *
+	 * A single global flag stops too much: a nested purge of a DIFFERENT URL is
+	 * a real purge whose listeners must hear about it. But a per-request
+	 * "already published" set stops too much in the other direction — a
+	 * network purge loops every blog in one request, and on a subdirectory
+	 * network they share a host, so blogs 2..N would be silently skipped. It
+	 * also grows for the life of the process.
+	 *
+	 * So the guard tracks what is IN FLIGHT, not what has been published: a
+	 * target is marked while its own dispatch is on the stack and unmarked
+	 * when it returns. Re-entering the same target recurses, so it is refused;
+	 * purging the same URL again later is a new event and publishes. The set
+	 * is bounded by call depth rather than by how many URLs a request touches.
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $purge_events_in_flight = array();
+
+	/** Monotonic count used to detect whether a delegated purge published. */
+	private static $purge_event_sequence = 0;
+
+	/**
+	 * Publish a purge event exactly once, with bounded arguments.
+	 *
+	 * Deliberately carries only what an integration needs to invalidate its
+	 * own copy: the canonical URL (or null for a full purge), the site host,
+	 * the cause label, and how many files went. No filesystem paths, no cache
+	 * contents, no request headers, no user data. The URL query and caller-
+	 * supplied cause may nevertheless contain sensitive text, so listeners
+	 * must redact them in logs or unrelated destinations that do not need the
+	 * exact cache key.
+	 *
+	 * A listener that throws must not take the purge down with it: the files
+	 * are already gone by the time we get here, and an integration's bad day
+	 * is not a reason to report a failed purge to the caller.
+	 *
+	 * @param string              $hook    Hook name to emit.
+	 * @param array<string,mixed> $context Bounded context, see above.
+	 */
+	private static function dispatch_purge_event( string $hook, array $context ): void {
+		if ( ! function_exists( 'do_action' ) ) {
+			return;
+		}
+		$target = $hook . '|' . ( isset( $context['url'] ) ? (string) $context['url'] : '' )
+			. '|' . ( isset( $context['host'] ) ? (string) $context['host'] : '' );
+		if ( isset( self::$purge_events_in_flight[ $target ] ) ) {
+			return;
+		}
+		self::$purge_events_in_flight[ $target ] = true;
+		++self::$purge_event_sequence;
+
+		// Our own integrations get their own try. Sharing one with the public
+		// action below meant a listener on the extension seam could throw and
+		// take the contract event down with it — the mirror of the failure
+		// this separation exists to prevent.
+		try {
+			// Built-in server-cache integrations run FIRST, and by a direct
+			// call rather than as listeners on the action below.
+			//
+			// WordPress stops dispatching an action's remaining callbacks when
+			// one of them throws. As a listener, our LiteSpeed forwarding
+			// would then be skipped by any unrelated third-party callback that
+			// happened to be registered earlier and blew up — and the visible
+			// result is the worst kind: xSpeed reports a successful purge while
+			// the server keeps serving stale HTML. Shipped behaviour must not
+			// be hostage to a listener's bug.
+			self::forward_to_server_caches( $context );
+		} catch ( \Throwable $e ) {
+			self::log_purge_listener_error( $hook, $e );
+		}
+
+		try {
+			self::do_action_isolated( $hook, $context );
+		} catch ( \Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+			// Swallow: see docblock. The purge succeeded regardless.
+			self::log_purge_listener_error( $hook, $e );
+		} finally {
+			unset( self::$purge_events_in_flight[ $target ] );
+		}
+	}
+
+	/**
+	 * Run every listener on a purge hook, isolating each from the others.
+	 *
+	 * `do_action()` dispatches callbacks in one loop, so the first one to
+	 * throw takes every LATER listener down with it. On a purge that meant a
+	 * failing CDN integration silently cancelled the ones queued behind it —
+	 * and because the throw was swallowed to keep the purge itself succeeding,
+	 * the user was told the clear worked while two edges were never touched.
+	 * Invisible unless WP_DEBUG happened to be on. (QA #348)
+	 *
+	 * Each callback gets its own try/catch here, so one integration's bad day
+	 * costs only that integration. Priority order is preserved. Falls back to
+	 * a plain `do_action()` when the filter registry is not the shape we
+	 * expect, so an unusual environment degrades to the old behaviour rather
+	 * than skipping listeners entirely.
+	 *
+	 * @param string $hook Hook name to emit.
+	 * @param mixed  $arg  Single argument passed to each listener.
+	 */
+	public static function do_action_isolated( string $hook, $arg ): void {
+		global $wp_filter;
+
+		// Walking $wp_filter by hand and calling each callback directly was the
+		// obvious way to do this, and it was wrong: it bypasses WordPress, so
+		// `current_filter()` came back empty, `did_action()` stayed at 0, the
+		// `all` hook never fired, and Query Monitor and Debug Bar could not see
+		// the very contract this class publishes. A shared handler branching on
+		// current_filter() picked the wrong branch. (QA #348 round 2, issue 3)
+		//
+		// So let do_action() dispatch — WordPress keeps its bookkeeping — and
+		// isolate one level down instead: each registered callback is swapped
+		// for a wrapper that runs it inside a try/catch. One listener throwing
+		// then costs only that listener, which is the whole point, without
+		// costing the hook its identity.
+		if ( ! isset( $wp_filter[ $hook ] ) || ! ( $wp_filter[ $hook ] instanceof \WP_Hook ) ) {
+			do_action( $hook, $arg );
+			return;
+		}
+
+		$hook_object = $wp_filter[ $hook ];
+		$original    = $hook_object->callbacks;
+		if ( ! is_array( $original ) || array() === $original ) {
+			do_action( $hook, $arg );
+			return;
+		}
+
+		$wrapped      = array();
+		$restorations = array();
+		foreach ( $original as $priority => $group ) {
+			if ( ! is_array( $group ) ) {
+				$wrapped[ $priority ] = $group;
+				continue;
+			}
+			foreach ( $group as $id => $registered ) {
+				if ( ! isset( $registered['function'] ) || ! is_callable( $registered['function'] ) ) {
+					$wrapped[ $priority ][ $id ] = $registered;
+					continue;
+				}
+				$callback = $registered['function'];
+				$wrapper  = static function ( ...$args ) use ( $callback, $hook ) {
+					try {
+						return $callback( ...$args );
+					} catch ( \Throwable $e ) {
+						self::log_purge_listener_error( $hook, $e );
+						return null;
+					}
+				};
+				$wrapped[ $priority ][ $id ] = array(
+					// Keep accepted_args: a listener registered for 0 or 1
+					// arguments must still be called the way it asked.
+					'accepted_args' => $registered['accepted_args'] ?? 1,
+					'function'      => $wrapper,
+				);
+				$restorations[ $priority ][ $id ] = array(
+					'original' => $registered,
+					'wrapper'  => $wrapper,
+				);
+			}
+		}
+
+		$hook_object->callbacks = $wrapped;
+		try {
+			do_action( $hook, $arg );
+		} finally {
+			// Restore only wrappers still present. Native add/remove operations
+			// performed by listeners must survive this temporary substitution.
+			foreach ( $restorations as $priority => $group ) {
+				foreach ( $group as $id => $restore ) {
+					$current = $hook_object->callbacks[ $priority ][ $id ]['function'] ?? null;
+					if ( $current === $restore['wrapper'] ) {
+						$hook_object->callbacks[ $priority ][ $id ] = $restore['original'];
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Name a listener that threw, under WP_DEBUG only.
+	 *
+	 * Gated like the rest of Free's diagnostics: a third-party listener
+	 * throwing on every purge must not fill a production log.
+	 */
+	private static function log_purge_listener_error( string $hook, \Throwable $e ): void {
+		// An \Error — a TypeError from one of OUR listeners, say — is a bug
+		// rather than a runtime condition a third party imposed on us, and
+		// swallowing it silently in production turns it into a purge that
+		// quietly stops working. Those are logged whatever WP_DEBUG says;
+		// third-party \Exceptions stay gated so a noisy integration cannot
+		// fill a production log.
+		$always = $e instanceof \Error;
+		if ( ( $always || ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ) && function_exists( 'error_log' ) ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- names a third-party listener that threw during a purge.
+			error_log( '[xspeed] a ' . $hook . ' listener threw: ' . $e->getMessage() );
+		}
+	}
+
+	/** Test seam: clear the in-flight set left behind by an aborted dispatch. */
+	public static function reset_purge_events(): void {
+		self::$purge_events_in_flight = array();
+		self::$purge_event_sequence   = 0;
+	}
+
+	/**
+	 * Hand the purge to the caches we ship integrations for.
+	 *
+	 * Isolated from the public action on purpose — see dispatch_purge_event().
+	 * Guarded so a missing class (a partial upgrade, a stripped build) cannot
+	 * turn a working purge into a fatal.
+	 *
+	 * @param array<string,mixed> $context Bounded purge context.
+	 */
+	private static function forward_to_server_caches( array $context ): void {
+		if ( class_exists( __NAMESPACE__ . '\\Server_Caches' ) ) {
+			Server_Caches::forward( $context );
+		}
+	}
+
+	/**
+	 * `host[:port]` for a cache key, from a parsed URL.
+	 *
+	 * The port is kept, because `cache_key()` hashes the raw `HTTP_HOST` and
+	 * that carries `:8080` on any install not served from 80/443 — dropping it
+	 * computed a different md5, found no file, and reported "already cold"
+	 * while the page kept serving HIT.
+	 *
+	 * A port that is the DEFAULT for the scheme is dropped, though, because
+	 * `HTTP_HOST` does not carry one: a browser sends `Host: site.com` for
+	 * `https://site.com:443/`. Keeping it hashed `site.com:443` against a file
+	 * stored under `site.com` — the same silent no-op in the other direction,
+	 * and the one QA hit passing a canonical URL with the port spelled out.
+	 * (QA #348)
+	 *
+	 * @param array<string,mixed> $parts Output of wp_parse_url().
+	 */
+	private static function host_port_of( array $parts ): string {
+		if ( ! isset( $parts['host'] ) ) {
+			return '';
+		}
+		$host = strtolower( (string) $parts['host'] );
+		if ( '' === $host || ! isset( $parts['port'] ) ) {
+			return $host;
+		}
+		$port   = (int) $parts['port'];
+		$scheme = isset( $parts['scheme'] ) ? strtolower( (string) $parts['scheme'] ) : '';
+		if ( ( 'https' === $scheme && 443 === $port ) || ( 'http' === $scheme && 80 === $port ) ) {
+			return $host;
+		}
+		return $host . ':' . $port;
+	}
+
 	public static function purge_url( string $url, string $cause = 'manual' ): int {
+		// A URL that names nothing is not a purge of everything. An empty or
+		// blank string used to fall through to the home_url() default below
+		// and clear the HOMEPAGE — so a third party calling
+		// `purge_url( get_permalink( $id ) )` on a post whose permalink came
+		// back empty silently purged the front page instead of nothing. The
+		// CLI and the MCP tool reject empties before reaching this, so only
+		// direct API callers were exposed, but they are exactly the audience
+		// this public contract is for. (QA #348)
+		if ( '' === trim( $url ) ) {
+			return 0;
+		}
 		$parts = function_exists( 'wp_parse_url' ) ? wp_parse_url( $url ) : parse_url( $url ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- fallback for early-boot contexts only.
 		if ( ! is_array( $parts ) ) {
 			return 0;
+		}
+		// Absolute URLs are accepted only for HTTP response caches. Schemes such
+		// as ftp:, file: and javascript: can parse cleanly but do not name a page
+		// xSpeed or a server response cache can invalidate. A leading-slash path
+		// remains a supported site-relative target.
+		if ( isset( $parts['scheme'] ) && ! in_array( strtolower( (string) $parts['scheme'] ), array( 'http', 'https' ), true ) ) {
+			return 0;
+		}
+		if ( isset( $parts['scheme'] ) && empty( $parts['host'] ) ) {
+			return 0;
+		}
+		// Reject a string that parsed but is not a URL we can act on: no
+		// scheme AND no host AND no leading-slash path means something like
+		// `ht!tp://[[[` or a bare word, which parse_url() hands back as a
+		// relative "path". Forwarding that produced `purge_url(/ht!tp://[[[)`
+		// — a nonsense tag sent to LiteSpeed for every malformed call.
+		if ( ! isset( $parts['scheme'] ) && ! isset( $parts['host'] ) ) {
+			$raw = isset( $parts['path'] ) ? (string) $parts['path'] : '';
+			if ( '' === $raw || '/' !== $raw[0] ) {
+				return 0;
+			}
 		}
 		// Keep the port. `cache_key()` hashes the raw `HTTP_HOST`, which
 		// carries `:8080` on any install not served from 80/443 — while
@@ -2860,17 +3340,32 @@ class Cache {
 		// reported "already cold". A silent no-op: the page kept serving HIT
 		// until its TTL ran out. Intranet installs, panel hosts on :8443 and
 		// proxies that forward `Host: site.com:8080` all hit this.
-		$host = isset( $parts['host'] ) ? strtolower( (string) $parts['host'] ) : '';
-		if ( '' !== $host && isset( $parts['port'] ) ) {
-			$host .= ':' . (int) $parts['port'];
+		// A scheme-less `site.test:443/page/` is a supported explicit-host
+		// target. Infer a scheme only when it names THIS site's hostname: then
+		// its explicit default port is the same origin and the same local cache
+		// key. Never apply this to another host or to a non-default port.
+		if ( ! isset( $parts['scheme'] ) && isset( $parts['host'], $parts['port'] ) && function_exists( 'home_url' ) ) {
+			$home = function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ) ) : parse_url( home_url( '/' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- see above.
+			if ( is_array( $home ) && ! empty( $home['host'] ) && ! empty( $home['scheme'] )
+				&& strtolower( (string) $home['host'] ) === strtolower( (string) $parts['host'] )
+			) {
+				$home_scheme = strtolower( (string) $home['scheme'] );
+				$port        = (int) $parts['port'];
+				$home_port   = isset( $home['port'] )
+					? (int) $home['port']
+					: ( 'https' === $home_scheme ? 443 : ( 'http' === $home_scheme ? 80 : 0 ) );
+				if ( $home_port === $port
+					&& ( ( 'https' === $home_scheme && 443 === $port ) || ( 'http' === $home_scheme && 80 === $port ) )
+				) {
+					$parts['scheme'] = $home_scheme;
+				}
+			}
 		}
+		$host = self::host_port_of( $parts );
 		if ( '' === $host && function_exists( 'home_url' ) ) {
 			$home = function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ) ) : parse_url( home_url( '/' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- see above.
-			if ( is_array( $home ) && isset( $home['host'] ) ) {
-				$host = strtolower( (string) $home['host'] );
-				if ( isset( $home['port'] ) ) {
-					$host .= ':' . (int) $home['port'];
-				}
+			if ( is_array( $home ) ) {
+				$host = self::host_port_of( $home );
 			}
 		}
 		if ( '' === $host ) {
@@ -2956,11 +3451,117 @@ class Cache {
 			);
 		}
 
+		/**
+		 * Fires after one URL's cached copy has been purged.
+		 *
+		 * The single-URL counterpart to `xspeed_after_purge_all`. Subscribe
+		 * here to invalidate a cache xSpeed does not own — a server-level
+		 * cache such as LiteSpeed's LSCache, a reverse proxy, or a CDN — for
+		 * the same URL.
+		 *
+		 * Only fires when the purge actually ran. A malformed URL, a URL with
+		 * no resolvable host, or a traversal attempt returns earlier and
+		 * publishes nothing, so a listener can treat this as "xSpeed purged
+		 * this URL" rather than "xSpeed was asked to". `removed` may legitimately
+		 * be 0: the URL was not in xSpeed's cache, which says nothing about
+		 * whether it is in yours.
+		 *
+		 * Fires at most once per purge. A listener that calls back into
+		 * xSpeed's purge API will not re-enter this event.
+		 *
+		 * @since 1.2.3
+		 *
+		 * @param array $context {
+		 *     Bounded description of the purge. URL queries and caller-supplied
+		 *     causes can contain sensitive values and are not logging fields.
+		 *
+		 *     @type string $url     Canonical scheme://host/path[?query] of the purged URL.
+		 *                            The query is preserved because caches in front
+		 *                            commonly key on it; xSpeed's own sweep is
+		 *                            path-based, so `removed` describes that.
+		 *     @type string $host    Host (with port when non-standard).
+		 *     @type string $path    Path component, leading slash.
+		 *     @type string $cause   Short label for who asked. See purge_all().
+		 *     @type int    $removed Number of cache files removed.
+		 *     @type string $scope   Actionable adapter scope: `urls`.
+		 *     @type string $intent  Why responses changed: `content`.
+		 *     @type string[] $urls  Exact response URLs to invalidate.
+		 * }
+		 */
+		$canonical_url = self::canonical_purge_url(
+			$host,
+			$path,
+			isset( $parts['query'] ) ? (string) $parts['query'] : '',
+			isset( $parts['scheme'] ) ? strtolower( (string) $parts['scheme'] ) : ''
+		);
+		self::dispatch_purge_event(
+			'xspeed_after_purge_url',
+			array(
+				'url'     => $canonical_url,
+				'host'    => $host,
+				'path'    => $path,
+				'cause'   => $cause,
+				'removed' => $count,
+				'scope'   => 'urls',
+				'intent'  => 'content',
+				'urls'    => array( $canonical_url ),
+			)
+		);
+
 		return $count;
 	}
 
+	/** Host this site's purge is scoped to, for the purge-event context. */
+	private static function current_purge_host(): string {
+		if ( ! function_exists( 'home_url' ) ) {
+			return '';
+		}
+		$home = function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ) ) : parse_url( home_url( '/' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- host only.
+		if ( ! is_array( $home ) || empty( $home['host'] ) ) {
+			return '';
+		}
+		// Same default-port normalisation as purge_url(): a site whose
+		// home_url() carries `:443` (normal behind a proxy) otherwise stamps
+		// every full-purge event with a host that matches none of its own
+		// URLs, so the LiteSpeed forward stood down site-wide. (QA #348)
+		return self::host_port_of( $home );
+	}
+
 	/**
-	 * Purge this site's cache.
+	 * Rebuild the canonical URL a purge applied to.
+	 *
+	 * Built from the parts the purge itself used, so a listener is told the
+	 * URL we acted on rather than the string the caller happened to pass —
+	 * those differ whenever the caller supplied a site-relative path, a
+	 * different scheme, or a query string the cache key ignores.
+	 */
+	private static function canonical_purge_url( string $host, string $path, string $query = '', string $url_scheme = '' ): string {
+		// The purged URL's own scheme wins. purge_url() explicitly supports
+		// cross-site purges (multisite, WP-CLI, cron), where composing the
+		// current site's scheme onto another site's host builds a URL that was
+		// never served — and a CDN listener then purges the wrong key and
+		// reports success.
+		if ( '' !== $url_scheme ) {
+			return $url_scheme . '://' . $host . $path . ( '' !== $query ? '?' . $query : '' );
+		}
+		$scheme = function_exists( 'is_ssl' ) && is_ssl() ? 'https' : 'http';
+		if ( function_exists( 'home_url' ) ) {
+			$home = function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ) ) : parse_url( home_url( '/' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- scheme only.
+			if ( is_array( $home ) && ! empty( $home['scheme'] ) ) {
+				$scheme = (string) $home['scheme'];
+			}
+		}
+		// The query is carried even though OUR sweep above is path-based.
+		// Caches in front commonly key on the full request line — LiteSpeed
+		// tags `/shop/?page=2` separately from `/shop/` — so publishing the
+		// bare path would have a listener confidently purge the wrong entry
+		// and report success. Telling it exactly what was asked for lets it
+		// act correctly; `removed` still describes only what WE removed.
+		return $scheme . '://' . $host . $path . ( '' !== $query ? '?' . $query : '' );
+	}
+
+	/**
+	 * Sweep this site's cache files.
 	 *
 	 * On multisite every blog shares one cache directory, so an unscoped
 	 * sweep here took the whole network cold — one subsite's settings save
@@ -2970,10 +3571,11 @@ class Cache {
 	 *
 	 * Clears the files only: the flat tree, the static tree, the REST
 	 * responses and the minified assets. The object-cache flush, the stats
-	 * update, `xspeed_after_purge_all` and the log entry live in purge_all(),
-	 * which is still the entry point for every existing caller. Split out so
-	 * `wp xspeed purge` can report the local sweep as one line item and the
-	 * object cache as another, each with its own status — see Purge_Runner.
+	 * update, `xspeed_after_purge_all`, the `xspeed_after_purge` contract
+	 * event and the log entry live in purge_all(), which is still the entry
+	 * point for every existing caller. Split out so `wp xspeed purge` can
+	 * report the local sweep as one line item and the object cache as
+	 * another, each with its own status — see Purge_Runner.
 	 *
 	 * @param string|null $host Host to purge. Defaults to the current site.
 	 *                          Pass '*' to sweep the ENTIRE tree — network
@@ -2996,7 +3598,8 @@ class Cache {
 		} else {
 			$dir          = self::host_dir( $host );
 			$scope        = '' === $dir ? 'default' : $dir;
-			$static_scope = $scope;
+			$static_dir   = self::static_host_dir( $host );
+			$static_scope = '' === $static_dir ? 'default' : $static_dir;
 		}
 
 		$count = 0;
@@ -3150,12 +3753,42 @@ class Cache {
 	 *
 	 * @param string      $cause Who asked, for the purge log.
 	 * @param string|null $host  See purge_local().
+	 * @param array<string,mixed> $invalidation Public adapter policy. `scope`
+	 *                                          is urls/site/network/none,
+	 *                                          `intent` explains why, and
+	 *                                          `urls` supplies exact targets.
 	 * @return int Page + REST entries removed.
 	 */
-	public static function purge_all( string $cause = 'manual', ?string $host = null ) {
-		$network_wide = ( '*' === $host );
-		$removed      = self::purge_local( $host );
-		$count        = $removed['pages'] + $removed['rest'];
+	public static function purge_all( string $cause = 'manual', ?string $host = null, array $invalidation = array() ) {
+		$network_wide  = ( '*' === $host );
+		$adapter_scope = isset( $invalidation['scope'] ) && is_string( $invalidation['scope'] )
+			? $invalidation['scope']
+			: ( $network_wide ? 'network' : 'site' );
+		if ( ! in_array( $adapter_scope, array( 'urls', 'site', 'network', 'none' ), true ) ) {
+			$adapter_scope = $network_wide ? 'network' : 'site';
+		}
+		if ( $network_wide ) {
+			$adapter_scope = 'network';
+		}
+		$intent = isset( $invalidation['intent'] ) && is_string( $invalidation['intent'] ) && '' !== $invalidation['intent']
+			? $invalidation['intent']
+			: 'complete';
+		$urls   = isset( $invalidation['urls'] ) && is_array( $invalidation['urls'] )
+			? array_values( array_unique( array_filter( $invalidation['urls'], 'is_string' ) ) )
+			: array();
+		// This method always sweeps a complete local bucket. A narrower adapter
+		// announcement would claim unrelated local pages stayed warm when they
+		// did not, leaving their server copies stale. Until purge_all() gains
+		// dependency-aware local deletion, its response scope cannot be `urls`.
+		if ( 'urls' === $adapter_scope ) {
+			$adapter_scope = $network_wide ? 'network' : 'site';
+		}
+		if ( 'site' === $adapter_scope || 'network' === $adapter_scope || 'none' === $adapter_scope ) {
+			$urls = array();
+		}
+
+		$removed = self::purge_local( $host );
+		$count   = $removed['pages'] + $removed['rest'];
 
 		self::flush_object_cache( $network_wide );
 
@@ -3166,7 +3799,61 @@ class Cache {
 		// registered listeners but was never emitted. Treat it as additive
 		// (CDN / edge invalidation), not the mechanism for clearing local
 		// files. (FBS-83114)
-		do_action( 'xspeed_after_purge_all', $cause );
+		// Wrapped: this action predates the purge-event contract and has its
+		// own third-party listeners. One of them throwing used to abort
+		// purge_all() here, which now also means the contract event below
+		// never fires and a server cache keeps serving stale HTML. The local
+		// sweep is already done by this point, so swallowing is strictly safer
+		// than letting a listener decide the rest of the method runs.
+		try {
+			// Isolated per listener: one throwing used to cancel every
+			// listener queued behind it — Critical CSS, Unused CSS and the
+			// Cloudflare edge purge all hang off this hook. (QA #348)
+			self::do_action_isolated( 'xspeed_after_purge_all', $cause );
+		} catch ( \Throwable $e ) {
+			self::log_purge_listener_error( 'xspeed_after_purge_all', $e );
+		}
+
+		/**
+		 * Fires after a full purge, with the same bounded context shape as
+		 * `xspeed_after_purge_url`.
+		 *
+		 * Distinct from `xspeed_after_purge_all` on purpose. That action is
+		 * the long-standing internal signal — it passes a bare `$cause` string
+		 * and Free's own modules use it for local bookkeeping. This one is the
+		 * documented contract for OUTSIDE integrations: same argument shape as
+		 * the per-URL event, so a server-cache or CDN adapter can subscribe to
+		 * both with one handler and branch on a null `url`.
+		 *
+		 * Fires at most once per purge, and not at all when a listener's own
+		 * purge re-enters xSpeed.
+		 *
+		 * @since 1.2.3
+		 *
+		 * @param array $context {
+		 *     @type null   $url     Always null — a full purge has no single URL.
+		 *     @type string $host    Host swept, or '*' for the entire tree.
+		 *     @type null   $path    Always null.
+		 *     @type string $cause   Short label for who asked.
+		 *     @type int    $removed Number of cache files removed.
+		 *     @type string $scope   Adapter action: urls/site/network/none.
+		 *     @type string $intent  content/presentation/complete or a caller-defined intent.
+		 *     @type string[] $urls  Exact targets when scope is urls.
+		 * }
+		 */
+		self::dispatch_purge_event(
+			'xspeed_after_purge',
+			array(
+				'url'     => null,
+				'host'    => null === $host ? self::current_purge_host() : (string) $host,
+				'path'    => null,
+				'cause'   => $cause,
+				'removed' => $count,
+				'scope'   => $adapter_scope,
+				'intent'  => $intent,
+				'urls'    => $urls,
+			)
+		);
 
 		// The list behind the "Cached pages" card is memoized for a minute;
 		// a purge has to drop it or the drill-down shows pages that no
@@ -3769,6 +4456,7 @@ class Cache {
 				self::update_stats( array( 'last_purge' => time() ) );
 				Cache_Inventory::invalidate();
 				self::record_partial_purge( 'page', $cause, $count );
+				self::announce_purge( $cause, $count );
 				return $count;
 
 			case 'assets':
@@ -3797,6 +4485,7 @@ class Cache {
 				self::update_stats( array( 'last_purge' => time() ) );
 				Cache_Inventory::invalidate();
 				self::record_partial_purge( 'assets', $cause, $count );
+				self::announce_purge( $cause, $count );
 				return $count;
 
 			case 'object':
@@ -3809,6 +4498,7 @@ class Cache {
 			case 'rest':
 				$count = Rest_Cache::purge();
 				self::record_partial_purge( 'REST responses', $cause, $count );
+				self::announce_purge( $cause, $count );
 				return $count;
 
 			default:
@@ -3863,10 +4553,96 @@ class Cache {
 	 * @param string $cause Who asked.
 	 */
 	private static function purge_type_unhandled( string $type, string $cause ): int {
-		do_action( 'xspeed_purge_type_' . $type );
+		$event_sequence = self::$purge_event_sequence;
+		$hook           = 'xspeed_purge_type_' . $type;
+		$has_handler    = false !== has_action( $hook );
+		do_action( $hook );
 		self::record_partial_purge( $type, $cause, null );
 
+		// Announce, same as the types this class owns. Pro's "Purge Critical
+		// CSS" and "Purge Unused CSS" arrive here, and they change what a
+		// cached page CONTAINS — critical CSS is inlined into the HTML, so a
+		// server cache goes on serving pages with the old styles baked in.
+		// Fixing the three Free buttons and leaving these two silent left the
+		// same hole for the tier most likely to be using both plugins.
+		// (QA #348 round 2, issue 2)
+		//
+		// Unknown slugs must not turn into a site-wide purge merely because no
+		// handler exists. These are the response-changing Pro types Free knows;
+		// third parties can declare another through the filter. A registered
+		// handler plus this explicit response scope is the handled signal.
+		$scope = in_array( $type, array( 'critical-css', 'unused-css' ), true ) ? 'site' : 'none';
+		/**
+		 * Declare whether a handled custom purge type changes cached responses.
+		 *
+		 * @since 1.2.3
+		 * @param string $scope site/network/none.
+		 * @param string $type  Purge-type slug.
+		 */
+		$scope = (string) apply_filters( 'xspeed_purge_type_response_scope', $scope, $type );
+		if ( $has_handler
+			&& $event_sequence === self::$purge_event_sequence
+			&& in_array( $scope, array( 'site', 'network' ), true )
+		) {
+			self::announce_purge( $cause, 0, $scope, 'presentation' );
+		}
+
 		return 0;
+	}
+
+	/**
+	 * Tell the server cache that a PARTIAL purge cleared cached responses.
+	 *
+	 * "Purge Page / Static Cache", "Purge CSS / JS Cache" and "Purge REST
+	 * Cache" each delete cached RESPONSES for the whole site, so a cache in
+	 * front of PHP is now serving copies xSpeed has just thrown away. Only
+	 * "Purge All" announced itself, which left three of the four toolbar
+	 * buttons doing exactly what this contract exists to prevent: clearing
+	 * our copy while the server kept serving the stale one. The `assets` case
+	 * was the sharpest — it deletes the minified bundles too, so LiteSpeed
+	 * went on serving pages whose CSS and JS no longer exist. (QA #348)
+	 *
+	 * Sent as the full-purge shape (`url` null) because that is what happened:
+	 * every cached page for this site went, not one address. `object` is not
+	 * announced — flushing the object cache changes no rendered response a
+	 * server cache could be holding.
+	 *
+	 * Public because Purge_Runner sweeps the local files itself, through
+	 * purge_local(), rather than through purge_all() — so it has to announce
+	 * on its own behalf or `wp xspeed purge` and the dashboard button clear
+	 * our copy while LiteSpeed keeps serving the stale one.
+	 *
+	 * @param string $cause   Who asked.
+	 * @param int    $removed Entries removed locally.
+	 * @param string $scope   Actionable adapter scope.
+	 * @param string $intent  Reason rendered responses changed.
+	 */
+	public static function announce_purge( string $cause, int $removed, string $scope = 'site', string $intent = 'complete' ): void {
+		// Announcing is additive: the local sweep has already happened and
+		// succeeded. Notification must never be able to turn a working purge
+		// into a fatal, so anything the URL helpers do in an unusual context
+		// (early boot, a drop-in, a bare test harness) is contained here
+		// rather than propagating to the caller.
+		if ( ! function_exists( 'home_url' ) || ! function_exists( 'do_action' ) ) {
+			return;
+		}
+		try {
+			self::dispatch_purge_event(
+				'xspeed_after_purge',
+				array(
+					'url'     => null,
+					'host'    => self::current_purge_host(),
+					'path'    => null,
+					'cause'   => $cause,
+					'removed' => $removed,
+					'scope'   => $scope,
+					'intent'  => $intent,
+					'urls'    => array(),
+				)
+			);
+		} catch ( \Throwable $e ) {
+			self::log_purge_listener_error( 'xspeed_after_purge', $e );
+		}
 	}
 
 	/**
@@ -4744,8 +5520,9 @@ class Cache {
 	 * unwritable by nginx, the access_log write silently fails, and the
 	 * dashboard shows a 0% hit ratio even though static HITs are serving.
 	 * So we widen the dir to 0777 and the file to 0666 — group/other write —
-	 * so whatever uid nginx runs as can append. (The file holds only HIT
-	 * request lines, no secrets.)
+	 * so whatever uid nginx runs as can append. The file holds HIT request
+	 * lines and must be protected like an access log: paths and queries can
+	 * contain sensitive values.
 	 */
 	/**
 	 * Directory holding the nginx hit log. Lives under uploads/, NOT the

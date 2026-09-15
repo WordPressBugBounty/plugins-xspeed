@@ -312,7 +312,20 @@ final class Purge_Runner {
 		$entries = (int) $removed['pages'] + (int) $removed['rest'] + (int) $removed['assets'];
 
 		Cache::update_stats( array( 'last_purge' => time() ) );
-		do_action( 'xspeed_after_purge_all', $cause );
+
+		// Isolated per listener, and the throw swallowed: this sweep is
+		// already done, and one listener (Critical CSS, Unused CSS, the
+		// Cloudflare edge purge) failing must not cancel the ones queued
+		// behind it or stop the announcement below. Same handling
+		// purge_all() gives this action. (QA #348)
+		Cache::do_action_isolated( 'xspeed_after_purge_all', $cause );
+
+		// The public purge contract, which purge_all() publishes but
+		// purge_local() does not — without it `wp xspeed purge`, the
+		// dashboard button and the MCP purge tool would clear our files and
+		// leave LiteSpeed serving the stale page, having reported success.
+		Cache::announce_purge( $cause, $entries );
+
 		Cache_Inventory::invalidate();
 
 		Activity_Log::record(

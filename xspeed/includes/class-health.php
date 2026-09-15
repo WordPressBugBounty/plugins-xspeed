@@ -323,6 +323,60 @@ final class Health {
 			}
 		}
 
+		/*
+		 * A full-page cache owned by the WEB SERVER, in front of PHP.
+		 *
+		 * Reported only when it is actually there, because it is a fact about
+		 * the host rather than a setting the admin can act on from here — an
+		 * "absent" row would be noise on the ~99% of sites that have no such
+		 * layer. When it IS there it outranks almost everything else on this
+		 * panel: nginx answers before WordPress runs, so what a visitor sees
+		 * is decided by that cache and not by anything xSpeed reports about
+		 * its own.
+		 *
+		 * The severity is about DOUBLE full-page caching, not about the layer
+		 * existing. Two independent full-page caches stacked in front of one
+		 * site have independent TTLs, and the outer one can re-serve HTML the
+		 * inner one has already regenerated — the classic "I purged and it is
+		 * still stale" report. With xSpeed's own page cache off there is only
+		 * one layer and nothing to warn about, so that case is INFO.
+		 */
+		$host_cache_path = Host_Page_Caches::nginx_helper_cache_path();
+		if ( null !== $host_cache_path ) {
+			$detail = $cache_enabled
+				? 'Your server is running its own full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed — so this site has TWO full-page caches stacked in front of it. xSpeed forwards every Purge All to the server layer, but the two expire on their own schedules (the server side is typically an hour), so a page can still be served from nginx after xSpeed has regenerated it. If edits keep looking stale, purge from your host\'s dashboard too, or turn xSpeed\'s page cache off and let the server layer do the work — it is the faster of the two, because it answers before PHP starts.'
+				: 'Your server is running a full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed. xSpeed\'s own page cache is off, so this is the only full-page cache in front of the site — and it is the fastest kind, answering before PHP starts. Purge All in xSpeed still clears it.';
+
+			// Path prefix as a fingerprint for the WORDING only — never as a
+			// gate. Nginx Helper is not xCloud-only; other hosts and manual
+			// installs use it with a cache directory somewhere else entirely.
+			if ( 0 === strpos( $host_cache_path, '/etc/nginx/cache/' ) ) {
+				$detail .= sprintf( ' Cache directory: %s (the layout xCloud provisions).', $host_cache_path );
+			} else {
+				$detail .= sprintf( ' Cache directory: %s.', $host_cache_path );
+			}
+
+			// The purge is a direct unlink by the PHP-FPM user against a
+			// directory nginx owns. Whether that user can write there is a
+			// property of the host we cannot test from here without deleting
+			// someone's cache to find out, so say what to check rather than
+			// claiming an outcome either way.
+			if ( 'unlink_files' === Host_Page_Caches::nginx_helper_purge_method() ) {
+				$detail .= ' The server cache is purged by deleting its files directly, which needs PHP to have write access to that directory — if a purge here never changes what nginx serves, that permission is the thing to check with your host.';
+			}
+
+			if ( is_multisite() ) {
+				$detail .= ' On multisite, nginx keys one cache per install rather than per site, so this purge clears every site on the network.';
+			}
+
+			$out[] = array(
+				'id'     => 'host_page_cache',
+				'tone'   => $cache_enabled ? self::WARN : self::INFO,
+				'label'  => 'Server-level page cache (nginx FastCGI)',
+				'detail' => $detail,
+			);
+		}
+
 		// Cache expiry vs preloader schedule (deterministic rule, issue #31):
 		// pages that expire faster than the preloader re-warms them leave the
 		// cache cold for most real traffic — the classic "24.8% hit ratio with

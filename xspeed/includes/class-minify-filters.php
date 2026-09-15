@@ -191,6 +191,18 @@ final class Minify_Filters {
 		if ( ! self::is_delay_target( (string) $handle, (string) $src ) ) {
 			return $tag;
 		}
+		// Inline code elsewhere on the page reads this handle (or something
+		// it depends on) — same registry walk defer uses. Delaying it runs
+		// the consumer at parse time against a global that arrives on first
+		// interaction: `wp_add_inline_script( 'jquery-ui-core',
+		// 'jQuery.uiBackCompat…', 'before' )` throws "jQuery is not defined"
+		// the moment jquery-core is delayed. A handle the user NAMED in
+		// delay_js_targets is still delayed — an explicit entry is the user
+		// saying they know the inline consumer is safe to break or absent.
+		if ( isset( self::inline_bound_handles()[ (string) $handle ] )
+			&& ! self::is_user_named_target( (string) $handle, (string) $src ) ) {
+			return $tag;
+		}
 		// A non-executable type means this tag is data, or is being held by
 		// somebody else on purpose. The buffer pass has always checked this;
 		// the enqueue path did not, so a consent-blocked or JSON-carrying
@@ -442,6 +454,16 @@ final class Minify_Filters {
 				if ( ! self::is_delay_target( $tag_handle, $src ) ) {
 					return $tag;
 				}
+				// Mirror of the enqueue-path guard: a handle that inline code
+				// reads stays eager unless the user named it. wp_scripts()
+				// is still populated at xspeed_cache_final_html time on a
+				// MISS, so the registry walk is consultable here too; an
+				// unrecoverable handle ('') simply never matches the set.
+				if ( '' !== $tag_handle
+					&& isset( self::inline_bound_handles()[ $tag_handle ] )
+					&& ! self::is_user_named_target( $tag_handle, $src ) ) {
+					return $tag;
+				}
 
 				return (string) preg_replace(
 					'#(?<![-\w])src\s*=\s*(["\'][^"\']*["\'])#i',
@@ -595,6 +617,15 @@ final class Minify_Filters {
     var delayed=document.querySelectorAll('script[data-xs-delay]');
     delayed.forEach(function(s){
       var n=document.createElement('script');
+      // A dynamically-created script is async by default, so replayed
+      // EXTERNALS would race each other; async=false restores document
+      // order among the externals. Narrower guarantee, stated plainly:
+      // a replayed INLINE script still executes synchronously at its
+      // replaceChild, i.e. possibly before an earlier external has
+      // finished LOADING — so an inline consumer of a delayed external
+      // is only safe when both were delayed by explicit user targeting
+      // (the inline-bound guard keeps the implicit case eager).
+      n.async=false;
       // Nonce hiding: a connected element's nonce CONTENT attribute reads
       // as "", so copying it via the attribute loop would hand the clone
       // an empty nonce and a nonce-based CSP would block the replay. The
@@ -1288,6 +1319,29 @@ final class Minify_Filters {
 		foreach ( $targets as $needle ) {
 			$needle = (string) $needle;
 			if ( '' !== $needle && false !== stripos( $haystack, $needle ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the user EXPLICITLY named this script in delay_js_targets.
+	 *
+	 * Unlike is_delay_target() this never treats an empty list as
+	 * everything and never falls back to the vendor list — it answers
+	 * only "did the user deliberately point at this handle/URL?", which
+	 * is what lets an explicit entry override the inline-bound guard.
+	 *
+	 * @param string $handle Script handle.
+	 * @param string $src    Script URL.
+	 */
+	private static function is_user_named_target( string $handle, string $src ): bool {
+		$opts    = self::opts();
+		$targets = is_array( $opts['delay_js_targets'] ?? null ) ? $opts['delay_js_targets'] : array();
+		foreach ( $targets as $needle ) {
+			$needle = (string) $needle;
+			if ( '' !== $needle && self::target_matches( $needle, $handle, $src ) ) {
 				return true;
 			}
 		}

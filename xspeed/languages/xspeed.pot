@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.1\n"
+"Project-Id-Version: xSpeed Cache 1.3.2\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-14T12:05:45+00:00\n"
+"POT-Creation-Date: 2026-09-15T12:19:23+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:7176
+#: includes/class-cache.php:7953
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:153
 #: includes/class-admin.php:243
-#: includes/class-cache.php:7190
+#: includes/class-cache.php:7967
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -130,183 +130,183 @@ msgid "Clears this post and the pages that list it — the homepage, its archive
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:2950
+#: includes/class-cache.php:3445
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:3711
+#: includes/class-cache.php:4398
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:3715
+#: includes/class-cache.php:4402
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:3719
+#: includes/class-cache.php:4406
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:3723
+#: includes/class-cache.php:4410
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:3727
+#: includes/class-cache.php:4414
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:3885
+#: includes/class-cache.php:4661
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:3891
+#: includes/class-cache.php:4667
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:4112
+#: includes/class-cache.php:4888
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:4119
+#: includes/class-cache.php:4895
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4122
+#: includes/class-cache.php:4898
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4188
+#: includes/class-cache.php:4964
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:4194
+#: includes/class-cache.php:4970
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:4268
+#: includes/class-cache.php:5044
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4271
+#: includes/class-cache.php:5047
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4301
+#: includes/class-cache.php:5077
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:4358
+#: includes/class-cache.php:5134
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:4359
+#: includes/class-cache.php:5135
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:4361
+#: includes/class-cache.php:5137
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:4376
+#: includes/class-cache.php:5152
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:4468
+#: includes/class-cache.php:5244
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:4483
+#: includes/class-cache.php:5259
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:4484
+#: includes/class-cache.php:5260
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:4501
+#: includes/class-cache.php:5277
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:4519
+#: includes/class-cache.php:5295
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:4520
+#: includes/class-cache.php:5296
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:4531
+#: includes/class-cache.php:5307
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:4535
+#: includes/class-cache.php:5311
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:6682
+#: includes/class-cache.php:7459
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:6689
+#: includes/class-cache.php:7466
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:6744
+#: includes/class-cache.php:7521
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:6751
+#: includes/class-cache.php:7528
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:6754
+#: includes/class-cache.php:7531
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:6755
+#: includes/class-cache.php:7532
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:6756
+#: includes/class-cache.php:7533
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:6757
+#: includes/class-cache.php:7534
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:6758
+#: includes/class-cache.php:7535
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:6759
+#: includes/class-cache.php:7536
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:6760
+#: includes/class-cache.php:7537
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:6762
+#: includes/class-cache.php:7539
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:7259
+#: includes/class-cache.php:8036
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:675
 msgid "Unauthorized."
@@ -789,38 +789,38 @@ msgid "CDN"
 msgstr ""
 
 #. translators: 1: what asked for the purge, 2: number of files removed.
-#: includes/class-purge-runner.php:322
+#: includes/class-purge-runner.php:335
 #, php-format
 msgid "Cache purged (%1$s) — %2$d file(s) removed"
 msgstr ""
 
-#: includes/class-purge-runner.php:346
+#: includes/class-purge-runner.php:359
 msgid "the object cache engine is unavailable"
 msgstr ""
 
-#: includes/class-purge-runner.php:350
+#: includes/class-purge-runner.php:363
 msgid "no persistent object cache drop-in is in use"
 msgstr ""
 
-#: includes/class-purge-runner.php:353
+#: includes/class-purge-runner.php:366
 msgid "the drop-in is installed but is not persisting anything"
 msgstr ""
 
 #. translators: %s: what asked for the purge.
-#: includes/class-purge-runner.php:375
+#: includes/class-purge-runner.php:388
 #, php-format
 msgid "Purged object cache (%s)"
 msgstr ""
 
-#: includes/class-purge-runner.php:385
+#: includes/class-purge-runner.php:398
 msgid "the backend refused the flush"
 msgstr ""
 
-#: includes/class-purge-runner.php:397
+#: includes/class-purge-runner.php:410
 msgid "the Cloudflare module is not available"
 msgstr ""
 
-#: includes/class-purge-runner.php:421
+#: includes/class-purge-runner.php:434
 msgid "no CDN with a purge API is configured — xSpeed's CDN module rewrites asset URLs and holds no cache of its own"
 msgstr ""
 
