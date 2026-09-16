@@ -171,7 +171,9 @@ final class CacheModule extends Module {
 					'~wp-.*\.php',
 					'/feed/',
 					'index.php',
-					'~sitemap(_index)?\.xml',
+					// `sitemaps?` — SEOPress generates sitemaps.xml (plural).
+					'~sitemaps?(_index)?\.xml',
+					'/robots.txt',
 					// Bare (no trailing slash) so "contains" matches both
 					// /cart and /cart/items — WooCommerce serves both forms.
 					'/cart',
@@ -228,6 +230,51 @@ final class CacheModule extends Module {
 				'default'     => false,
 				'label'       => __( 'Separate Mobile Cache', 'xspeed' ),
 				'description' => __( 'Keep mobile and desktop responses in separate cache buckets. Turn on for AMP, mobile-specific themes (WPtouch / Jetpack mobile theme), or any setup that serves different HTML by device.', 'xspeed' ),
+			),
+			'edge_provider'   => array(
+				'type'          => 'enum',
+				'default'       => 'auto',
+				'options'       => array( 'auto', 'off', 'cloudflare', 'fastly', 'varnish', 'nginx', 'akamai', 'cloudfront', 'google', 'keycdn', 'bunny', 'sucuri', 'incapsula', 'generic', 'custom' ),
+				'option_labels' => array(
+					'auto'       => 'Detect automatically',
+					'off'        => 'Off — send nothing',
+					'cloudflare' => 'Cloudflare',
+					'varnish'    => 'Varnish',
+					'nginx'      => 'nginx proxy cache',
+					'cloudfront' => 'Amazon CloudFront',
+					'google'     => 'Google Cloud CDN',
+					'keycdn'     => 'KeyCDN',
+					'bunny'      => 'Bunny',
+					// These four cannot be presented as supported on the same
+					// footing as the ones above. Vendor documentation either
+					// does not establish that they honour what we send, or
+					// establishes that they ignore origin cache headers until
+					// the property is configured to respect them — Akamai
+					// caches for a theoretically infinite time by default, and
+					// Sucuri's default caching level ignores the headers
+					// outright. Naming them without the caveat would promise a
+					// protection the CDN is not currently giving.
+					'fastly'     => 'Fastly (needs CDN configuration)',
+					'akamai'     => 'Akamai (needs CDN configuration)',
+					'sucuri'     => 'Sucuri (needs CDN configuration)',
+					'incapsula'  => 'Imperva / Incapsula (needs CDN configuration)',
+					'generic'    => 'Something else',
+					'custom'     => 'Custom headers',
+				),
+				'label'         => __( 'Cache In Front Of This Site', 'xspeed' ),
+				'description'   => __( 'Ask a CDN or proxy in front of your site not to store pages xSpeed refused to cache. Leave it on Detect automatically unless you know what is in front of you; the marked providers ignore origin headers until you configure them to respect it.', 'xspeed' ),
+				'info_title'    => __( 'Cache in front of this site', 'xspeed' ),
+				'info'          => __( 'Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Run "wp xspeed cache edge" to see what was detected and what gets sent.', 'xspeed' )
+			),
+			'edge_custom_headers' => array(
+				'type'        => 'list',
+				'default'     => array(),
+				'item_type'   => 'string',
+				'label'       => __( 'Custom Edge Headers', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'edge_provider', 'value' => 'custom' ),
+				'description' => __( 'One header per line, as Name: value — for example "Surrogate-Control: no-store". Lines starting with # are ignored.', 'xspeed' ),
+				'info_title'  => __( 'Custom edge headers', 'xspeed' ),
+				'info'        => __( 'These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and "X-Accel-Expires: 0" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused.', 'xspeed' )
 			),
 		);
 	}
@@ -417,12 +464,12 @@ final class CacheModule extends Module {
 			array(
 				'name'      => 'xspeed cache',
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost. To clear the whole site use `wp xspeed purge`.',
+				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it. To clear the whole site use `wp xspeed purge`.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config' ),
+						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config', 'edge' ),
 						'optional' => true,
 					),
 					array(
@@ -833,11 +880,97 @@ final class CacheModule extends Module {
 			return;
 		}
 
+		if ( 'edge' === $action ) {
+			$this->cli_edge();
+			return;
+		}
+
 		$opts = Settings_Manager::get( self::SLUG );
 		\WP_CLI::log( 'cache_expiry  ' . $opts['cache_expiry'] . 'h' );
 		\WP_CLI::log( 'excluded_urls ' . count( $opts['excluded_urls'] ) . ' entries' );
 		foreach ( $opts['excluded_urls'] as $u ) {
 			\WP_CLI::log( '  - ' . $u );
+		}
+		$edge = \XSpeed\Edge_Provider::detect();
+		\WP_CLI::log( 'edge          ' . ( '' !== $edge['provider'] ? $edge['provider'] : $edge['confidence'] ) . ' (' . $edge['source'] . ')' );
+	}
+
+	/**
+	 * `wp xspeed cache edge` — what we think is in front, and what we say to it.
+	 *
+	 * Worth printing even when nothing is held back. "You are behind
+	 * Cloudflare, and a Cache Rule set to ignore origin headers overrides
+	 * anything xSpeed sends" is the answer to a support question that
+	 * otherwise costs someone a week, and it is true whether or not a hold
+	 * ever fires.
+	 */
+	private function cli_edge(): void {
+		$answer = \XSpeed\Edge_Provider::detect();
+
+		\WP_CLI::log( 'provider    ' . ( '' !== $answer['provider'] ? $answer['provider'] : '(none named)' ) );
+		\WP_CLI::log( 'confidence  ' . $answer['confidence'] );
+		\WP_CLI::log( 'source      ' . $answer['source'] );
+
+		// A pin outranks detection by design, so nothing re-checks it on the
+		// site's behalf. Saying the two disagree is the whole mechanism by
+		// which a site that changed CDN ever finds out.
+		$sniffed = \XSpeed\Edge_Provider::sniffed();
+		if ( in_array( $answer['source'], array( 'setting', 'constant', 'filter' ), true )
+			&& '' !== $sniffed['provider']
+			&& $sniffed['provider'] !== $answer['provider'] ) {
+			\WP_CLI::warning(
+				sprintf(
+					'This request looks like %s, but the provider is pinned to %s. If the site moved, change it — the pinned answer is also baked into the drop-in and the server rules.',
+					$sniffed['provider'],
+					'' !== $answer['provider'] ? $answer['provider'] : 'off'
+				)
+			);
+		}
+
+		if ( \XSpeed\Edge_Provider::is_off( $answer ) ) {
+			\WP_CLI::log( '' );
+			\WP_CLI::log( 'Nothing is sent: this is switched off.' );
+			return;
+		}
+
+		// Resolved through edge_headers_for() rather than straight off the
+		// provider, so this prints what the serve path would ACTUALLY send —
+		// including `X-XSpeed-Edge-Hold`, and including the evidence gate.
+		// Listing the provider's raw set ignored that gate and told operators
+		// a first render would be held on a site where it would not be.
+		//
+		// `bake`, not `request`. Two reasons, and the second one matters:
+		// this command answers for the site rather than for one response, and
+		// `request` fires `xspeed_edge_optimization_pending`, whose Pro
+		// listener resolves the CSS plan — which by its own description is
+		// what queues a build. A read-only command must not burn a build
+		// slot, quarantine an entry or purge a page just by being run, and
+		// under WP-CLI it would do all three against the home page.
+		$bypass = \XSpeed\Cache::edge_headers_for( 'BYPASS', 'bake', 'logged-in' );
+		$miss   = \XSpeed\Cache::edge_headers_for( 'MISS', 'bake' );
+
+		\WP_CLI::log( '' );
+		\WP_CLI::log( 'On a page xSpeed refuses to cache (a cart, a logged-in view):' );
+		foreach ( $bypass as $name => $value ) {
+			\WP_CLI::log( sprintf( '  %s: %s', $name, $value ) );
+		}
+
+		\WP_CLI::log( '' );
+		if ( array() === $miss ) {
+			\WP_CLI::log( 'On a first render: nothing. A MISS is a performance hedge, so it is held only where a cache in front was detected — and none was. Name the provider in Cache In Front Of This Site to cover first renders too.' );
+		} else {
+			\WP_CLI::log( 'On a first render:' );
+			foreach ( $miss as $name => $value ) {
+				\WP_CLI::log( sprintf( '  %s: %s', $name, $value ) );
+			}
+		}
+
+		\WP_CLI::log( '' );
+		\WP_CLI::log( 'X-XSpeed-Edge-Hold names why a response was held: bypass, bypass-shape, miss, mobile-split or pending. No header means nothing was held.' );
+
+		if ( 'cloudflare' === $answer['provider'] ) {
+			\WP_CLI::log( '' );
+			\WP_CLI::log( 'A Cloudflare Cache Rule whose Edge TTL is "Ignore cache-control header and use this TTL" overrides all of the above. Use "Respect origin TTL" on that rule if pages are still being stored.' );
 		}
 	}
 

@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -172,7 +172,7 @@ xSpeed Cache handles the edge cases other plugins miss:
 
 xSpeed Cache never collects personal data, stores IP addresses or uses tracking cookies. Every optimization runs locally on your server. By default it makes no calls to any third-party server. The only request is a quick check to your own site's home URL to confirm GZIP is active, rate-limited to once per hour.
 
-xSpeed Cache also includes **optional usage analytics**. The setup wizard shows a clearly labeled consent control for it (enabled by default, untick to opt out), and nothing is sent until you confirm your choices in the wizard. When enabled, xSpeed Cache shares anonymous, non-sensitive diagnostics: your WordPress and PHP version, active theme and plugins, server type, site language, and which xSpeed Cache features you have switched on, so we know what to keep fast and compatible. No personal data and no page content are ever sent, and you can turn it off again at any time from your dashboard. See the External services section below.
+xSpeed Cache also includes **optional usage analytics**. You are asked in two places, both off by default: a clearly labeled consent control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data. Nothing is sent unless you opt in from one of them. When enabled, xSpeed Cache shares anonymous, non-sensitive diagnostics: your WordPress and PHP version, active theme and plugins, server type, site language, and which xSpeed Cache features you have switched on, so we know what to keep fast and compatible. No personal data and no page content are ever sent, and you can turn it off again at any time from xSpeed Cache → Settings → Privacy & usage data. See the External services section below.
 
 = Backed By a Team You Trust =
 
@@ -264,7 +264,7 @@ By default, no. The only request is a check to your own site's home URL to confi
 
 == External services ==
 
-xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. The setup wizard shows a clearly-labeled consent control for analytics (enabled by default, untick to opt out), and nothing is sent until you confirm your choices there. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
+xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. Analytics consent is asked in two places, both off by default — a clearly-labeled control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data — and nothing is sent unless you opt in from one of them; turning the switch off stops all collection and clears the scheduled send. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
 
 = Self-hosted gzip probe =
 
@@ -306,6 +306,33 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.3.3] – 2026-09-16 =
+
+**Consent gets a dashboard home, the cache engine learns to leave non-HTML alone, and uncacheable pages now tell the CDN so.**
+
+Privacy & Analytics:
+- New: A "Privacy & usage data" panel to view and withdraw usage-analytics consent any time, with a matching wp xspeed privacy command.
+- Improved: The setup wizard's analytics consent now defaults to off and is only ever an explicit opt-in.
+
+Caching:
+- Fixed: WordPress's virtual robots.txt (and favicon) is no longer cached or minified, so every directive and newline reaches crawlers intact.
+- Improved: /robots.txt joined the default cache exclusions, and the sitemap pattern now matches sitemaps.xml too — existing installs keep their working exclusion through the rename.
+
+Cloudflare & CDN:
+- New: A page xSpeed refuses to cache now sends no-store edge headers, so a CDN never freezes a half-optimized or excluded page.
+- Fixed: The deferred Cloudflare purge batch is bounded, cleared on deactivation, and says so when a purge is refused.
+
+Optimization:
+- Fixed: Scripts marked data-no-optimize or data-no-minify are left completely alone by minify, defer and delay — consent-manager configurations always ship current.
+- Fixed: xSpeed's own scripts are never deferred or delayed by its own optimizer.
+- Fixed: The Conservative preset now switches LCP preload and preconnect off, matching its "page cache + GZIP only" promise.
+
+Dashboard & Admin UX:
+- Improved: Preload now reports what actually happened — how many pages are warming, and the server's reason when a crawl cannot start.
+
+Reliability:
+- Improved: Uninstall now removes all usage-tracking state, the scheduled send, and every leftover option row.
 
 = [1.3.2] – 2026-09-15 =
 

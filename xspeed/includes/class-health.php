@@ -408,6 +408,14 @@ final class Health {
 				: 'Set permalinks to anything other than "Plain" — page caching needs URL paths to key on.',
 		);
 
+		// What is in front of the site, and what we are telling it. Extracted
+		// so it can be exercised without paying for every other probe in
+		// checks(); see edge_check().
+		$edge_row = self::edge_check();
+		if ( null !== $edge_row ) {
+			$out[] = $edge_row;
+		}
+
 		// Cache-poisoning Set-Cookie detection (issue #33): a plugin emitting
 		// Set-Cookie on anonymous pageviews forces CDN/edge BYPASS for all
 		// HTML (Cloudflare never caches a response carrying Set-Cookie). Probe
@@ -571,6 +579,72 @@ final class Health {
 	 * @return array{id:string,tone:string,label:string,detail:string}|null Check
 	 *         row, or null when the rule doesn't apply (preloader off/manual).
 	 */
+	/**
+	 * What cache is in front of the site, and what we are telling it.
+	 *
+	 * Reported whether or not anything is currently being held back, because
+	 * the useful half is the caveat rather than the header. A Cloudflare
+	 * Cache Rule set to ignore origin headers overrides everything xSpeed
+	 * sends, and someone debugging "my cart page is still being cached"
+	 * needs telling that rather than left to discover it.
+	 *
+	 * Null when nothing was detected and nothing was switched off: there is
+	 * no news in "we looked and saw nothing", and a row saying so on every
+	 * ordinary single-server site would be noise in a panel people scan for
+	 * problems.
+	 *
+	 * @return array{id:string,tone:string,label:string,detail:string}|null
+	 */
+	public static function edge_check(): ?array {
+		$edge = Edge_Provider::detect();
+
+		if ( Edge_Provider::is_off( $edge ) ) {
+			return array(
+				'id'     => 'edge_hold',
+				'tone'   => self::WARN,
+				'label'  => 'Edge cache not being told anything',
+				'detail' => 'xSpeed is set not to send cache headers to the CDN in front of this site, so first renders and bypassed pages can be stored at the edge. Set "Cache In Front Of This Site" back to automatic unless you are sending your own headers.',
+			);
+		}
+
+		if ( Edge_Provider::NONE === $edge['confidence'] ) {
+			return null;
+		}
+
+		$named = '' !== $edge['provider'] ? $edge['provider'] : 'a cache we could not identify';
+
+		// A pin outranks detection by design, so nothing re-checks it on the
+		// site's behalf — and it is the one answer that also reaches the
+		// drop-in and the server rules. Comparing it against the request is
+		// the only way a site that changed CDN ever finds out.
+		$sniffed = Edge_Provider::sniffed();
+		if ( in_array( $edge['source'], array( 'setting', 'constant', 'filter' ), true )
+			&& '' !== $sniffed['provider']
+			&& $sniffed['provider'] !== $edge['provider'] ) {
+			return array(
+				'id'     => 'edge_hold',
+				'tone'   => self::WARN,
+				'label'  => 'Edge cache setting looks out of date',
+				'detail' => sprintf(
+					'This request looks like %s, but the provider is pinned to %s. If the site moved, update it — the pinned answer is also baked into the drop-in and the server rules.',
+					$sniffed['provider'],
+					$named
+				),
+			);
+		}
+
+		$caveat = 'cloudflare' === $edge['provider']
+			? ' A Cloudflare Cache Rule whose Edge TTL is "Ignore cache-control header and use this TTL" overrides this; use "Respect origin TTL" on that rule.'
+			: '';
+
+		return array(
+			'id'     => 'edge_hold',
+			'tone'   => self::OK,
+			'label'  => 'Edge cache being told what not to store',
+			'detail' => sprintf( 'First renders, bypassed pages and mobile-split pages are marked do-not-store for %s.%s', $named, $caveat ),
+		);
+	}
+
 	public static function expiry_preload_check( int $expiry_hours, string $schedule, bool $preloader_enabled, ?int $interval_hours = null ): ?array {
 		if ( ! $preloader_enabled ) {
 			return null;

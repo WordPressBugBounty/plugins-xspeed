@@ -1,7 +1,7 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 8
+ * XSPEED_DROPIN_VERSION: 9
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
  * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes so
@@ -319,6 +319,40 @@ if ( file_exists( $xspeed_cache_file ) ) {
 		// rewrite sends "HIT (nginx)" for the fast 5-15ms path; same header,
 		// distinct value so you can tell which layer served the page.
 		header( 'X-XSpeed-Cache: HIT (php)' );
+
+		// Edge/CDN headers decided by Cache::edge_headers_for(). No filter
+		// can run here — plugins are not loaded — so Cache::install_dropin()
+		// bakes the resolved pairs into the literal below and re-bakes them
+		// on every cache settings save.
+		//
+		// An un-substituted placeholder means this file was copied straight
+		// from a source checkout: it stays a string, is_array() rejects it,
+		// and the HIT is served with no edge headers rather than a fatal.
+		$xspeed_edge_headers = '@@XSPEED_EDGE_HEADERS@@';
+
+		// A page whose answer differs from the site-wide one carries its own
+		// pairs in the sidecar. It REPLACES the baked set rather than adding
+		// to it: the two describe the same response, and merging would leave
+		// the baked lifetime in place beside the hold meant to overrule it.
+		if ( isset( $xspeed_meta['edge_headers'] ) && is_array( $xspeed_meta['edge_headers'] ) ) {
+			$xspeed_edge_headers = $xspeed_meta['edge_headers'];
+		}
+
+		// The one setting this file reads for itself. Everything else about
+		// the edge answer is baked, because re-deriving it here would mean
+		// loading options before WordPress exists. `off` is the exception
+		// because it is the emergency switch: when something is wrong in
+		// production at three in the morning, waiting for a re-bake is not an
+		// answer. Any other value is a pin, and a pin is already baked in.
+		if ( defined( 'XSPEED_EDGE_PROVIDER' ) && 'off' === strtolower( (string) XSPEED_EDGE_PROVIDER ) ) {
+			$xspeed_edge_headers = array();
+		}
+
+		if ( is_array( $xspeed_edge_headers ) ) {
+			foreach ( $xspeed_edge_headers as $xspeed_edge_name => $xspeed_edge_value ) {
+				header( $xspeed_edge_name . ': ' . $xspeed_edge_value );
+			}
+		}
 
 		// Record the HIT for the dashboard hit-ratio. The drop-in runs
 		// BEFORE WordPress loads, so it can't call Hit_Counter — instead

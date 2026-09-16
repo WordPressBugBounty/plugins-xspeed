@@ -59,14 +59,33 @@ final class Cloudflare {
 	}
 
 	/**
-	 * Purge a specific list of URLs. CF accepts up to 30 per call;
-	 * caller should chunk if it has more.
+	 * Files sent per `purge_cache` call.
+	 *
+	 * Cloudflare's own limit is higher and varies by plan; 30 is what its
+	 * official WordPress plugin chunks at, and staying there keeps the
+	 * request body small on hosts with a modest `max_execution_time`.
+	 */
+	private const PURGE_FILES_PER_CALL = 30;
+
+	/**
+	 * Purge a specific list of URLs.
+	 *
+	 * Sent in chunks, so a list longer than one call still arrives in full.
+	 * It used to be truncated to the first 30 instead, and the
+	 * caller was told the purge succeeded — so on a site with more than 30
+	 * affected pages the rest silently stayed at the edge. Nothing in the
+	 * result said which, because as far as the response was concerned the
+	 * call did succeed.
+	 *
+	 * Stops at the first failure and returns it, rather than carrying on and
+	 * reporting the last outcome: the usual reason a chunk fails is the token
+	 * or the zone, which the next chunk would hit too.
 	 *
 	 * @param string[] $urls
 	 * @return array{ok:bool,status:int,body:array}
 	 */
 	public static function purge_urls( array $opts, array $urls ): array {
-		$urls = array_values( array_filter( array_map( 'strval', $urls ) ) );
+		$urls = array_values( array_unique( array_filter( array_map( 'strval', $urls ) ) ) );
 		if ( empty( $urls ) ) {
 			return self::fail( 0, 'No URLs supplied.' );
 		}
@@ -74,12 +93,21 @@ final class Cloudflare {
 		if ( '' === $zone ) {
 			return self::fail( 0, 'Zone ID is empty.' );
 		}
-		return self::request(
-			$opts,
-			'POST',
-			'/zones/' . rawurlencode( $zone ) . '/purge_cache',
-			array( 'files' => array_slice( $urls, 0, 30 ) )
-		);
+
+		$result = array();
+		foreach ( array_chunk( $urls, self::PURGE_FILES_PER_CALL ) as $chunk ) {
+			$result = self::request(
+				$opts,
+				'POST',
+				'/zones/' . rawurlencode( $zone ) . '/purge_cache',
+				array( 'files' => $chunk )
+			);
+			if ( empty( $result['ok'] ) ) {
+				return $result;
+			}
+		}
+
+		return $result;
 	}
 
 	/**

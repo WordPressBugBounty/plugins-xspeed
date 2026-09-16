@@ -287,6 +287,10 @@ class Plugin {
 		// user gets it. The snapshot degrades gracefully without Pro (Pro
 		// version/license fields fall back to defaults via defined()/get_option).
 		Module_Registry::register( new \XSpeed\Modules\Support\SupportModule() );
+		// The dashboard control for usage-analytics consent. Consent used to
+		// be collectable only in the wizard and withdrawable nowhere, while
+		// the wizard and readme both promised a dashboard switch. (#437)
+		Module_Registry::register( new \XSpeed\Modules\Privacy\PrivacyModule() );
 		// MCP remote control (AI assistants) — Free. The plugin serves the
 		// MCP protocol at the site's own /xspeed/mcp URL; the only gate is
 		// the per-site connection token an admin mints via Connect. No

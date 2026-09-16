@@ -35,6 +35,43 @@ final class CloudflareModule extends Module {
 	 */
 	private const HEALTH_OPTION = 'xspeed_cloudflare_health';
 
+	/** Cron event that does the edge call for a batch of purged URLs. */
+	private const PURGE_URLS_EVENT = 'xspeed_cloudflare_purge_urls';
+
+	/** Cron event for the zone-wide fallback when a batch is too large. */
+	private const PURGE_ALL_EVENT = 'xspeed_cloudflare_purge_edge_all';
+
+	/**
+	 * Above this many URLs, purge the zone instead of naming every page.
+	 *
+	 * The batch travels as the cron event's ARGUMENT, and the cron table is
+	 * an autoloaded option, so an unbounded batch is an unbounded payload in
+	 * `alloptions` for as long as the event is pending. A bulk product
+	 * import, or an `xspeed_purge_product_urls` filter that expands to a few
+	 * hundred URLs, is enough. Past the threshold the zone purge is one call
+	 * with no payload, and it is what the site would have got from
+	 * `purge_all()` anyway.
+	 */
+	private const MAX_DEFERRED_URLS = 100;
+
+	/**
+	 * URLs purged this request, awaiting a batched call at shutdown.
+	 *
+	 * Keyed blog id => URL => true. By URL so the same page arriving twice —
+	 * a post and the archive that lists it can resolve to the same address —
+	 * is sent once. By BLOG because one module instance serves the whole
+	 * process: a `Cache::purge_url()` raised inside `switch_to_blog()` would
+	 * otherwise land in a batch sent against whatever blog happened to be
+	 * current at shutdown, merging several sites' URLs into one zone with one
+	 * site's token, and writing the health record and activity log to the
+	 * wrong site too. Nothing does that today — Pro's network purge goes
+	 * through `purge_all()` — but the re-entry guard in Cache anticipates a
+	 * network purge that loops blogs in one request.
+	 *
+	 * @var array<int,array<string,true>>
+	 */
+	private array $pending_edge_urls = array();
+
 	public function ui_metadata(): array {
 		return array(
 			'label'        => __( 'Cloudflare', 'xspeed' ),
@@ -188,6 +225,23 @@ final class CloudflareModule extends Module {
 	}
 
 	/**
+	 * Leave no queued edge calls behind.
+	 *
+	 * A batch scheduled seconds before the module was switched off would
+	 * otherwise fire against a zone the site no longer manages, and the
+	 * event would sit in the cron table with no listener after that.
+	 */
+	public function deactivate(): void {
+		// `wp_unschedule_hook()`, not `wp_clear_scheduled_hook()`. The latter
+		// keys on `md5( serialize( $args ) )` and defaults `$args` to an
+		// empty array, so it only ever clears the no-arguments key. Every
+		// event this module schedules carries the URL batch as its argument,
+		// so clear_scheduled_hook cleared nothing at all here.
+		wp_unschedule_hook( self::PURGE_URLS_EVENT );
+		wp_unschedule_hook( self::PURGE_ALL_EVENT );
+	}
+
+	/**
 	 * The real boot body — see boot() for why it runs on `init`.
 	 */
 	public function boot_on_init(): void {
@@ -200,6 +254,9 @@ final class CloudflareModule extends Module {
 			// cache (see Cache::purge_all). Listening here keeps
 			// CF in sync without any new wiring elsewhere.
 			add_action( 'xspeed_after_purge_all', array( $this, 'on_xspeed_purge' ), 10, 0 );
+			add_action( 'xspeed_after_purge_url', array( $this, 'on_xspeed_purge_url' ), 10, 1 );
+			add_action( self::PURGE_URLS_EVENT, array( $this, 'purge_edge_urls' ), 10, 1 );
+			add_action( self::PURGE_ALL_EVENT, array( $this, 'purge_edge_all' ), 10, 0 );
 		}
 	}
 
@@ -223,6 +280,317 @@ final class CloudflareModule extends Module {
 			return;
 		}
 		$this->purge_edge( 'auto-purge' );
+	}
+
+	/**
+	 * Mirror a single-URL purge at the edge.
+	 *
+	 * NOT about post edits — `on_save_post()` calls `purge_all()`, so those
+	 * have always reached Cloudflare through the full-purge listener above.
+	 * What reaches `purge_url()` is the narrower set: the two admin purge
+	 * buttons, an approved comment, a user change, a WooCommerce product or
+	 * stock change, `--url` on the CLI and REST, and MCP. Every one of those
+	 * cleared xSpeed's copy and left Cloudflare's, so the page stayed stale
+	 * at the edge until its lifetime ran out or somebody pressed Purge All —
+	 * which is a whole-zone purge to fix one page.
+	 *
+	 * Single-file purge is also the cheap call, which is the opposite of how
+	 * it looks. Cloudflare's tightest documented purge limit is the one on
+	 * purge-everything, hostname, tag and prefix; file purges are metered
+	 * separately and far more generously. The `purge_all` listener above is
+	 * the one near a limit, not this.
+	 *
+	 * @param array<string,mixed> $context The event payload. See the
+	 *                                     `xspeed_after_purge_url` docblock.
+	 */
+	public function on_xspeed_purge_url( $context ): void {
+		if ( ! is_array( $context ) || 'urls' !== ( $context['scope'] ?? '' ) ) {
+			return;
+		}
+		$urls = array_filter( array_map( 'strval', (array) ( $context['urls'] ?? array() ) ) );
+		if ( array() === $urls ) {
+			return;
+		}
+		// Same guard as the full-purge listener: `wp xspeed purge` reports
+		// the edge as its own line item, and purging here as well would make
+		// the outcome nobody reported the one that lands in the health record.
+		if ( class_exists( '\\XSpeed\\Purge_Runner' ) && \XSpeed\Purge_Runner::covers( 'cloudflare' ) ) {
+			return;
+		}
+		if ( true !== $this->can_purge_edge() ) {
+			return;
+		}
+
+		// Collected and sent once, not one API call per URL. `Purge_Ui`'s
+		// post purge and the WooCommerce product path both fire a handful of
+		// these in a loop, and a round trip each would be a wait each.
+		if ( array() === $this->pending_edge_urls ) {
+			add_action( 'shutdown', array( $this, 'flush_edge_url_purges' ), 20 );
+		}
+		$blog = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 0;
+		foreach ( $urls as $url ) {
+			$this->pending_edge_urls[ $blog ][ $url ] = true;
+		}
+	}
+
+	/**
+	 * Hand whatever `on_xspeed_purge_url()` collected to cron.
+	 *
+	 * Three of the callers are ordinary visitor traffic — an approved
+	 * comment, a user registration, a WooCommerce stock change during
+	 * checkout — and none of them made an outbound request before this
+	 * listener existed. Doing the HTTPS inline would put a blocking round
+	 * trip to Cloudflare on the end of a shopper's checkout, once per
+	 * request, with the timeout as the worst case. So the batch is scheduled
+	 * and the request ends.
+	 *
+	 * Inline when there is nothing to defer to: cron cannot defer to itself,
+	 * and a CLI run exits before a spawned cron request would be served.
+	 * Both are contexts where a blocking call is the right answer anyway.
+	 *
+	 * Deliberately not what WP Rocket does — its Cloudflare add-on calls
+	 * `purge_files()` straight from `after_rocket_clean_post`, so a visitor
+	 * leaving a comment waits on Cloudflare. LiteSpeed sidesteps it by never
+	 * purging Cloudflare per URL at all. Deferring is the same thing
+	 * `Preloader` and `Cookie_Inspector` already do here for the same
+	 * reason: outbound HTTP belongs in a later request, not on the one that
+	 * happened to trigger it.
+	 *
+	 * Three ways a batch can still be lost, all silent because the health
+	 * record is only written inside the flush: a PHP fatal (WordPress's own
+	 * fatal handler is registered before `shutdown_action_hook` and ends the
+	 * process first), another plugin calling `exit` from a `shutdown`
+	 * callback at a priority below 20, and a `purge_url()` raised during
+	 * `shutdown` ABOVE priority 20, which re-arms a hook that has already
+	 * dispatched. Rare, but this is the note that saves the next person
+	 * debugging "the edge kept a stale page" from rediscovering them.
+	 *
+	 * Public because it is a `shutdown` callback; not part of the module's
+	 * contract.
+	 */
+	public function flush_edge_url_purges(): void {
+		$batches                 = $this->pending_edge_urls;
+		$this->pending_edge_urls = array();
+		$current                 = function_exists( 'get_current_blog_id' ) ? (int) get_current_blog_id() : 0;
+
+		foreach ( $batches as $blog => $keyed ) {
+			$urls = array_keys( $keyed );
+			if ( array() === $urls ) {
+				continue;
+			}
+			// Each batch is scheduled and sent as the site that raised it,
+			// because the cron table, the settings, the health record and the
+			// activity log are all per-site.
+			$switched = (int) $blog !== $current && function_exists( 'switch_to_blog' );
+			if ( $switched ) {
+				switch_to_blog( (int) $blog );
+			}
+			try {
+				$this->dispatch_edge_url_batch( $urls );
+			} finally {
+				// A throwing adapter must not leave the rest of shutdown
+				// running as the wrong site.
+				if ( $switched ) {
+					restore_current_blog();
+				}
+			}
+		}
+	}
+
+	/** Schedule one site's batch, or send it now where there is nothing to defer to. */
+	private function dispatch_edge_url_batch( array $urls ): void {
+		// Too many to name. Purge the zone instead of carrying every URL in
+		// an autoloaded option, and say so, because a zone purge costs more
+		// origin traffic than the page purges it replaces and nobody should
+		// have to infer that it happened.
+		if ( count( $urls ) > self::max_deferred_urls() ) {
+			$this->dispatch_edge_purge_all( count( $urls ) );
+			return;
+		}
+
+		if ( ! self::must_purge_inline() && function_exists( 'wp_schedule_single_event' ) ) {
+			// `$wp_error = true`, because the bare form returns false for two
+			// opposite situations and only one of them is a failure.
+			//
+			// Scheduling at `time()` puts the timestamp in the past by the
+			// time core compares it, which sets core's `$min_timestamp` to 0
+			// (wp-includes/cron.php) — so ANY identical event anywhere in the
+			// cron table, however old, counts as a duplicate and the call
+			// returns false. Two comments on the same post produce
+			// byte-identical args, so the second one would have taken the
+			// inline fallback: a blocking call to Cloudflare on a visitor's
+			// request, which is the exact thing this deferral exists to
+			// avoid, while the already-queued event fired anyway and sent
+			// the batch twice.
+			//
+			// A duplicate means the work is already queued. That is success.
+			$scheduled = wp_schedule_single_event( time(), self::PURGE_URLS_EVENT, array( $urls ), true );
+			if ( true === $scheduled ) {
+				return;
+			}
+			if ( is_wp_error( $scheduled ) && 'duplicate_event' === $scheduled->get_error_code() ) {
+				return;
+			}
+			// Anything else — a filter vetoing the event, a broken cron
+			// table — is a real refusal, and dropping the purge silently
+			// would leave the edge stale with nothing to say so.
+		}
+
+		$this->purge_edge_urls( $urls );
+	}
+
+	/** Is this a context with no later request to defer the edge call to? */
+	private static function must_purge_inline(): bool {
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return true;
+		}
+		return function_exists( 'wp_doing_cron' ) && wp_doing_cron();
+	}
+
+	/**
+	 * How many URLs may ride along in a deferred batch.
+	 *
+	 * Filterable because the right answer depends on how long a site's cron
+	 * backlog sits: the cost is the payload's time in `alloptions`, not the
+	 * URL count itself.
+	 */
+	private static function max_deferred_urls(): int {
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return self::MAX_DEFERRED_URLS;
+		}
+
+		/**
+		 * Filter the batch size above which a zone purge replaces named URLs.
+		 *
+		 * @param int $max URLs per deferred batch.
+		 */
+		$max = (int) apply_filters( 'xspeed_cloudflare_max_deferred_purge_urls', self::MAX_DEFERRED_URLS );
+
+		// A filter of zero would send every single-page purge to the zone.
+		return $max > 0 ? $max : self::MAX_DEFERRED_URLS;
+	}
+
+	/** Queue the zone-wide fallback, or run it now where cron cannot. */
+	private function dispatch_edge_purge_all( int $url_count ): void {
+		if ( class_exists( '\\XSpeed\\Activity_Log' ) ) {
+			\XSpeed\Activity_Log::record(
+				'cache_purged',
+				sprintf(
+					/* translators: %d: number of URLs that changed at once. */
+					__( 'Purging the whole Cloudflare zone: %d URLs changed at once, too many to purge individually', 'xspeed' ),
+					$url_count
+				)
+			);
+		}
+
+		if ( ! self::must_purge_inline() && function_exists( 'wp_schedule_single_event' ) ) {
+			// No arguments, so every oversized batch in a request collapses
+			// onto one event. `duplicate_event` is the wanted outcome here,
+			// not a failure.
+			$scheduled = wp_schedule_single_event( time(), self::PURGE_ALL_EVENT, array(), true );
+			if ( true === $scheduled ) {
+				return;
+			}
+			if ( is_wp_error( $scheduled ) && 'duplicate_event' === $scheduled->get_error_code() ) {
+				return;
+			}
+		}
+
+		$this->purge_edge_all();
+	}
+
+	/**
+	 * Purge the whole zone, as the fallback for an oversized batch.
+	 *
+	 * Public because it is the `PURGE_ALL_EVENT` cron callback. Re-checks the
+	 * connection for the same reason the URL batch does: this runs in a later
+	 * request than the one that queued it.
+	 */
+	public function purge_edge_all(): void {
+		if ( true !== $this->can_purge_edge() ) {
+			return;
+		}
+		$this->purge_edge( 'auto-purge' );
+	}
+
+	/**
+	 * Purge a batch of URLs at the edge and record the outcome.
+	 *
+	 * Public because it is the `PURGE_URLS_EVENT` cron callback.
+	 *
+	 * @param string[] $urls
+	 */
+	public function purge_edge_urls( $urls ): void {
+		$urls = array_values( array_filter( array_map( 'strval', (array) $urls ) ) );
+		if ( array() === $urls ) {
+			return;
+		}
+		// Re-checked here rather than trusted from collect time: a scheduled
+		// batch runs in a later request, and the credentials or the switch
+		// may have changed between the two.
+		if ( true !== $this->can_purge_edge() ) {
+			// Said out loud, because otherwise "the credentials were removed
+			// between queueing and running" and "the purge succeeded" look
+			// identical from the panel, and the pages stay stale at the edge
+			// either way.
+			if ( class_exists( '\\XSpeed\\Activity_Log' ) ) {
+				\XSpeed\Activity_Log::record(
+					'cache_purge_skipped',
+					sprintf(
+						/* translators: %d: number of URLs. */
+						_n(
+							'Skipped a queued Cloudflare purge of %d URL: the connection is no longer available',
+							'Skipped a queued Cloudflare purge of %d URLs: the connection is no longer available',
+							count( $urls ),
+							'xspeed'
+						),
+						count( $urls )
+					),
+					\XSpeed\Activity_Log::WARN
+				);
+			}
+			return;
+		}
+
+		$result = Cloudflare::purge_urls( $this->get_settings(), $urls );
+		$ok     = ! empty( $result['ok'] );
+		$reason = $ok ? '' : $this->message_of( $result );
+
+		// Recorded for the same reason the full purge is: a token that passes
+		// verify can still lack "Zone → Cache Purge", and a silent auth
+		// failure here means stale pages at the edge with nothing to say so.
+		$this->record_health( $ok, 'purge', $reason );
+
+		if ( ! class_exists( '\\XSpeed\\Activity_Log' ) ) {
+			return;
+		}
+		if ( $ok ) {
+			\XSpeed\Activity_Log::record(
+				'cache_purged',
+				sprintf(
+					/* translators: %d: number of URLs purged. */
+					_n(
+						'Purged %d URL from the Cloudflare edge cache',
+						'Purged %d URLs from the Cloudflare edge cache',
+						count( $urls ),
+						'xspeed'
+					),
+					count( $urls )
+				),
+				\XSpeed\Activity_Log::INFO
+			);
+			return;
+		}
+		\XSpeed\Activity_Log::record(
+			'cloudflare_purge_failed',
+			sprintf(
+				/* translators: 1: number of URLs, 2: failure reason. */
+				__( 'Cloudflare URL purge failed (%1$d URL(s)): %2$s', 'xspeed' ),
+				count( $urls ),
+				$reason ? $reason : __( 'unknown error', 'xspeed' )
+			),
+			\XSpeed\Activity_Log::WARN
+		);
 	}
 
 	/**

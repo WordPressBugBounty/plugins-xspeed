@@ -83,6 +83,50 @@ final class Minify_Filters {
 	}
 
 	/**
+	 * Does this tag (or attribute string) opt out of optimization?
+	 *
+	 * `data-no-optimize` / `data-no-minify` are the de-facto convention
+	 * consent managers and other plugins print so optimizers keep hands
+	 * off (Borlabs Cookie stamps both on its config script). The CSS
+	 * combine buffer has honored `data-no-optimize` from the start; the
+	 * JS paths did not, so a marked consent script was still minified
+	 * into a hashed cache file — and a stale copy of a legally relevant
+	 * consent config is a correctness problem, not a cosmetic one. (#456)
+	 *
+	 * @param string $tag A full tag, or just its attribute string.
+	 */
+	public static function tag_opts_out( string $tag ): bool {
+		return (bool) preg_match( '#\sdata-no-(?:optimize|minify)\b#i', $tag );
+	}
+
+	/**
+	 * Filter: `script_loader_tag`, priority 15 — undo the minify-cache
+	 * rewrite for a script whose printed tag opts out.
+	 *
+	 * The src rewrite happens on `script_loader_src` (priority 10), long
+	 * before any plugin's own `script_loader_tag` filter can stamp
+	 * `data-no-minify` onto the tag — so the marker arrived too late to
+	 * prevent the rewrite. This runs after those filters had their say
+	 * (they typically hook at default priority 10; we're at 15, before
+	 * defer at 20 and delay at 30) and swaps the hashed cache URL back to
+	 * the recorded original.
+	 *
+	 * @param string $tag
+	 * @param string $handle
+	 * @param string $src
+	 */
+	public static function restore_marked_script_src( $tag, $handle, $src ): string {
+		if ( ! is_string( $tag ) || '' === $tag || ! self::tag_opts_out( $tag ) ) {
+			return (string) $tag;
+		}
+		$original = self::original_src( (string) $handle );
+		if ( '' === $original || '' === (string) $src || false === strpos( $tag, (string) $src ) ) {
+			return $tag;
+		}
+		return str_replace( (string) $src, $original, $tag );
+	}
+
+	/**
 	 * Does a user-supplied target match this script?
 	 *
 	 * A target is either a script handle (exact) or a URL substring. The
@@ -139,6 +183,10 @@ final class Minify_Filters {
 		if ( self::is_excluded_script( (string) $handle, (string) $src ) ) {
 			return $tag;
 		}
+		// The tag itself asked to be left alone. (#456)
+		if ( self::tag_opts_out( $tag ) ) {
+			return $tag;
+		}
 		// Inline code elsewhere on the page reads this handle (or something
 		// it depends on). Inline blocks never defer, so deferring this one
 		// would run the consumer first. Defer only — delay is an opt-in
@@ -186,6 +234,10 @@ final class Minify_Filters {
 			return $tag;
 		}
 		if ( self::is_excluded_script( (string) $handle, (string) $src ) ) {
+			return $tag;
+		}
+		// The tag itself asked to be left alone. (#456)
+		if ( self::tag_opts_out( $tag ) ) {
 			return $tag;
 		}
 		if ( ! self::is_delay_target( (string) $handle, (string) $src ) ) {
@@ -398,6 +450,11 @@ final class Minify_Filters {
 					return $tag;
 				}
 
+				// The tag itself asked to be left alone. (#456)
+				if ( self::tag_opts_out( $tag ) ) {
+					return $tag;
+				}
+
 				// No src → inline code. The enqueue path owns those; a
 				// buffer rewrite here would have to reason about execution
 				// order it cannot see.
@@ -520,6 +577,11 @@ final class Minify_Filters {
 				list( $whole, $attrs, $body ) = $m;
 
 				if ( '' === trim( $body ) ) {
+					return $whole;
+				}
+
+				// The tag itself asked to be left alone. (#456)
+				if ( self::tag_opts_out( $attrs ) ) {
 					return $whole;
 				}
 
@@ -1278,6 +1340,17 @@ final class Minify_Filters {
 
 	private static function is_excluded_script( string $handle, string $src ): bool {
 		if ( in_array( $handle, self::ALWAYS_EXCLUDED_HANDLES, true ) ) {
+			return true;
+		}
+		// Never defer or delay our own scripts. The fold and RUM beacons
+		// measure the FIRST paint — delayed to first interaction they
+		// measure a scrolled page or nothing, so fold quorum never fills
+		// and full CSS deferral never licenses. Found live: delay_js with
+		// empty targets delayed the fold beacon itself, and the site sat
+		// at zero fold reports for hours while its stylesheets stayed
+		// render-blocking. Prefix, not a handle list, so a Pro module's
+		// beacon added later cannot re-open the hole.
+		if ( 0 === strpos( $handle, 'xspeed-' ) ) {
 			return true;
 		}
 		$opts     = self::opts();

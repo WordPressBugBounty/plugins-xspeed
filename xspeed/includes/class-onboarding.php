@@ -371,6 +371,10 @@ class Onboarding {
 		// payload (legacy onboarding-complete sites are left untouched). The
 		// consent toggle defaults OFF in the wizard, so the common path is
 		// usage_tracking=false → tracker stays dormant, no outbound HTTP.
+		// (True since #437; before that the toggle shipped pre-checked and
+		// this comment described an intent the UI did not implement. The
+		// same consent is now also writable from Settings → Privacy & usage
+		// data, via PrivacyModule, which routes through the same opt_in().)
 		if ( array_key_exists( 'usage_tracking', $params ) ) {
 			$tracker = Plugin::instance()->usage_tracker();
 			if ( $tracker ) {

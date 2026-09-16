@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.2\n"
+"Project-Id-Version: xSpeed Cache 1.3.3\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-15T12:19:23+00:00\n"
+"POT-Creation-Date: 2026-09-16T11:48:59+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:7953
+#: includes/class-cache.php:8726
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:153
 #: includes/class-admin.php:243
-#: includes/class-cache.php:7967
+#: includes/class-cache.php:8740
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -130,183 +130,183 @@ msgid "Clears this post and the pages that list it — the homepage, its archive
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:3445
+#: includes/class-cache.php:4163
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:4398
+#: includes/class-cache.php:5116
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:4402
+#: includes/class-cache.php:5120
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:4406
+#: includes/class-cache.php:5124
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:4410
+#: includes/class-cache.php:5128
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:4414
+#: includes/class-cache.php:5132
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:4661
+#: includes/class-cache.php:5379
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:4667
+#: includes/class-cache.php:5385
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:4888
+#: includes/class-cache.php:5606
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:4895
+#: includes/class-cache.php:5613
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4898
+#: includes/class-cache.php:5616
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:4964
+#: includes/class-cache.php:5686
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:4970
+#: includes/class-cache.php:5692
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:5044
+#: includes/class-cache.php:5766
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5047
+#: includes/class-cache.php:5769
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5077
+#: includes/class-cache.php:5799
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:5134
+#: includes/class-cache.php:5856
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:5135
+#: includes/class-cache.php:5857
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5137
+#: includes/class-cache.php:5859
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5152
+#: includes/class-cache.php:5874
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5244
+#: includes/class-cache.php:5966
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:5259
+#: includes/class-cache.php:5981
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:5260
+#: includes/class-cache.php:5982
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:5277
+#: includes/class-cache.php:5999
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:5295
+#: includes/class-cache.php:6017
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:5296
+#: includes/class-cache.php:6018
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:5307
+#: includes/class-cache.php:6029
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:5311
+#: includes/class-cache.php:6033
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:7459
+#: includes/class-cache.php:8218
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:7466
+#: includes/class-cache.php:8225
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:7521
+#: includes/class-cache.php:8280
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:7528
+#: includes/class-cache.php:8287
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:7531
+#: includes/class-cache.php:8290
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:7532
+#: includes/class-cache.php:8291
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:7533
+#: includes/class-cache.php:8292
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:7534
+#: includes/class-cache.php:8293
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:7535
+#: includes/class-cache.php:8294
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:7536
+#: includes/class-cache.php:8295
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:7537
+#: includes/class-cache.php:8296
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:7539
+#: includes/class-cache.php:8298
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:8036
+#: includes/class-cache.php:8809
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:675
 msgid "Unauthorized."
@@ -1239,52 +1239,84 @@ msgstr ""
 msgid "How long cached pages live before regenerating. 1 to 720 hours (30 days)."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:188
+#: includes/modules/Cache/CacheModule.php:190
 msgid "Excluded URLs"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:189
+#: includes/modules/Cache/CacheModule.php:191
 msgid "One pattern per line. Plain text matches anywhere in the URL (e.g. /cart). Use glob for anchored matches (/cart/* matches /cart/items but not /foo/cart/bar; *.pdf matches PDFs). Prefix with ~ for a raw regex (e.g. ~wp-.*\\.php)."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:198
+#: includes/modules/Cache/CacheModule.php:200
 msgid "Excluded Cookies"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:199
+#: includes/modules/Cache/CacheModule.php:201
 msgid "Skip cache for any visitor whose request carries a cookie whose NAME matches one of these patterns. Plain text = \"contains\"; glob (woocommerce_*) and ~regex (~wordpress_[a-f0-9]+) supported. One per line."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:205
+#: includes/modules/Cache/CacheModule.php:207
 msgid "Bypass User Agents"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:206
+#: includes/modules/Cache/CacheModule.php:208
 msgid "Substring match against the visitor User-Agent. Matched UAs bypass cache (useful for screenshot bots, internal previews, monitoring). Glob + ~regex supported. One per line."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:217
+#: includes/modules/Cache/CacheModule.php:219
 msgid "Ignored Query Parameters"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:218
+#: includes/modules/Cache/CacheModule.php:220
 msgid "Query keys removed from the URL before computing the cache key, so /post?utm_source=x and /post share a cache entry. Defaults cover the common analytics + ad + session params. Each entry matches a whole param name — plain text is an exact name, and glob (utm_*) or ~regex are anchored too, so \"ref\" does not also match \"preference\". One per line."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:223
+#: includes/modules/Cache/CacheModule.php:225
 msgid "Purge After Updates"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:224
+#: includes/modules/Cache/CacheModule.php:226
 msgid "Clear the page cache when a plugin, theme or WordPress core is updated. Cached HTML is produced by the code being replaced, so leaving it in place serves pre-update markup — and links to minified assets that no longer exist — until the cache expires. Translation updates are ignored, since a language pack changes no markup a cached page depends on. Updates to xSpeed itself always purge, regardless of this setting."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:229
+#: includes/modules/Cache/CacheModule.php:231
 msgid "Separate Mobile Cache"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:230
+#: includes/modules/Cache/CacheModule.php:232
 msgid "Keep mobile and desktop responses in separate cache buckets. Turn on for AMP, mobile-specific themes (WPtouch / Jetpack mobile theme), or any setup that serves different HTML by device."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:264
+msgid "Cache In Front Of This Site"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:265
+msgid "Ask a CDN or proxy in front of your site not to store pages xSpeed refused to cache. Leave it on Detect automatically unless you know what is in front of you; the marked providers ignore origin headers until you configure them to respect it."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:266
+msgid "Cache in front of this site"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:267
+msgid "Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Run \"wp xspeed cache edge\" to see what was detected and what gets sent."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:273
+msgid "Custom Edge Headers"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:275
+msgid "One header per line, as Name: value — for example \"Surrogate-Control: no-store\". Lines starting with # are ignored."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:276
+msgid "Custom edge headers"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:277
+msgid "These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and \"X-Accel-Expires: 0\" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused."
 msgstr ""
 
 #: includes/modules/CacheCoverage/CacheCoverageModule.php:36
@@ -1331,118 +1363,147 @@ msgstr ""
 msgid "Glob patterns matched against the URL path. Matching URLs stay on the origin. Examples: /wp-admin/*, *.pdf, /private/*"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:40
+#: includes/modules/Cloudflare/CloudflareModule.php:77
 msgid "Cloudflare"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:42
+#: includes/modules/Cloudflare/CloudflareModule.php:79
 msgid "Connect a Cloudflare zone for automatic edge purging when xSpeed clears its cache, plus a dev-mode toggle."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:65
+#: includes/modules/Cloudflare/CloudflareModule.php:102
 msgid "Enable Cloudflare integration"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:66
+#: includes/modules/Cloudflare/CloudflareModule.php:103
 msgid "Use the credentials below to verify your zone and run purges."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:76
+#: includes/modules/Cloudflare/CloudflareModule.php:113
 msgid "Authentication"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:77
+#: includes/modules/Cloudflare/CloudflareModule.php:114
 msgid "API Tokens (scoped, recommended) or the legacy Global API Key with your account email."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:83
+#: includes/modules/Cloudflare/CloudflareModule.php:120
 msgid "API Token"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:84
+#: includes/modules/Cloudflare/CloudflareModule.php:121
 msgid "Create a token at dash.cloudflare.com → My Profile → API Tokens. Needs \"Zone → Cache Purge\" + \"Zone Settings\" permissions."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:92
+#: includes/modules/Cloudflare/CloudflareModule.php:129
 msgid "Account Email"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:93
+#: includes/modules/Cloudflare/CloudflareModule.php:130
 msgid "Only used when Authentication is set to Global API Key."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:99
+#: includes/modules/Cloudflare/CloudflareModule.php:136
 msgid "Global API Key"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:100
+#: includes/modules/Cloudflare/CloudflareModule.php:137
 msgid "Found at dash.cloudflare.com → My Profile → API Tokens → Global API Key."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:106
+#: includes/modules/Cloudflare/CloudflareModule.php:143
 msgid "Zone ID"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:107
+#: includes/modules/Cloudflare/CloudflareModule.php:144
 msgid "The 32-character hex Zone ID from your domain overview page."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:113
+#: includes/modules/Cloudflare/CloudflareModule.php:150
 msgid "Auto-purge Cloudflare on xSpeed purge"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:114
+#: includes/modules/Cloudflare/CloudflareModule.php:151
 msgid "When xSpeed clears its own cache (post save, settings change, manual purge), trigger a Cloudflare purge too."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:238
+#. translators: %d: number of URLs that changed at once.
+#: includes/modules/Cloudflare/CloudflareModule.php:480
+#, php-format
+msgid "Purging the whole Cloudflare zone: %d URLs changed at once, too many to purge individually"
+msgstr ""
+
+#. translators: %d: number of URLs.
+#: includes/modules/Cloudflare/CloudflareModule.php:541
+#, php-format
+msgid "Skipped a queued Cloudflare purge of %d URL: the connection is no longer available"
+msgid_plural "Skipped a queued Cloudflare purge of %d URLs: the connection is no longer available"
+msgstr[0] ""
+msgstr[1] ""
+
+#. translators: %d: number of URLs purged.
+#: includes/modules/Cloudflare/CloudflareModule.php:572
+#, php-format
+msgid "Purged %d URL from the Cloudflare edge cache"
+msgid_plural "Purged %d URLs from the Cloudflare edge cache"
+msgstr[0] ""
+msgstr[1] ""
+
+#. translators: 1: number of URLs, 2: failure reason.
+#: includes/modules/Cloudflare/CloudflareModule.php:588
+#, php-format
+msgid "Cloudflare URL purge failed (%1$d URL(s)): %2$s"
+msgstr ""
+
+#: includes/modules/Cloudflare/CloudflareModule.php:590
+#: includes/modules/Cloudflare/CloudflareModule.php:657
+msgid "unknown error"
+msgstr ""
+
+#: includes/modules/Cloudflare/CloudflareModule.php:606
 msgid "the Cloudflare integration is switched off"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:241
+#: includes/modules/Cloudflare/CloudflareModule.php:609
 msgid "no zone ID or API credentials are configured"
 msgstr ""
 
 #. translators: %s: what asked for the purge.
-#: includes/modules/Cloudflare/CloudflareModule.php:277
+#: includes/modules/Cloudflare/CloudflareModule.php:645
 #, php-format
 msgid "Purged the Cloudflare edge cache (%s)"
 msgstr ""
 
 #. translators: 1: what asked for the purge, 2: failure reason.
-#: includes/modules/Cloudflare/CloudflareModule.php:287
+#: includes/modules/Cloudflare/CloudflareModule.php:655
 #, php-format
 msgid "Cloudflare purge failed (%1$s): %2$s"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:289
-msgid "unknown error"
-msgstr ""
-
-#: includes/modules/Cloudflare/CloudflareModule.php:359
+#: includes/modules/Cloudflare/CloudflareModule.php:727
 msgid "Cloudflare is not fully configured."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:360
+#: includes/modules/Cloudflare/CloudflareModule.php:728
 msgid "Add your API token (or Global API Key + account email) and the Zone ID, then press Verify. Until then auto-purge does nothing."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:373
+#: includes/modules/Cloudflare/CloudflareModule.php:741
 msgid "Cloudflare purge is failing."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:376
+#: includes/modules/Cloudflare/CloudflareModule.php:744
 #, php-format
 msgid "The last edge purge was rejected by Cloudflare%s. Confirm the API token includes the \"Zone → Cache Purge\" permission for this zone — a token that can read the zone can still lack purge rights."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:385
+#: includes/modules/Cloudflare/CloudflareModule.php:753
 msgid "Cloudflare credentials were rejected."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:388
+#: includes/modules/Cloudflare/CloudflareModule.php:756
 #, php-format
 msgid "The saved credentials could not verify this zone%s. Auto-purge will not work until this is fixed."
 msgstr ""
@@ -2474,6 +2535,22 @@ msgstr ""
 msgid "Enable the preloader before starting a crawl."
 msgstr ""
 
+#: includes/modules/Privacy/PrivacyModule.php:47
+msgid "Privacy & usage data"
+msgstr ""
+
+#: includes/modules/Privacy/PrivacyModule.php:49
+msgid "Control the anonymous usage analytics you were asked about in the setup wizard."
+msgstr ""
+
+#: includes/modules/Privacy/PrivacyModule.php:58
+msgid "Share anonymous usage data"
+msgstr ""
+
+#: includes/modules/Privacy/PrivacyModule.php:59
+msgid "Share anonymous basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never personal data or page content. Turning this off stops all collection and clears the scheduled send."
+msgstr ""
+
 #: includes/modules/ResourceHints/ResourceHintsModule.php:60
 msgid "Resource Hints"
 msgstr ""
@@ -3369,7 +3446,7 @@ msgstr ""
 msgid "Go to Dashboard"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:161
+#. Source: src/onboarding/OnboardingApp.tsx:168
 #: assets/admin.js
 msgid "Go to the dashboard"
 msgstr ""
@@ -3558,7 +3635,7 @@ msgstr ""
 msgid "Lighthouse performance, out of 100"
 msgstr ""
 
-#. Source: src/App.tsx:420
+#. Source: src/App.tsx:456
 #. Source: src/components/GroupLanding.tsx:67
 #. Source: src/components/LogsView.tsx:35
 #: assets/admin.js
@@ -3857,7 +3934,7 @@ msgstr ""
 msgid "on your xSpeed Hub account."
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:152
+#. Source: src/onboarding/OnboardingApp.tsx:159
 #: assets/admin.js
 msgid "Onboarding data unavailable"
 msgstr ""
@@ -4001,15 +4078,32 @@ msgstr ""
 msgid "Preload"
 msgstr ""
 
-#. Source: src/App.tsx:390
+#. Source: src/App.tsx:423
 #: assets/admin.js
 msgid "Preload could not start"
 msgstr ""
 
-#. Source: src/App.tsx:388
+#. Source: src/App.tsx:422
 #: assets/admin.js
-msgid "Preload started"
+msgid "Preload could not start: %s"
 msgstr ""
+
+#. Source: src/App.tsx:410
+#: assets/admin.js
+msgid "Preload found no pages to warm"
+msgstr ""
+
+#. Source: src/App.tsx:409
+#: assets/admin.js
+msgid "Preload found no pages to warm: %s"
+msgstr ""
+
+#. Source: src/App.tsx:399
+#: assets/admin.js
+msgid "Preloading %d page"
+msgid_plural "Preloading %d pages"
+msgstr[0] ""
+msgstr[1] ""
 
 #. Source: src/upsell/ProDemo.tsx:118
 #: assets/admin.js
@@ -4640,7 +4734,7 @@ msgstr ""
 msgid "Want a hand?"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:155
+#. Source: src/onboarding/OnboardingApp.tsx:162
 #: assets/admin.js
 msgid "We couldn't load the setup wizard. Your site is unaffected — you can configure everything from the dashboard."
 msgstr ""

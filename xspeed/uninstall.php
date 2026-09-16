@@ -68,10 +68,71 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_gc_cursor' );
 	wp_clear_scheduled_hook( 'xspeed_gc' );
 
+	global $wpdb;
+
+	// Hit counters and the Hub attachment flag — ours, and simply never named
+	// here before. xspeed_hit_buffer is BOTH an option and a transient of the
+	// same name (Hit_Counter uses one string for the memory buffer and the
+	// durable counter), so both stores need clearing.
+	delete_option( 'xspeed_hit_buffer' );
+	delete_transient( 'xspeed_hit_buffer' );
+	delete_option( 'xspeed_hit_daily' );
+	delete_option( 'xspeed_hub_site_attached' );
+
+	// Usage-tracking state, which lives in the shared WP Insights rows rather
+	// than under our own prefix. Left behind, the consent key survives an
+	// uninstall: a REINSTALL then reads as already opted in before the wizard
+	// has asked anything, and a later deactivation posts a diagnostic payload
+	// for a consent this install never collected (#439).
+	//
+	// The two keyed rows are SHARED with sibling WPDeveloper plugins, so only
+	// our own key comes out and the row itself is deleted only once nothing
+	// else is using it. Deleting them outright would wipe another plugin's
+	// consent state.
+	foreach ( array( 'wpins_allow_tracking', 'wpins_last_track_time' ) as $shared ) {
+		$value = get_option( $shared );
+		if ( ! is_array( $value ) ) {
+			continue; // Absent, or a shape we did not write — leave it alone.
+		}
+		unset( $value['xspeed'] );
+		if ( empty( $value ) ) {
+			delete_option( $shared );
+		} else {
+			update_option( $shared, $value );
+		}
+	}
+	// The deactivation-feedback payload. Normally consumed-then-deleted by the
+	// tracker's own deactivation send, but that only happens when consent
+	// passes and the send succeeds — a user who deactivates without consent
+	// leaves both rows behind, and they are exactly the orphaned diagnostic
+	// payload #439 describes.
+	delete_option( 'wpins_deactivation_reason_xspeed' );
+	delete_option( 'wpins_deactivation_details_xspeed' );
+	// The tracker's recurring send. Cleared on opt-out, but nothing guarantees
+	// an opt-out ever happened before the uninstall.
+	wp_clear_scheduled_hook( 'xspeed_do_weekly_action' );
+	// Our own WP Insights rows: the site id, the original URL, and the last
+	// payload — whose name embeds the site id. The payload names are
+	// derivable from the id, but a failed earlier uninstall or a renamed row
+	// shape would strand them, so sweep the prefix. `xspeed-pro`'s rows
+	// survive this only because its slug's HYPHEN doesn't match the
+	// underscore in `wpins_xspeed_%` — that separator is load-bearing.
+	delete_option( 'wpins_xspeed_site_id' );
+	delete_option( 'wpins_xspeed_original_url' );
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- options API has no prefix delete; uninstall only.
+	$wpins_rows = $wpdb->get_col(
+		$wpdb->prepare(
+			"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+			$wpdb->esc_like( 'wpins_xspeed_' ) . '%'
+		)
+	);
+	foreach ( (array) $wpins_rows as $wpins_row ) {
+		delete_option( $wpins_row );
+	}
+
 	// Score history — the plugin's own table, plus the legacy option the
 	// table was migrated from (kept on upgrade so a bad migration is
 	// recoverable; there is nothing to recover on uninstall).
-	global $wpdb;
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- own table, uninstall.
 	$wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'xspeed_scores' );
 	delete_option( 'xspeed_score_schema' );

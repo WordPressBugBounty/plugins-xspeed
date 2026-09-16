@@ -48,6 +48,7 @@ return array(
     'XSpeed\\Modules\\Minify\\MinifyModule' => $baseDir . '/includes/modules/Minify/MinifyModule.php',
     'XSpeed\\Modules\\ObjectCache\\ObjectCacheModule' => $baseDir . '/includes/modules/ObjectCache/ObjectCacheModule.php',
     'XSpeed\\Modules\\Preloader\\PreloaderModule' => $baseDir . '/includes/modules/Preloader/PreloaderModule.php',
+    'XSpeed\\Modules\\Privacy\\PrivacyModule' => $baseDir . '/includes/modules/Privacy/PrivacyModule.php',
     'XSpeed\\Modules\\ResourceHints\\ResourceHintsModule' => $baseDir . '/includes/modules/ResourceHints/ResourceHintsModule.php',
     'XSpeed\\Modules\\Score\\ScoreModule' => $baseDir . '/includes/modules/Score/ScoreModule.php',
     'XSpeed\\Modules\\Settings\\SettingsModule' => $baseDir . '/includes/modules/Settings/SettingsModule.php',

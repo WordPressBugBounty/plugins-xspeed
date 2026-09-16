@@ -46,6 +46,24 @@ class Cache {
 	private static $bypass_reason = '';
 
 	/**
+	 * Edge/CDN headers decided for this request, after sanitising.
+	 *
+	 * Same reason as $status_header: header() cannot be observed from the CLI
+	 * SAPI, so the pairs we sent are recorded here too.
+	 *
+	 * @var array<string,string>
+	 */
+	private static $edge_headers = array();
+
+	/**
+	 * This entry's edge headers when they differ from the site-wide bake,
+	 * resolved once per store. Null until asked.
+	 *
+	 * @var array<string,string>|null
+	 */
+	private static $per_entry_edge = null;
+
+	/**
 	 * Cache key whose write was deferred to shutdown because a render-time
 	 * translation plugin's buffer wraps ours. Null on every ordinary request.
 	 *
@@ -448,6 +466,15 @@ class Cache {
 		self::$status_header = $value;
 		self::$bypass_reason = $reason;
 
+		// Every status, not just a HIT. A page we declined to cache is the
+		// one an edge most needs telling about: it goes out naked today, and
+		// a CDN that stores HTML by default keeps somebody's cart.
+		//
+		// Resolved before the headers_sent() guard so the decision is
+		// recorded (and observable in tests) even on a request that can no
+		// longer send headers; only the emission below is conditional.
+		self::$edge_headers = self::edge_headers_for( self::edge_status( $value ), 'request', $reason );
+
 		if ( headers_sent() ) {
 			return;
 		}
@@ -455,6 +482,22 @@ class Cache {
 		if ( '' !== $reason && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			header( 'X-XSpeed-Reason: ' . $reason );
 		}
+		foreach ( self::$edge_headers as $name => $val ) {
+			header( $name . ': ' . $val );
+		}
+	}
+
+	/**
+	 * Normalize an `X-XSpeed-Cache` value to the vocabulary the edge seam
+	 * speaks.
+	 *
+	 * The header value carries which layer served the page (`HIT (php)`,
+	 * `HIT (nginx)`, `HIT (static)`); nothing deciding what to tell a CDN
+	 * cares, and making a caller match on three spellings of one outcome is
+	 * how a rule ends up applied on two paths out of three.
+	 */
+	private static function edge_status( string $value ): string {
+		return 0 === strpos( $value, 'HIT' ) ? 'HIT' : $value;
 	}
 
 	/** Record a bypass gate and answer "don't cache" in one statement. */
@@ -471,6 +514,637 @@ class Cache {
 	/** The bypass gate slug for this request ('' unless BYPASS). */
 	public static function bypass_reason(): string {
 		return self::$bypass_reason;
+	}
+
+	/**
+	 * The edge/CDN pairs sent on this request ('' if none were).
+	 *
+	 * @return array<string,string>
+	 */
+	public static function edge_headers(): array {
+		return self::$edge_headers;
+	}
+
+	/**
+	 * Bypass gates that do NOT ask a cache in front of us to stand down.
+	 *
+	 * Every other slug does. The split is the reason this reads the gate
+	 * rather than the status: a bypass usually means "this response is
+	 * personal, or someone decided this page is never stored", and an edge
+	 * holding one of those does precisely what we refused to do. These two
+	 * mean something else.
+	 *
+	 * `cache-disabled` is the user switching OUR page cache off. Nothing
+	 * about the page became personal. Sending `no-store` on every page of a
+	 * site whose owner chose a different cache would make a local toggle a
+	 * site-wide side effect on infrastructure we do not own.
+	 *
+	 * `non-frontend` is admin, REST, cron and AJAX. Not ours to describe:
+	 * WordPress already nocaches admin, and a REST caller sets its own
+	 * policy.
+	 */
+	private const HOLD_EXEMPT_BYPASS = array( 'cache-disabled', 'non-frontend' );
+
+	/**
+	 * Bypass gates that describe the SHAPE of the request rather than the
+	 * visitor or the page.
+	 *
+	 * These still hold, but only once we have evidence of an edge — the same
+	 * bar a MISS has to clear. The difference matters because the default
+	 * excluded-URL list contains `/feed/`, the sitemap and `/wp-json/`, and
+	 * `query-param` catches `?lang=fr`, `?paged=2`, and every page of a
+	 * plain-permalink site.
+	 *
+	 * xSpeed refuses those because IT cannot key on a query string, not
+	 * because the response is private. A CDN keys on the full URL and caches
+	 * them correctly. Holding them unconditionally would have meant every
+	 * default install stopped its feed and sitemap being edge-cached — a
+	 * performance regression shipped to sites that never had a CDN in the
+	 * first place, in the name of protecting them from one.
+	 *
+	 * The gates left out of this list are about the visitor (`logged-in`,
+	 * `excluded-cookie`) or are somebody stating outright that this page is
+	 * never to be stored (`donotcachepage`, `post-excluded`, `filtered`).
+	 * Those hold whether or not we can see an edge.
+	 */
+	private const REQUEST_SHAPE_BYPASS = array( 'query-param', 'non-get', 'user-agent' );
+
+	/**
+	 * Default exclusions that are about the site's plumbing, not its content.
+	 *
+	 * `excluded-url` covers two unlike things. The default list carries
+	 * `/cart`, `/checkout`, `/my-account` and `/wp-login` — personal pages,
+	 * and the reason this feature exists. It also carries the entries below:
+	 * feeds, sitemaps, the REST root, the front controller. Those are public,
+	 * cacheable, and hammered by pollers; a CDN keys on the full URL and
+	 * serves them correctly, so telling it to stop is a cost with no benefit.
+	 *
+	 * Matched as exact strings against the stored list, never as patterns
+	 * against the path. Three bugs came out of doing it the other way round:
+	 * `strpos( $uri, '/feed' )` matched `/my-account/feedback/`, reading the
+	 * whole URI let `/cart/?utm_source=/feed/` disguise a cart as a feed, and
+	 * a bare `index.php` — which is in this list, and which every URL contains
+	 * on an "almost pretty" permalink site — made every page on such a site
+	 * look personal. Comparing the LIST ENTRY rather than the path cannot make
+	 * any of those mistakes, and it keeps a pattern the site owner added
+	 * themselves on the personal side where it belongs.
+	 */
+	private const STRUCTURAL_EXCLUSIONS = array(
+		'/wp-json/',
+		'/xmlrpc.php',
+		'~wp-.*\.php',
+		'/feed/',
+		'index.php',
+		'/robots.txt',
+		// Both spellings, and no entry here is ever retired. This is a
+		// RECOGNITION list, not a source of truth: it is matched against
+		// whatever the site has STORED, and a site that saved its settings
+		// before `~sitemap(_index)?\.xml` was widened to `sitemaps?` (for
+		// SEOPress, which ships sitemaps.xml) still has the old string in
+		// its option row. Dropping the old spelling when the default moved
+		// would read every upgraded site's sitemap exclusion as somebody's
+		// personal data and hold sitemaps off the CDN — the bug this whole
+		// predicate exists to prevent, reintroduced by a rename.
+		'~sitemaps?(_index)?\.xml',
+		'~sitemap(_index)?\.xml',
+	);
+	/**
+	 * Header names no edge instruction may ever carry.
+	 *
+	 * These describe the transfer, not the caching policy, and one wrong
+	 * value from a settings field is a white screen rather than a missing
+	 * optimization.
+	 */
+	private const NEVER_AN_EDGE_HEADER = array(
+		'content-length',
+		'content-encoding',
+		'content-type',
+		'transfer-encoding',
+		'set-cookie',
+		'location',
+		'x-xspeed-cache',
+		'x-xspeed-edge-hold',
+	);
+
+	/**
+	 * Reasons that hold the edge off even when we detected nothing in front.
+	 *
+	 * `none` confidence means no evidence of a proxy, which is not proof
+	 * there is none — a transparent proxy and a host page cache both leave
+	 * the request untouched. So the question is what a wasted header costs
+	 * against what a missed one does, and the answer differs by reason.
+	 *
+	 * These two are correctness failures. A cart page stored by something we
+	 * could not see is the defect this exists to fix, and a mobile-split page
+	 * served to the wrong device is a wrong page rather than a slow one.
+	 * Ninety bytes on a response that was never cacheable is a cheap premium.
+	 *
+	 * `miss` and `pending` are performance hedges, and a hedge against a
+	 * cache that does not exist is noise on every first render. Skipping them
+	 * has a second benefit: because per_entry_edge_headers() compares `store`
+	 * against `bake`, a `pending` hold that never fires leaves the two
+	 * agreeing, which keeps the page on the static tree.
+	 */
+	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split' );
+
+	/**
+	 * Is a module still going to change this page after this response?
+	 *
+	 * Free itself never says yes — nothing in Free defers work past the
+	 * request. Minification and combining write their file and return its URL
+	 * inside the same render; the LCP preload is chosen by parsing the HTML
+	 * being sent. It is the question that matters to anything caching in
+	 * front of us, so Free asks it on their behalf and lets whoever owns the
+	 * deferred work answer.
+	 *
+	 * Answer TRUE while the work is outstanding for the page being served.
+	 * The cost of a false yes is one extra origin hit; the cost of a false no
+	 * is an un-optimized page pinned at the edge for the full lifetime, which
+	 * is the failure this exists to prevent — so when in doubt, say yes.
+	 *
+	 * Asked on a `request` only, and that boundary is the whole safety of it.
+	 *
+	 * A `bake` is generated once, in an admin or CLI request, and serves every
+	 * static HIT on the site; a per-page answer frozen into it would be wrong
+	 * for every other page.
+	 *
+	 * A `store` is worse, and cost a live site an afternoon. The pairs written
+	 * at store time go into the `.meta` sidecar, which the drop-in replays on
+	 * every later HIT — before plugins load, so nothing can re-ask this
+	 * question. A hold written there therefore outlives the state that caused
+	 * it, and the only thing that clears it is the page being stored again. On
+	 * a site where the deferred work never completes, every re-store re-pins
+	 * it, and the page is never edge-cacheable again. The symptom is a cache
+	 * HIT carrying `no-store` and `X-XSpeed-Edge-Hold: pending` on a page
+	 * whose deferred work finished long ago — the sidecar answering with
+	 * state nothing can re-ask.
+	 *
+	 * Holding the MISS is what this is for, and it is enough: that response is
+	 * the un-optimized one. The copy we then store is what an edge should
+	 * mirror, and when the work does land the module purges the page, which
+	 * reaches the edge. The purge is the correctness mechanism; this is only
+	 * meant to cover the single render before it.
+	 *
+	 * @param string $context `request`, `store` or `bake`.
+	 */
+	public static function edge_optimization_pending( string $context = 'request' ): bool {
+		if ( 'request' !== $context ) {
+			return false;
+		}
+
+		/**
+		 * Filter: xspeed_edge_optimization_pending
+		 *
+		 * @param bool $pending Whether deferred work will still change this page.
+		 */
+		return (bool) apply_filters( 'xspeed_edge_optimization_pending', false );
+	}
+
+	/**
+	 * Does mobile cache split this URL into two renders?
+	 *
+	 * With `mobile_separate` on, Free keys its cache on device and serves a
+	 * different page to a phone than to a desktop at the SAME url. No CDN
+	 * varies on User-Agent, so an edge holding one of those renders serves it
+	 * to everyone: whichever device asked first decides what the other sees,
+	 * for the whole lifetime. A wrong page, not a slow one.
+	 *
+	 * Read from the stored option rather than through Settings_Manager: this
+	 * is consulted from the serve path, where the module registry may not
+	 * have run.
+	 */
+	private static function mobile_cache_splits_html(): bool {
+		$stored = self::stored_cache_opts();
+		return ! empty( $stored['mobile_separate'] );
+	}
+
+	/**
+	 * Why, if at all, a cache in front of us should refuse to store this.
+	 *
+	 * @param string $status        `HIT`, `MISS` or `BYPASS`.
+	 * @param string $context       `request`, `store` or `bake`.
+	 * @param string $bypass_reason The gate slug, for BYPASS only.
+	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|pending.
+	 */
+	private static function edge_hold_reason( string $status, string $context, string $bypass_reason ): string {
+		$reason = '';
+
+		// The two exempt gates are answered before anything else, or a site
+		// with Separate Mobile Cache on would keep holding after the page
+		// cache was switched off — which is exactly the "a local toggle must
+		// not become a site-wide side effect on infrastructure we do not own"
+		// rule below, defeated by the ordering rather than by the logic.
+		if ( 'BYPASS' === $status && in_array( $bypass_reason, self::HOLD_EXEMPT_BYPASS, true ) ) {
+			/** This filter is documented below. */
+			return (string) apply_filters( 'xspeed_edge_hold_reason', '', $status, $context, $bypass_reason );
+		}
+
+		// First, because it is the only reason true in every context: the
+		// setting is a property of the site, not of one request, so it is the
+		// one thing a baked artifact can honestly assert.
+		//
+		// It is also the only reason that holds a HIT — a response we DID
+		// cache — and that is deliberate rather than an artefact of the
+		// ordering. With mobile_separate on we key the cache by device and
+		// serve different HTML to a phone than to a desktop at the same URL.
+		// No CDN varies on User-Agent, so an edge holding one of those
+		// renders serves it to everyone and whichever device asked first
+		// decides what the other sees. Our copy is fine; theirs would be a
+		// wrong page. The static path is switched off in this mode anyway
+		// (static_rewrite_allowed()), so these hits come from the drop-in,
+		// which carries the same baked answer.
+		if ( self::mobile_cache_splits_html() ) {
+			$reason = 'mobile-split';
+		} elseif ( 'BYPASS' === $status ) {
+			$shaped = in_array( $bypass_reason, array( 'excluded-url', 'query-param' ), true )
+				? ! self::path_is_a_personal_exclusion( $bypass_reason )
+				: in_array( $bypass_reason, self::REQUEST_SHAPE_BYPASS, true );
+			$reason = $shaped ? 'bypass-shape' : 'bypass';
+		} elseif ( self::edge_optimization_pending( $context ) ) {
+			$reason = 'pending';
+		} elseif ( 'MISS' === $status ) {
+			$reason = 'miss';
+		}
+
+		/**
+		 * Filter: xspeed_edge_hold_reason
+		 *
+		 * Return '' to veto a hold, or a reason string to force one.
+		 *
+		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|pending.
+		 * @param string $status        `HIT`, `MISS` or `BYPASS`.
+		 * @param string $context       `request`, `store` or `bake`.
+		 * @param string $bypass_reason The gate slug, for BYPASS only.
+		 */
+		return (string) apply_filters( 'xspeed_edge_hold_reason', $reason, $status, $context, $bypass_reason );
+	}
+
+	/**
+	 * Was this page excluded because it is personal, or because it is
+	 * plumbing we cannot key a cache entry on?
+	 *
+	 * Answers by removing the structural defaults from the site's own
+	 * exclusion list and asking whether anything is left that matches. So a
+	 * feed matches only `/feed/` and comes back false; `/my-account/feedback/`
+	 * matches `/my-account` and comes back true; and on an "almost pretty"
+	 * permalink site, where every path contains `index.php`, an ordinary page
+	 * matches nothing else and is correctly treated as public.
+	 *
+	 * The path only, never the query string — a visitor writes that, and
+	 * `/cart/?utm_source=/feed/` must not be able to talk a cart out of its
+	 * hold. It is also what `should_cache()` matches the list against.
+	 *
+	 * Asked for a `query-param` bypass too, because the query gate runs
+	 * BEFORE the URL gate, so `/cart/?add-to-cart=12` reports `query-param`
+	 * and never reaches `excluded-url` at all. Which gate fired first says
+	 * nothing about whose data is on the page.
+	 */
+	private static function path_is_a_personal_exclusion( string $bypass_reason ): bool {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- reading the path of the request being served; there is no form here to nonce.
+		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+		$path = (string) strtok( $uri, '?' );
+		if ( '' === $path ) {
+			return false;
+		}
+
+		// Through Settings_Manager, not the raw option, because the schema's
+		// default IS the structural list and a fresh install has never
+		// written the option. Read raw, every site that has not visited the
+		// settings screen looks like a site with no exclusions at all, takes
+		// the contradiction branch below, and reports its feeds as personal.
+		//
+		// Safe here where `mobile_cache_splits_html()` is not: we are only
+		// ever called with a bypass reason, and those come from
+		// `should_cache()`, which resolved the same settings through
+		// `Settings_Manager::get()` to produce them.
+		$opts     = Settings_Manager::get( 'cache' );
+		$excluded = is_array( $opts['excluded_urls'] ?? null ) ? $opts['excluded_urls'] : array();
+		if ( array() === $excluded ) {
+			// An `excluded-url` bypass with no exclusion list is a
+			// contradiction — something excluded the request and the list
+			// cannot say what — so assume personal, because a wasted header
+			// costs a little origin traffic while a missing one serves
+			// somebody's basket to a stranger. A `query-param` bypass with an
+			// empty list is just an ordinary page carrying a parameter, and
+			// says nothing about the path at all.
+			return 'excluded-url' === $bypass_reason;
+		}
+
+		$personal = array_values(
+			array_filter(
+				$excluded,
+				static fn ( $pattern ) => ! in_array( (string) $pattern, self::STRUCTURAL_EXCLUSIONS, true )
+			)
+		);
+
+		return array() !== $personal && Glob_Matcher::any_match( $personal, $path );
+	}
+
+	/**
+	 * The edge/CDN headers to send on a response with this cache status.
+	 *
+	 * @param string $status        `HIT`, `MISS` or `BYPASS`.
+	 * @param string $context       `request` when resolved per request on the
+	 *                              PHP serve path, `store` when resolved for
+	 *                              one entry's sidecar, `bake` when resolved
+	 *                              once and frozen into an artifact.
+	 * @param string $bypass_reason The gate slug, for BYPASS only.
+	 * @return array<string,string>
+	 */
+	public static function edge_headers_for( string $status, string $context = 'request', string $bypass_reason = '' ): array {
+		$base = array();
+		if ( 'HIT' === $status ) {
+			/**
+			 * Filter: xspeed_edge_cache_headers
+			 *
+			 * Response headers to add to a cached HTML response. A HIT-only
+			 * contract: a lifetime is a promise that this copy is worth
+			 * keeping, and neither a first render nor a page we refused to
+			 * cache is one.
+			 *
+			 * The same filter feeds three regimes and `$context` says which.
+			 * On the PHP serve path it runs per request (`request`); at store
+			 * time it runs for one entry (`store`); when the drop-in or a
+			 * server rule is generated it runs once (`bake`) and the result
+			 * answers for every static HIT on the site. Anything per-page — a
+			 * post id in a cache tag, say — must be skipped under `bake`.
+			 *
+			 * @param array<string,string> $headers Header name => value.
+			 * @param string               $status  Always `HIT` here.
+			 * @param string               $context `request`, `store` or `bake`.
+			 */
+			$base = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'HIT', $context ) );
+		}
+
+		$reason = self::edge_hold_reason( $status, $context, $bypass_reason );
+		if ( '' === $reason ) {
+			return $base;
+		}
+		$detected = Edge_Provider::detect( $context );
+		if ( Edge_Provider::is_off( $detected ) ) {
+			return $base;
+		}
+		if ( Edge_Provider::NONE === $detected['confidence']
+			&& ! in_array( $reason, self::HOLD_WITHOUT_EVIDENCE, true ) ) {
+			return $base;
+		}
+
+		$hold = Edge_Provider::hold_headers( $detected['provider'] );
+
+		/**
+		 * Filter: xspeed_edge_hold_headers
+		 *
+		 * The last word on what a hold INSTRUCTS. Runs before sanitising, so
+		 * a value that cannot be sent as a header is still dropped, and
+		 * before `X-XSpeed-Edge-Hold` is added, so it cannot rewrite the
+		 * reason xSpeed held the page for — that is a diagnosis, not an
+		 * instruction, and a forged one sends a reader after the wrong
+		 * module.
+		 *
+		 * @param array<string,string> $hold     Header name => value.
+		 * @param array<string,string> $detected Provider, confidence, source.
+		 * @param string               $reason   Why the hold fired.
+		 * @param string               $context  `request`, `store` or `bake`.
+		 */
+		$hold = (array) apply_filters( 'xspeed_edge_hold_headers', $hold, $detected, $reason, $context );
+
+		// A hold replaces the lifetime rather than sitting beside it: the two
+		// describe the same response and would contradict each other. The
+		// cache tag survives, because a later purge still has to be able to
+		// name whatever the edge picked up on its own terms.
+		if ( isset( $base['Cache-Tag'] ) ) {
+			$hold['Cache-Tag'] = $base['Cache-Tag'];
+		}
+
+		// Never argue with a stronger answer WordPress already gave. It sends
+		// `no-store, private` of its own accord on a logged-in, 404 or
+		// password-protected response, from WP::send_headers() — which runs
+		// before template_redirect, so it is already on the wire by the time
+		// we get here. Ours is the weaker statement of the two; replacing it
+		// would be a downgrade dressed as a fix. Only meaningful per request:
+		// a bake has no response to inspect.
+		if ( 'request' === $context && isset( $hold['Cache-Control'] ) && self::cache_control_already_stronger() ) {
+			unset( $hold['Cache-Control'] );
+		}
+
+		// A page we refused to cache must not carry a validator either. A
+		// `Last-Modified` left on it invites a conditional request, and a
+		// shared cache that gets a 304 back serves the copy it should not
+		// have stored. Only on a bypass, and only per request: a MISS is
+		// about to be stored by us, so its validator is ours to keep.
+		if ( 'request' === $context && 'bypass' === $reason && ! headers_sent() ) {
+			header_remove( 'Last-Modified' );
+		}
+
+		$hold = self::sanitize_edge_headers( $hold );
+
+		// Name the reason in the hold set itself, rather than sending it
+		// separately from mark().
+		//
+		// "Why is my page not being cached at the edge?" is the question this
+		// answers, and mark() could only answer it on the PHP serve path. The
+		// other emitters send whatever this function returns and never ran
+		// mark() at all — so the responses hardest to explain went out
+		// carrying `no-store` with nothing beside it to say why. Chiefly the
+		// drop-in, which serves from the `.meta` sidecar written under
+		// `store` and from the literal baked under `bake`, before plugins
+		// load and with no way to re-ask (the symptom
+		// edge_optimization_pending() describes above).
+		//
+		// The nginx and Apache blocks are a third path in principle and
+		// almost never in practice: they are only installed when
+		// static_rewrite_allowed() is true, and the one reason a stock site
+		// can hold under `bake` is `mobile-split`, which is exactly what
+		// makes that false. They will carry it where a site forces a hold
+		// through `xspeed_edge_hold_reason`, and otherwise have no hold to
+		// carry.
+		//
+		// Added AFTER sanitising and banned in NEVER_AN_EDGE_HEADER, so
+		// neither of the two filters above can forge a reason or suppress the
+		// real one.
+		//
+		// Reduced to the slug CHARACTER CLASS, not checked against the five
+		// slugs: `xspeed_edge_hold_reason` is documented as able to force a
+		// reason, and a site that forces its own deserves to see it. What is
+		// not negotiable is the shape, because this value reaches an
+		// .htaccess and an nginx conf as well as a response header — so no
+		// CR/LF, no `$`, no `%`, no `\`, and a length a config file can hold.
+		$slug = preg_replace( '/[^a-z0-9-]/', '', strtolower( $reason ) );
+		if ( is_string( $slug ) && '' !== $slug ) {
+			$hold['X-XSpeed-Edge-Hold'] = substr( $slug, 0, 32 );
+		}
+
+		return $hold;
+	}
+
+	/** Has something already sent a Cache-Control at least as strict as ours? */
+	private static function cache_control_already_stronger(): bool {
+		foreach ( headers_list() as $line ) {
+			if ( 0 !== stripos( $line, 'cache-control:' ) ) {
+				continue;
+			}
+			if ( preg_match( '/\b(?:no-store|private)\b/i', $line ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Edge headers that belong to THIS page rather than to every page.
+	 *
+	 * `edge_headers_for('HIT','bake')` is the answer frozen into the drop-in
+	 * and the server rules: one set, serving the whole site. But the answer
+	 * for one URL can legitimately differ — a page whose deferred work is
+	 * still outstanding, say — and that answer has nowhere to live, because
+	 * the baked set is all the fast paths know about.
+	 *
+	 * So ask again in a `store` context, with the request still in scope, and
+	 * return the pairs only when they differ from the baked ones. Identical is
+	 * the overwhelmingly common case and writes nothing: pages do not pay a
+	 * sidecar for an answer the drop-in already has.
+	 *
+	 * Memoised because two callers ask within one store — the sidecar writer
+	 * and the static-tree guard — and the filters behind it are not required
+	 * to be cheap.
+	 *
+	 * @return array<string,string> Empty when this page needs no override.
+	 */
+	private static function per_entry_edge_headers(): array {
+		if ( is_array( self::$per_entry_edge ) ) {
+			return self::$per_entry_edge;
+		}
+		$baked                = self::edge_headers_for( 'HIT', 'bake' );
+		$request              = self::edge_headers_for( 'HIT', 'store' );
+		self::$per_entry_edge = ( $request === $baked ) ? array() : $request;
+
+		return self::$per_entry_edge;
+	}
+
+	/**
+	 * Render baked pairs as a PHP array literal for the drop-in.
+	 *
+	 * Single-quoted literals with quotes escaped, because the result is
+	 * written into a PHP file that must still parse. Values reaching here
+	 * have already been through sanitize_edge_headers(), so neither name nor
+	 * value can carry a newline.
+	 *
+	 * @param array<string,string> $headers Name => value.
+	 */
+	private static function edge_headers_literal( array $headers ): string {
+		if ( array() === $headers ) {
+			return 'array()';
+		}
+		// var_export(), not hand-rolled quoting. A single-quoted PHP string
+		// escapes BOTH `'` and `\\`, and escaping only the first is how a
+		// value ending in a backslash — `X-Foo: C:\path\` from the custom
+		// headers box — leaves the literal unterminated. That file is
+		// included on every request once WP_CACHE is on, so the result is a
+		// parse error on the front end AND in wp-admin, with no way back
+		// except deleting the file over SSH.
+		$parts = array();
+		foreach ( $headers as $name => $value ) {
+			$parts[] = var_export( (string) $name, true ) . ' => ' . var_export( (string) $value, true );
+		}
+
+		return 'array( ' . implode( ', ', $parts ) . ' )';
+	}
+
+	/**
+	 * Quote a header value for an nginx / Apache directive.
+	 *
+	 * Both accept a double-quoted string with backslash escapes, and both
+	 * refuse to load a config where the quoting is wrong — a mis-escaped
+	 * value takes the whole vhost down, not just this header.
+	 */
+	private static function quote_directive_value( string $value ): string {
+		return str_replace( array( '\\', '"' ), array( '\\\\', '\\"' ), $value );
+	}
+
+	/**
+	 * The same directive twice — once per name Apache can expose the
+	 * rewrite's environment variable under.
+	 *
+	 * `RewriteRule ... [E=XSPEED_STATIC_HIT:1]` in a per-directory context is
+	 * an INTERNAL REDIRECT: Apache re-enters the request with the substituted
+	 * path, and every variable set on the first pass is renamed with a
+	 * `REDIRECT_` prefix for the second. `env=XSPEED_STATIC_HIT` is evaluated
+	 * on that second pass, where nothing answers to that name any more, so
+	 * the directive never fires — dropping the headers from precisely the
+	 * responses they exist for.
+	 *
+	 * It cannot be written once: `env=` takes a single name with no
+	 * alternation, and `expr=` — which could express both — is not dependable
+	 * on LiteSpeed, which reads this same block. So both are emitted; the one
+	 * whose variable is unset on a given pass does nothing.
+	 *
+	 * @param string $directive The directive, without its `env=` clause.
+	 * @return string[]
+	 */
+	private static function static_hit_directives( string $directive ): array {
+		return array(
+			$directive . ' env=XSPEED_STATIC_HIT',
+			$directive . ' env=REDIRECT_XSPEED_STATIC_HIT',
+		);
+	}
+
+	/**
+	 * Keep only pairs that can be sent as a header verbatim.
+	 *
+	 * These values reach three different emitters — PHP's header(), an nginx
+	 * `add_header` and an Apache `Header always set` — so a name with a space
+	 * or a value carrying CR/LF is not merely malformed, it is a
+	 * response-splitting vector in the first and a broken server config in
+	 * the other two. Names must be token-shaped; values lose CR/LF and are
+	 * dropped if nothing survives.
+	 *
+	 * @param array<mixed,mixed> $headers Raw pairs.
+	 * @return array<string,string>
+	 */
+	public static function sanitize_edge_headers( array $headers ): array {
+		$clean = array();
+		foreach ( $headers as $name => $value ) {
+			// Never let one of these through, whoever asked. They describe the
+			// transfer rather than the caching policy, and getting one wrong
+			// from a settings field is a white screen: `Content-Encoding: gzip`
+			// on an uncompressed body, a `Content-Length` that disagrees with
+			// the bytes. `X-XSpeed-Cache` is ours and a second copy would lie
+			// to whoever reads it.
+			if ( is_string( $name ) && in_array( strtolower( $name ), self::NEVER_AN_EDGE_HEADER, true ) ) {
+				continue;
+			}
+			// `\z`, not `$`: PCRE's `$` also matches immediately BEFORE a
+			// trailing newline, so "Cache-Tag\n" passes a `$` check and gets
+			// concatenated raw into the generated .htaccess — splitting one
+			// Header directive across two lines, which is a syntax error
+			// Apache reports as a 500 on every request while `httpd -t` stays
+			// green (.htaccess is parsed per request, not at load).
+			if ( ! is_string( $name ) || ! preg_match( '/^[A-Za-z0-9-]+\z/', $name ) ) {
+				continue;
+			}
+			if ( ! is_string( $value ) && ! is_numeric( $value ) ) {
+				continue;
+			}
+			$value = trim( str_replace( array( "\r", "\n" ), '', (string) $value ) );
+			if ( '' === $value ) {
+				continue;
+			}
+			// `$` is a variable reference in an nginx string and `%` is a
+			// format tag to Apache's mod_headers, which rejects an
+			// unrecognised one — in .htaccess that is a 500 on every request
+			// while `httpd -t` still reports OK, because .htaccess is parsed
+			// per request. `\` escapes the quote in the PHP literal baked into
+			// the drop-in. None of them can be escaped reliably in all three
+			// places at once, and nothing a cache reads needs any of them, so
+			// the value is dropped rather than mangled.
+			if ( preg_match( '/[$%\\\\]/', $value ) ) {
+				continue;
+			}
+			$clean[ $name ] = $value;
+		}
+
+		return $clean;
 	}
 
 	/**
@@ -782,7 +1456,14 @@ class Cache {
 		// Static tree too, under the same gates finalize_buffer() applies —
 		// otherwise deferring the write would silently cost translated pages
 		// the web-server fast path and leave them on the slower drop-in.
-		if ( self::static_rewrite_allowed() && self::response_is_plain_html() ) {
+		// The static tree cannot replay a sidecar. A file served straight by
+		// the web server carries the headers baked into the rule that serves
+		// the whole site — the very answer this entry exists because it
+		// disagreed with. Same reasoning as the status and content-type
+		// cases: what the fast path cannot replay belongs on the drop-in path.
+		if ( self::static_rewrite_allowed()
+			&& self::response_is_plain_html()
+			&& array() === self::per_entry_edge_headers() ) {
 			self::store_static( $full );
 		}
 	}
@@ -791,8 +1472,15 @@ class Cache {
 		// Reset first: a single request only reaches this once (the sole
 		// caller is maybe_start_cache()), but tests and any future caller
 		// must never inherit the previous request's verdict.
-		self::$status_header = '';
-		self::$bypass_reason = '';
+		self::$status_header  = '';
+		self::$bypass_reason  = '';
+		self::$edge_headers   = array();
+		self::$per_entry_edge = null;
+		// Under PHP-FPM a process serves one request and this is moot. Under
+		// a persistent worker runtime it is not: without it, an answer
+		// resolved from one visitor's forgeable headers would be reused for
+		// every later request the worker handles.
+		Edge_Provider::forget();
 
 		$opts = Settings::get();
 		if ( empty( $opts['cache_enabled'] ) ) {
@@ -844,6 +1532,18 @@ class Cache {
 		 * @param bool $cache_feed Whether to cache this feed request.
 		 */
 		$cache_feed = $is_feed_request && (bool) apply_filters( 'xspeed_should_cache_feed', false );
+
+		// WordPress's virtual robots.txt (and virtual favicon) are not HTML:
+		// caching one runs it through the whole HTML pipeline, which stamped
+		// the footer comment onto text/plain and let HTML minification
+		// collapse robots.txt to a single line — a line-based format, so
+		// every directive after the first was lost and crawlers read an
+		// invalid file. No opt-in filter here: there is no correct way to
+		// treat these as pages. (Reported live on a customer site.)
+		if ( ( function_exists( 'is_robots' ) && is_robots() )
+			|| ( function_exists( 'is_favicon' ) && is_favicon() ) ) {
+			return self::bypass( 'non-html' );
+		}
 
 		// Query string handling: anything OUTSIDE the ignored-params
 		// allow-list (utm_*, fbclid, gclid by default) means a unique
@@ -2064,7 +2764,14 @@ class Cache {
 		// out as text/html, FBS-82407). The web server serves these .html files
 		// directly with no PHP, so there's no .meta replay — keep them on the
 		// drop-in / PHP path instead, which DOES replay status + content-type.
-		if ( self::static_rewrite_allowed() && self::response_is_plain_html() ) {
+		// The static tree cannot replay a sidecar. A file served straight by
+		// the web server carries the headers baked into the rule that serves
+		// the whole site — the very answer this entry exists because it
+		// disagreed with. Same reasoning as the status and content-type
+		// cases: what the fast path cannot replay belongs on the drop-in path.
+		if ( self::static_rewrite_allowed()
+			&& self::response_is_plain_html()
+			&& array() === self::per_entry_edge_headers() ) {
 			self::store_static( $full );
 		}
 
@@ -2595,6 +3302,17 @@ class Cache {
 
 		if ( $ttl > 0 && $ttl !== $default_ttl ) {
 			$meta['ttl'] = $ttl;
+		}
+
+		// This entry's edge headers, when they differ from the site-wide set
+		// baked into the drop-in. The sidecar is the only channel that can
+		// carry a per-page answer into the pre-boot fast path, and the drop-in
+		// REPLACES the baked set with it rather than merging: the two describe
+		// the same response, so merging would leave the baked lifetime in
+		// place beside the hold meant to overrule it.
+		$edge = self::per_entry_edge_headers();
+		if ( array() !== $edge ) {
+			$meta['edge_headers'] = $edge;
 		}
 
 		// Nothing to replay → no sidecar.
@@ -4914,14 +5632,18 @@ class Cache {
 	}
 
 	/**
-	 * Whether an edge cache fronts this origin. Today: the Cloudflare
-	 * integration is connected — so an unknown share of hits is served at the
-	 * edge and never counted here, making the origin ratio a partial view the
-	 * dashboard must label as such. (#118)
+	 * Whether an edge cache fronts this origin, so an unknown share of hits
+	 * is served there and never counted here — which makes the origin ratio a
+	 * partial view the dashboard has to label as such. (#118)
+	 *
+	 * This used to mean "the Cloudflare module is switched on", which answered
+	 * no for every site fronted by anything else, and no for a site on
+	 * Cloudflare that had never opened our Cloudflare panel. Both of those
+	 * sites had their ratio presented as the whole story. Edge_Provider knows
+	 * better and knows it per request, so ask it.
 	 */
 	private static function edge_cache_detected(): bool {
-		$cf = get_option( 'xspeed_module_cloudflare', array() );
-		return is_array( $cf ) && ! empty( $cf['enabled'] );
+		return Edge_Provider::NONE !== Edge_Provider::detect()['confidence'];
 	}
 
 	/**
@@ -6520,6 +7242,22 @@ class Cache {
 		// nginx down.
 		$lines[] = '    access_log ' . $hits_abs . ' combined buffer=16k flush=5s;';
 		$lines[] = '    add_header X-XSpeed-Cache "HIT (nginx)" always;';
+		// Edge/CDN headers from the same seam the drop-in bakes. nginx serves
+		// this path without ever starting PHP, so the answer cannot be
+		// resolved per request — the pairs are resolved HERE, when the
+		// snippet is generated, and a change of answer needs the snippet
+		// regenerated and re-pasted to take effect.
+		//
+		// Skipped entirely when the static path is switched off. The only
+		// reason that can fire under `bake` is mobile-split, and mobile-split
+		// is also what switches the static path off — so the block would be
+		// baked with a hold it can never serve, and would start serving it
+		// the moment the setting is turned off and static files reappear,
+		// until somebody regenerates and re-pastes. A rule that can only be
+		// served once its premise is false is guaranteed to be stale.
+		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'bake' ) : array() as $name => $value ) {
+			$lines[] = '    add_header ' . $name . ' "' . self::quote_directive_value( $value ) . '" always;';
+		}
 		$lines[] = '}';
 		return implode( "\n", $lines );
 	}
@@ -6814,7 +7552,7 @@ class Cache {
 			$lines[] = '  RewriteCond %{HTTP_USER_AGENT} "!(' . $ua_rule['regex'] . ')" [NC]';
 		}
 
-		return array_merge(
+		$block = array_merge(
 			$lines,
 			array(
 			// Capture REQUEST_URI without its trailing slash into %1.
@@ -6834,7 +7572,7 @@ class Cache {
 			// covers `/` and `/blog` alike. (Confirmed on OpenLiteSpeed
 			// 1.8: `.` → homepage served by PHP drop-in; `^` → served
 			// directly from the static file.)
-			'  RewriteRule ^ ' . $rel . '/%{HTTP_HOST}%1/index.html [L]',
+			'  RewriteRule ^ ' . $rel . '/%{HTTP_HOST}%1/index.html [E=XSPEED_STATIC_HIT:1,L]',
 			'</IfModule>',
 			// Mark the statically-served response as a cache HIT.
 			//
@@ -6858,9 +7596,30 @@ class Cache {
 			'  <FilesMatch "\\.html$">',
 			'    Header always set X-XSpeed-Cache "HIT (static)"',
 			'  </FilesMatch>',
-			'</IfModule>',
 			)
 		);
+
+		// Edge/CDN headers from the same seam the drop-in bakes. Like the
+		// nginx snippet, the static rewrite answers without PHP, so the pairs
+		// are resolved when the block is GENERATED rather than per request.
+		//
+		// `env=` rather than the `<FilesMatch>` scoping above, because these
+		// must ride only on responses the rewrite produced. The marker header
+		// stays filename-scoped: it is inert, and narrowing it would change a
+		// header QA reads.
+		// Same reasoning as the nginx snippet: a bake hold can only come from
+		// mobile-split, and mobile-split is what turns this path off.
+		$edge_lines = array();
+		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'bake' ) : array() as $edge_name => $edge_value ) {
+			$edge_lines = array_merge(
+				$edge_lines,
+				self::static_hit_directives(
+					'    Header always set ' . $edge_name . ' "' . self::quote_directive_value( $edge_value ) . '"'
+				)
+			);
+		}
+
+		return array_merge( $block, $edge_lines, array( '</IfModule>' ) );
 	}
 
 	/**
@@ -7709,6 +8468,20 @@ class Cache {
 		$source_contents = str_replace(
 			'@@XSPEED_DEFAULT_TTL@@',
 			(string) ( $expiry_hours * HOUR_IN_SECONDS ),
+			$source_contents
+		);
+
+		// Bake the site-wide edge answer in. Resolved in a `bake` context, so
+		// nothing per-page and nothing a request header vouched for can reach
+		// it: a bake runs once, in an admin or CLI request, and answers for
+		// every page on the site. A page that disagrees gets a sidecar
+		// instead — see per_entry_edge_headers().
+		//
+		// Re-baked on every cache settings save (see CacheModule::boot),
+		// exactly like the cookie, user-agent and lifetime rules above.
+		$source_contents = str_replace(
+			"'@@XSPEED_EDGE_HEADERS@@'",
+			self::edge_headers_literal( self::edge_headers_for( 'HIT', 'bake' ) ),
 			$source_contents
 		);
 

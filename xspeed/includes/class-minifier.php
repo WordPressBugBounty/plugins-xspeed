@@ -76,6 +76,13 @@ class Minifier {
 		}
 		if ( ! empty( $opts['minify_js'] ) ) {
 			add_filter( 'script_loader_src', array( __CLASS__, 'rewrite_script' ), 10, 2 );
+			// The src rewrite above runs before any plugin's own
+			// `script_loader_tag` filter can stamp data-no-minify /
+			// data-no-optimize onto the tag, so the marker arrives too late
+			// to prevent it. Priority 15: after third-party tag filters at
+			// the default 10 have printed their markers, before our defer
+			// (20) and delay (30) look at the tag. (#456)
+			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'restore_marked_script_src' ), 15, 3 );
 		}
 
 		// Phase 4.1a — filter-only "smarter minifier" features. Each is
@@ -433,6 +440,12 @@ class Minifier {
 		list( , $open, $body, $close ) = $parts;
 
 		if ( '' === trim( $body ) ) {
+			return $block;
+		}
+
+		// The tag asked to be left alone (data-no-optimize / data-no-minify —
+		// the convention consent managers print on their config scripts). (#456)
+		if ( Minify_Filters::tag_opts_out( $open ) ) {
 			return $block;
 		}
 
