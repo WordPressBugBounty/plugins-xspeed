@@ -48,7 +48,7 @@ final class AIPrivacyModule extends Module {
 		return array(
 			'label'       => __( 'AI Privacy', 'xspeed' ),
 			'icon'        => 'Shield',
-			'description' => __( 'Govern whether AI-powered features (Pro) may collect data from your visitors. The off-switch is here in Free because privacy is a fundamental right, not a paid feature.', 'xspeed' ),
+			'description' => __( 'Decide whether AI features may use your visitors\' data, and what the consent banner says. Applies even before you install Pro.', 'xspeed' ),
 		);
 	}
 
@@ -68,7 +68,7 @@ final class AIPrivacyModule extends Module {
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Require consent before AI data collection', 'xspeed' ),
-				'description' => __( 'When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made).', 'xspeed' ),
+				'description' => __( 'When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made): privacy is a fundamental right, not a paid feature.', 'xspeed' ),
 			),
 			'consent_banner_text'   => array(
 				'type'        => 'string',

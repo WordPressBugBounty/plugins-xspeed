@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.3
+Stable tag: 1.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -307,6 +307,23 @@ Used for admin interface icons.
 
 == Changelog ==
 
+= [1.3.4] – 2026-09-20 =
+
+**Consent-manager scripts marked late are now always left alone, below-fold sections skip rendering work until they are needed, and xSpeed's MCP server shares a site cleanly with other MCP plugins.**
+
+Optimization:
+- New: Below-fold sections are rendered lazily with content-visibility: auto, so the browser skips their layout and paint work until they scroll into view.
+- New: Block-editor stylesheets are stripped from anonymous frontend pages that do not use any blocks.
+- Fixed: Scripts that another plugin marks data-no-optimize or data-no-minify late — as consent managers such as Borlabs Cookie do — are restored to their original URL and left alone by minify, defer and delay, however late the marker is stamped.
+
+AI / MCP:
+- Improved: The AI & agents screen now leads with the MCP server and says what each of its tools does, with descriptions shown in full.
+- Improved: An assistant already connected over OAuth may ask for approval once more after updating — nothing needs re-entering, and read-only connections stay read-only.
+- Fixed: An AI assistant can now connect to xSpeed and to another MCP plugin on the same site. xSpeed's OAuth details moved to an address of their own under /xspeed/mcp, and the site-wide address is handed over as soon as another plugin asks for it — where nothing else wants it, xSpeed keeps answering there.
+
+Dashboard & Admin UX:
+- Fixed: Buttons can carry a border and always show keyboard focus, and the Cloudflare Dev-mode controls use proper button styling.
+
 = [1.3.3] – 2026-09-16 =
 
 **Consent gets a dashboard home, the cache engine learns to leave non-HTML alone, and uncacheable pages now tell the CDN so.**
@@ -347,61 +364,5 @@ Caching:
 
 Optimization:
 - Fixed: Delaying JavaScript no longer breaks inline scripts bound to a delayed handle, and replayed external scripts keep their original load order.
-
-= [1.3.1] – 2026-09-14 =
-
-**Purge all now says what it actually cleared, on the button and in the toast, instead of claiming success when a store refused. Pro features are marked with one lock everywhere rather than amber squares and crowns, which also lifts the dimmed labels back to readable contrast. The Cloudflare panel is staged by connection state, so setup comes before the actions that depend on it — and the auto-purge switch is visible while disconnected instead of hidden.**
-
-Dashboard & Admin UX:
-- New: Purge all reports its outcome — Cleared, Already empty, Partly cleared or Purge failed — and the toast names the files and size cleared plus any other store, or the reason a store refused.
-- Fixed: Pro features are marked with a single lock in the teal tint. Locked tabs are no longer dimmed to 70%, which had dropped their labels below readable contrast, and the amber squares, crowns and sparkles are gone from the tabs, badges and the sidebar tier slot.
-- Fixed: Turning caching on no longer flashes "Another plugin owns the page cache on this site" while the toggle is in flight. A genuine foreign drop-in still shows the banner.
-- Fixed: The Purge all button keeps its natural width at rest instead of reserving room for the outcome label.
-
-Cloudflare:
-- New: The panel is staged by connection state — Connection, then Actions — so credentials and Verify come before the buttons that need them, and an action that cannot work is disabled with a hint rather than failing silently.
-- Fixed: The auto-purge-on-purge switch is always visible, dimmed while disconnected, instead of being hidden until connected. Hiding it is how the edge-sync switch went unnoticed.
-
-Documentation:
-- Fixed: The full changelog moved to changelog.txt, shipped with the plugin and linked from the plugin page. wordpress.org truncates a changelog over 5,000 words on import, so the history past the cut had been dropped.
-
-= [1.3.0] – 2026-09-13 =
-
-**A single page can now be purged straight from the admin bar, the post list or the editor, and known third-party scripts — analytics, chat widgets, tracking pixels — are delayed automatically without asking you to list them. A host or agency can pin any setting from wp-config.php with a constant: the dashboard shows the pin, names the constant, and lets an admin take the setting back. xSpeed can also take over an abandoned page-cache drop-in, with your consent, instead of being blocked by it forever.**
-
-Caching:
-- New: Purge a single page from the admin bar, the post list's row actions, or the editor — and the purge confirms what it actually removed instead of assuming.
-- New: `wp xspeed purge` clears every cache in one call, and a purge is scoped to exactly what the caller asked for.
-- New: Publishing or updating a post also purges the pages that list it, not just the post itself.
-- New: An abandoned page-cache drop-in left by another plugin can be taken over with one consenting click, and a leftover husk of a drop-in no longer blocks caching forever.
-- Fixed: A migration handover now completes instead of stopping halfway, from the dashboard and the CLI alike.
-- Fixed: xSpeed no longer mistakes itself for a competing cache plugin.
-
-Optimization:
-- New: Known third-party scripts are delayed until interaction automatically, including the inline install snippets vendors ask you to paste into the header.
-- New: Font stylesheets are deferred out of the render path, and a Google Fonts request that blocks rendering is rewritten to swap.
-- New: A manual preload list covers the images no detector can see.
-- Fixed: The LCP preload no longer picks a brand logo over the page's real hero image.
-- Fixed: Deferring no longer breaks inline scripts that depend on another handle, combining no longer swallows scripts that delaying protects, and handle exclusions are honoured in the delay pass.
-- Fixed: Valid minified JavaScript is no longer rejected, asset URLs are matched across schemes, an uploads folder at the domain root is recognised, and `?ver` is kept on files plugins rewrite in place.
-- Fixed: Lazy loading reads an image's size from whichever attribute holds its URL, and no longer mistakes a real image for a placeholder because of a word inside its filename.
-
-Settings:
-- New: Any module setting can be pinned from wp-config.php with a constant. The dashboard shows a pinned field as read-only and names the constant that holds it.
-- New: An admin can take a pinned setting back — the override displaces the host's constant and only that.
-- Fixed: A panel containing a pinned field saves again, and editing a pinned setting is a single inline edit.
-
-Object Cache:
-- New: Redis credentials and Memcached servers are read from wp-config.php, and `WP_REDIS_PREFIX` is honoured as a key salt.
-- Fixed: Cache keys are always namespaced per site, so two sites sharing a Redis or Memcached database can no longer read or purge each other's entries.
-- Fixed: The dashboard panel gained every fix that had only reached the CLI, owns only what the plugin itself wrote, and no longer presents another plugin's object cache as xSpeed's.
-
-Reliability:
-- Fixed: Translations now load for both PHP and the dashboard, and the settings screens are translatable.
-- Fixed: nginx sends one Cache-Control header per location instead of two, and the de-duplicated header no longer caches 404 responses.
-- Fixed: An audit contributor that throws no longer takes the whole audit down with it, and add-ons can report findings of their own.
-
-AI tools:
-- Improved: The optimize assistant honours its cooldown, never measures without consent, keeps the score through a run of failures, and reports the newest score with its age.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

@@ -37,6 +37,7 @@ declare(strict_types=1);
 
 namespace XSpeed\Modules\Mcp;
 
+use XSpeed\Activity_Log;
 use XSpeed\Module;
 use XSpeed\Onboarding;
 
@@ -64,16 +65,53 @@ final class McpModule extends Module {
 		'^xspeed/mcp/([a-f0-9]{64})/?$',
 		'^xspeed/mcp/?$',
 		'^xspeed/mcp/attach/?$',
-		// OAuth discovery, root form. RFC 9728 §3.1 / RFC 8414 §3.1 put the
-		// `.well-known` segment BEFORE the resource path.
-		'^\.well-known/oauth-(protected-resource|authorization-server)/?$',
-		// OAuth discovery, path-suffixed form. Real clients (Claude Desktop
-		// among them) request THIS one; serving only the root form 404s them.
-		// It names our own resource path explicitly: a catch-all tail here
-		// also matched other MCP plugins' discovery URLs on the same site and
-		// answered them with our metadata, which broke their connectors.
+		// OAuth discovery. RFC 9728 §3.1 / RFC 8414 §3.1 put the
+		// `.well-known` segment BEFORE the resource/issuer path, and both of
+		// our identifiers are /xspeed/mcp — so this pair of URLs, and only
+		// this pair, is ours. It names our own path explicitly: a catch-all
+		// tail here also matched other MCP plugins' discovery URLs on the
+		// same site and answered them with our metadata, which broke their
+		// connectors. The bare root form is registered conditionally and so
+		// lives apart, in ROOT_DISCOVERY_RULE.
 		'^\.well-known/oauth-(protected-resource|authorization-server)/xspeed/mcp/?$',
 		'^xspeed/authorize/?$',
+	);
+
+	/**
+	 * The root-form discovery rule — registered CONDITIONALLY, which is why
+	 * it is not in REWRITE_RULES.
+	 *
+	 * It is the address a client built to the 2025-03-26 MCP spec looks at,
+	 * and the only address it looks at; current clients read the
+	 * protected-resource document first and follow it to the path form. So
+	 * dropping it outright would cut off older clients on every site,
+	 * including the single-plugin sites where the collision #266 exists to
+	 * fix never happened. We answer it while it is uncontested and stand
+	 * down the moment another plugin's rule claims it —
+	 * root_discovery_contested().
+	 */
+	public const ROOT_DISCOVERY_RULE = '^\.well-known/oauth-(protected-resource|authorization-server)/?$';
+
+	/**
+	 * Rules earlier builds registered that we never register again under any
+	 * condition. The self-heal guard flushes once when it finds OUR copy of
+	 * one still in the stored table.
+	 *
+	 * The catch-all below shipped in an intermediate build and matched every
+	 * path-suffixed discovery URL on the site, including other MCP plugins'
+	 * (#264). Nothing brings it back, so its removal is unconditional —
+	 * unlike ROOT_DISCOVERY_RULE, which is a rule we still register when the
+	 * root URL is uncontested and therefore cannot live in this list.
+	 *
+	 * Ownership is read from the rule's TARGET, never from the regex alone:
+	 * a sibling may register the same regex for its own document, its rule
+	 * comes back from every flush, and a guard that treated that as stale
+	 * would flush on every request forever.
+	 *
+	 * @var string[]
+	 */
+	public const RETIRED_REWRITE_RULES = array(
+		'^\.well-known/oauth-(protected-resource|authorization-server)(?:/.*)?/?$',
 	);
 
 	/** REST namespace shared with Free. Public: Mcp_Server builds the
@@ -110,7 +148,7 @@ final class McpModule extends Module {
 		return array(
 			'label'        => __( 'MCP Server', 'xspeed' ),
 			'icon'         => 'Sparkles',
-			'description'  => __( 'Control this site\'s cache from Claude and other AI agents.', 'xspeed' ),
+			'description'  => __( 'Let Claude or another AI agent run this site — purge, check stats, change settings. This is the only thing you connect an AI to, and it is free with no API key.', 'xspeed' ),
 			'custom_panel' => 'McpPanel',
 		);
 	}
@@ -136,7 +174,27 @@ final class McpModule extends Module {
 		add_action( 'rest_api_init', array( $this, 'register_rest' ) );
 
 		// Pretty per-site endpoint: /xspeed/mcp → MCP JSON-RPC handler.
-		add_action( 'init', array( $this, 'add_rewrite' ) );
+		// `wp_loaded`, not `init`: add_rewrite() decides whether to claim the
+		// root discovery URL by looking at the rewrite table, and on `init` that
+		// view is incomplete -- a sibling MCP plugin hooked at the same priority
+		// but loaded after us has not registered yet. Root then looks
+		// uncontested, we register our rule, and the self-heal guard concludes
+		// nothing is stale, so it never flushes. That is a fixed point: the
+		// table never converges, and because our rule is the one WordPress
+		// matches, the sibling never sees the request either.
+		//
+		// By `wp_loaded` every init callback on every request type has run, so
+		// the contested check sees the sibling and the guard flushes once.
+		// WP_Rewrite::flush_rules() already defers itself to `wp_loaded`, so
+		// nothing is lost by deciding here, and did_action('wp_loaded') is
+		// truthy inside this callback, so the flush lands in time for
+		// parse_request in the same request. (#266 QA)
+		// Priority 0: still after every `init` callback, but ahead of the
+		// widely copied `add_action( 'wp_loaded', 'flush_rewrite_rules' )`
+		// snippet. If such a plugin flushed first it would write a table
+		// without our rules, our guard would find them missing and flush
+		// again -- two flushes and two option writes on every request.
+		add_action( 'wp_loaded', array( $this, 'add_rewrite' ), 0 );
 		add_filter( 'query_vars', array( $this, 'register_query_var' ) );
 		// Priority 1: a sibling MCP plugin that also claims /.well-known/ gets
 		// to answer first at the default priority 10, and whoever answers
@@ -240,6 +298,13 @@ final class McpModule extends Module {
 	// -- Pretty endpoint: /xspeed/mcp --
 
 	public function add_rewrite(): void {
+		// The stored table is WordPress's routing table AND the only durable
+		// record of which plugin owns which discovery URL, so both the
+		// conditional registration below and the self-heal guard at the
+		// bottom read the SAME snapshot of it. Deciding twice from two reads
+		// is how a guard ends up flushing away a rule it just registered.
+		$stored_rules = get_option( 'rewrite_rules' );
+
 		// Token-in-URL form: /xspeed/mcp/<token> — a single string the user
 		// pastes into their AI client (no separate token field). The bare
 		// /xspeed/mcp still works with a Bearer/header token.
@@ -258,50 +323,233 @@ final class McpModule extends Module {
 		add_rewrite_rule( '^xspeed/mcp/attach/?$', 'index.php?' . self::ATTACH_QUERY_VAR . '=1', 'top' );
 
 		// OAuth discovery documents. RFC 9728 §3.1 / RFC 8414 §3.1 place the
-		// `.well-known` segment BEFORE the resource path, so our resource at
-		// /xspeed/mcp is discovered at BOTH:
-		//   /.well-known/oauth-protected-resource            (root form)
-		//   /.well-known/oauth-protected-resource/xspeed/mcp (path-suffixed)
-		// Real clients (Claude Desktop among them) request the path-suffixed
-		// form; serving only the root form 404s them and the connection aborts.
+		// `.well-known` segment BEFORE the resource/issuer path, and both of
+		// our canonical identifiers are the MCP endpoint URL, so our
+		// documents live at:
+		//   /.well-known/oauth-protected-resource/xspeed/mcp
+		//   /.well-known/oauth-authorization-server/xspeed/mcp
 		//
-		// Both are matched EXACTLY. A `(?:/.*)?` tail covers the same two URLs
-		// in one rule, but also matches every OTHER plugin's discovery URL on
-		// the same site — and WordPress matches rewrite rules in table order
-		// rather than by specificity, so a sibling's own exact rule never gets
-		// reached. Its clients then receive OUR metadata, find a resource and
-		// issuer that do not match what they are connecting to, and abort
-		// before the login screen.
-		add_rewrite_rule(
-			'^\\.well-known/oauth-(protected-resource|authorization-server)/?$',
-			'index.php?' . self::WELLKNOWN_QUERY_VAR . '=$matches[1]',
-			'top'
-		);
+		// Matched EXACTLY. A `(?:/.*)?` tail covers our URLs in one rule, but
+		// also matches every OTHER plugin's discovery URL on the same site —
+		// and WordPress matches rewrite rules in table order rather than by
+		// specificity, so a sibling's own exact rule never gets reached. Its
+		// clients then receive OUR metadata, find a resource and issuer that
+		// do not match what they are connecting to, and abort before the
+		// login screen.
 		add_rewrite_rule(
 			'^\\.well-known/oauth-(protected-resource|authorization-server)/xspeed/mcp/?$',
 			'index.php?' . self::WELLKNOWN_QUERY_VAR . '=$matches[1]',
 			'top'
 		);
 
+		// The bare root form, ONLY while no other plugin claims it. A client
+		// written to the 2025-03-26 MCP spec looks there and nowhere else, so
+		// giving it up unconditionally would break those clients on every
+		// site — including the single-plugin sites where the collision never
+		// happened. When a sibling's rule is present the URL is theirs and we
+		// register nothing, which is the case #266 is about. Current clients
+		// read the protected-resource document first and follow it wherever
+		// it points, so they are unaffected either way. The document served
+		// at root carries the LEGACY
+		// host-only issuer, because that is the identifier a client used to
+		// derive that URL (RFC 8414 §3.3).
+		$root_contested = self::root_discovery_contested( $stored_rules );
+		if ( ! $root_contested ) {
+			add_rewrite_rule(
+				self::ROOT_DISCOVERY_RULE,
+				'index.php?' . self::WELLKNOWN_QUERY_VAR . '=$matches[1]',
+				'top'
+			);
+		}
+
 		// Browser-facing OAuth consent page — served OUTSIDE REST so cookie
 		// auth (is_user_logged_in) works after the wp-login round-trip.
 		add_rewrite_rule( '^xspeed/authorize/?$', 'index.php?' . self::AUTHORIZE_QUERY_VAR . '=1', 'top' );
 
-		// Self-heal: flush once if ANY of our rules is missing from the stored
-		// rewrite table. Checking only the first rule is not enough — a site
-		// flushed under an older build (which had /xspeed/mcp but not the
-		// later /xspeed/authorize + /.well-known rules) keeps that first rule,
-		// so the guard never fires and OAuth discovery 404s forever. Guard on
-		// the full set so any newly-added rule triggers a re-flush.
-		$rules = get_option( 'rewrite_rules' );
-		if ( is_array( $rules ) ) {
-			foreach ( self::REWRITE_RULES as $rule ) {
-				if ( ! isset( $rules[ $rule ] ) ) {
-					flush_rewrite_rules( false );
-					break;
+		// Self-heal: flush once if the stored rewrite table disagrees with the
+		// rules we just registered. Checking only the first rule is not
+		// enough — a site flushed under an older build (which had /xspeed/mcp
+		// but not the later /xspeed/authorize + /.well-known rules) keeps that
+		// first rule, so the guard never fires and OAuth discovery 404s
+		// forever. Guard on the full set so any newly-added rule triggers a
+		// re-flush.
+		//
+		// The guard must mirror the registration decisions EXACTLY, or it
+		// never reaches a fixed point:
+		//
+		//   - Uncontested root: we register it, so the table must hold it
+		//     with OUR target. A flush produces exactly that, and the next
+		//     request reads the same table and stays uncontested — our own
+		//     target never counts as a sibling's.
+		//   - Contested root: we register nothing, so OUR copy must be gone.
+		//     A flush regenerates the sibling's rule (they register it every
+		//     request) but not ours, so the next request is quiet.
+		//
+		// Ownership is read from the TARGET in both directions. Keying on the
+		// regex alone is what produced a flush on every request forever when
+		// a sibling held that regex: their rule comes back from every flush.
+		//
+		// This runs on `wp_loaded` for every request, so the first request after an
+		// upgrade flushes once and the guard is quiet from then on. It cannot
+		// move to Plugin::maybe_upgrade() — that is admin-only and runs at
+		// plugins_loaded 21, i.e. BEFORE init, so a flush there would write a
+		// table without our rules and this guard would flush a second time.
+		if ( ! is_array( $stored_rules ) ) {
+			return;
+		}
+
+		$stale    = false;
+		$retiring = false;
+		foreach ( self::REWRITE_RULES as $rule ) {
+			if ( ! isset( $stored_rules[ $rule ] ) ) {
+				$stale = true;
+				break;
+			}
+		}
+
+		// Our copy of the root rule must be present exactly when we register
+		// it. Present-and-unwanted is the #266 upgrade; absent-and-wanted is
+		// an older table, or a sibling that has since gone away.
+		$root_is_ours = isset( $stored_rules[ self::ROOT_DISCOVERY_RULE ] )
+			&& self::is_our_rule_target( $stored_rules[ self::ROOT_DISCOVERY_RULE ] );
+		if ( $root_is_ours === $root_contested ) {
+			$stale    = true;
+			$retiring = $root_contested;
+		}
+
+		// Not an identity move — nothing a site owner can act on — so this
+		// one flushes quietly.
+		foreach ( self::RETIRED_REWRITE_RULES as $rule ) {
+			if ( isset( $stored_rules[ $rule ] ) && self::is_our_rule_target( $stored_rules[ $rule ] ) ) {
+				$stale = true;
+				break;
+			}
+		}
+
+		if ( ! $stale ) {
+			return;
+		}
+
+		if ( $retiring ) {
+			// The one moment the identity move is observable to a site owner,
+			// and it happens on a front-end request with no UI attached. Fires
+			// once: after the flush our rule is gone, so the next request
+			// finds nothing to hand over.
+			Activity_Log::record(
+				'mcp_discovery_moved',
+				__( 'Another plugin now claims the site-wide OAuth discovery address, so xSpeed handed it over. Its own is /.well-known/oauth-protected-resource/xspeed/mcp — AI assistants already connected may ask for approval once more.', 'xspeed' ),
+				Activity_Log::INFO
+			);
+		}
+
+		flush_rewrite_rules( false );
+	}
+
+	/**
+	 * Whether another plugin's rewrite rule already routes the ROOT discovery
+	 * URLs, making them theirs rather than ours.
+	 *
+	 * Read from two views of the rewrite table, because neither alone is
+	 * complete at `init`:
+	 *
+	 *   - the STORED table, which is what WordPress actually routes with and
+	 *     the only view that survives the request. If a sibling registered
+	 *     the same regex after us at the last flush, its target is what is
+	 *     stored, and that is precisely "the sibling owns this URL now".
+	 *   - the IN-MEMORY rules registered so far this request, which catches a
+	 *     sibling that hooks `init` earlier than we do and has therefore not
+	 *     reached the stored table yet.
+	 *
+	 * A sibling that registers LATER than us used to be the one case neither
+	 * view saw, and it did NOT resolve itself: the guard is what triggers a
+	 * flush, so a guard reading an incomplete view simply never fires. That
+	 * is why add_rewrite() now runs on `wp_loaded` rather than `init` — by
+	 * then every plugin has registered, whatever its load order.
+	 *
+	 * @param mixed $stored The stored rewrite table, if already read.
+	 */
+	public static function root_discovery_contested( $stored = null ): bool {
+		$tables = array();
+		if ( is_array( $stored ) ) {
+			$tables[] = $stored;
+		} elseif ( null === $stored ) {
+			$option = get_option( 'rewrite_rules' );
+			if ( is_array( $option ) ) {
+				$tables[] = $option;
+			}
+		}
+
+		if ( isset( $GLOBALS['wp_rewrite'] ) && is_object( $GLOBALS['wp_rewrite'] ) ) {
+			foreach ( array( 'extra_rules_top', 'extra_rules' ) as $prop ) {
+				if ( isset( $GLOBALS['wp_rewrite']->$prop ) && is_array( $GLOBALS['wp_rewrite']->$prop ) ) {
+					$tables[] = $GLOBALS['wp_rewrite']->$prop;
 				}
 			}
 		}
+
+		foreach ( $tables as $rules ) {
+			foreach ( $rules as $pattern => $target ) {
+				if ( ! self::is_a_wellknown_rule( (string) $pattern ) || self::is_our_rule_target( $target ) ) {
+					continue;
+				}
+				foreach ( array( 'protected-resource', 'authorization-server' ) as $doc ) {
+					$probe = '.well-known/oauth-' . $doc;
+					if ( preg_match( '#' . str_replace( '#', '\\#', (string) $pattern ) . '#', $probe ) ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Whether a rewrite regex was written FOR a .well-known discovery URL,
+	 * as opposed to merely matching one.
+	 *
+	 * WordPress's own page rule -- `(.?.+?)/?$` => `index.php?pagename=...`
+	 * -- is in the stored table of every site using pretty permalinks, and
+	 * it matches `.well-known/oauth-protected-resource` exactly as it
+	 * matches every other path on the site. Reading that as a sibling's
+	 * claim would report root as contested EVERYWHERE: the root document
+	 * would be retired on every install, including the single-plugin sites
+	 * this change exists to leave alone, and each of them would log a
+	 * hand-over that never happened.
+	 *
+	 * A rule that routes these URLs on purpose spells the segment out, so
+	 * that is the signal. Backslashes are stripped first because the regex
+	 * carries them as escapes (`^\\.well-known/...`) and a rule is free to
+	 * escape the hyphen too.
+	 *
+	 * @param string $pattern The stored rewrite regex.
+	 */
+	private static function is_a_wellknown_rule( string $pattern ): bool {
+		return false !== stripos( str_replace( '\\', '', $pattern ), 'well-known' );
+	}
+
+	/**
+	 * Whether a stored rewrite target was written by this module.
+	 *
+	 * Every rule we register resolves to `index.php?<one of our query
+	 * vars>=…`, and no other plugin sets those. Used to tell OUR leftover
+	 * copy of a retired rule from a sibling's rule that happens to share the
+	 * regex — only the first is ours to flush away.
+	 *
+	 * @param mixed $target The stored rewrite target.
+	 */
+	private static function is_our_rule_target( $target ): bool {
+		if ( ! is_string( $target ) ) {
+			return false;
+		}
+
+		foreach ( array( self::QUERY_VAR, self::TOKEN_QUERY_VAR, self::WELLKNOWN_QUERY_VAR, self::AUTHORIZE_QUERY_VAR, self::ATTACH_QUERY_VAR ) as $var ) {
+			if ( false !== strpos( $target, $var . '=' ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -327,7 +575,14 @@ final class McpModule extends Module {
 		// Any rule that routes our discovery path to index.php will do — ours
 		// or a sibling's — because the path check inside the handler decides
 		// the outcome once the request lands.
-		$probe = '.well-known/oauth-protected-resource';
+		//
+		// Probe the URL the 401 challenge actually advertises: the
+		// path-suffixed form, which is the canonical identity since #266.
+		// Probing root would answer a different question — whether ANY plugin
+		// routes the contested URL — and on a site where a sibling owns it
+		// that answer says nothing about whether our own document is
+		// reachable.
+		$probe = '.well-known/oauth-protected-resource/' . Mcp_Pairing::SITE_ENDPOINT_PATH;
 		foreach ( $rules as $pattern => $target ) {
 			if ( preg_match( '#' . str_replace( '#', '\\#', $pattern ) . '#', $probe ) ) {
 				return true;
@@ -354,21 +609,42 @@ final class McpModule extends Module {
 	 * Which discovery document the CURRENT request path asks for, if any.
 	 *
 	 * Claims only URLs that are unambiguously ours, mirroring the rewrite
-	 * rules exactly: the bare root form, and the RFC 9728 §3.1 path-suffixed
-	 * form naming our own resource (`/xspeed/mcp`). A suffix belonging to a
-	 * sibling plugin is deliberately NOT claimed — answering
+	 * rules exactly: the RFC 9728 §3.1 / RFC 8414 §3.1 path-suffixed form
+	 * naming our own resource and issuer (`/xspeed/mcp`). A suffix belonging
+	 * to a sibling plugin is deliberately NOT claimed — answering
 	 * `/.well-known/oauth-protected-resource/betterlinks/mcp` with xSpeed
 	 * metadata is the same bug that broke this site, just pointed the other
 	 * way.
 	 *
-	 * @return string 'protected-resource', 'authorization-server', or ''.
+	 * The bare root form is claimed only while no other plugin's rewrite rule
+	 * claims it. Leaving the suffix optional here took the root document from
+	 * a sibling even on a build that had stopped registering its own root
+	 * rule, so the path check is exact.
+	 *
+	 * The TABLE is what hands root over -- add_rewrite() stops registering
+	 * the rule and flushes it away. This claim only releases it, and only
+	 * while a sibling's rule actually owns the URL: once WordPress has
+	 * routed the request to OUR query var, no other plugin's handler can see
+	 * it, so releasing it would abandon the request to the front page rather
+	 * than pass it on. Note that is about the winning rule's TARGET, not its
+	 * regex -- a sibling can hold the same pattern. The document served at root carries the LEGACY host-only
+	 * issuer, the identifier a client used to derive that URL. (#266)
+	 *
+	 * @param string $matched_query The query the matched rule resolved to.
+	 * @return array{doc:string,issuer:string} Doc name ('' when not ours)
+	 *                                         and the identity to stamp on it.
 	 */
-	private function wellknown_doc_from_path(): string {
+	private function wellknown_claim_from_path( string $matched_query = '' ): array {
+		$none = array(
+			'doc'    => '',
+			'issuer' => '',
+		);
+
 		$uri = isset( $_SERVER['REQUEST_URI'] )
 			? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) )
 			: '';
 		if ( '' === $uri ) {
-			return '';
+			return $none;
 		}
 
 		$path = (string) wp_parse_url( $uri, PHP_URL_PATH );
@@ -381,10 +657,54 @@ final class McpModule extends Module {
 
 		$path = trim( $path, '/' );
 
-		$pattern = '#^\.well-known/oauth-(protected-resource|authorization-server)'
-			. '(?:/xspeed/mcp)?$#';
+		// trim() above already dropped a trailing slash, so `/xspeed/mcp/`
+		// still matches — and so does the root form with one.
+		$ours = '#^\.well-known/oauth-(protected-resource|authorization-server)'
+			. '/' . preg_quote( Mcp_Pairing::SITE_ENDPOINT_PATH, '#' ) . '$#';
+		if ( preg_match( $ours, $path, $m ) ) {
+			return array(
+				'doc'    => $m[1],
+				'issuer' => Mcp_OAuth::issuer(),
+			);
+		}
 
-		return preg_match( $pattern, $path, $m ) ? $m[1] : '';
+		// Releasing root is only safe when somebody else can pick it up. If
+		// OUR rule is what WordPress matched, nobody can: the sibling's query
+		// var is unset, so its handler never runs, and the request falls
+		// through to the front page -- a 301 to the homepage where dev
+		// returns JSON. Answering with the legacy document is the pre-#266
+		// behaviour. (#266 QA)
+		//
+		// Keyed on the query the matched rule RESOLVED TO -- not on
+		// $wp->query_vars, and not on which regex matched.
+		//
+		// query_vars is wrong because the var is public and WP::parse_request
+		// lets $_GET override anything a rule set, so `?xspeed_mcp_wellknown=1`
+		// would let anyone force our metadata onto a URL a sibling owns.
+		//
+		// matched_rule is wrong because the rewrite table is keyed BY regex:
+		// a sibling that registered this same pattern replaces our entry and
+		// the key still reads as ours, while the target behind it is theirs.
+		// That is a live case here -- is_our_rule_target() exists for it --
+		// and keying on the rule would answer for the sibling, which is the
+		// bug this whole change is about.
+		//
+		// matched_query is built from the winning rule's TARGET (class-wp.php,
+		// before the parse_request action) and $_GET never touches it. If it
+		// sets our query var, our rule genuinely won. (#266 QA)
+		$routed_to_us = 1 === preg_match(
+			'#(?:^|&)' . preg_quote( self::WELLKNOWN_QUERY_VAR, '#' ) . '=#',
+			$matched_query
+		);
+		$root         = '#^\.well-known/oauth-(protected-resource|authorization-server)$#';
+		if ( preg_match( $root, $path, $m ) && ( $routed_to_us || ! self::root_discovery_contested() ) ) {
+			return array(
+				'doc'    => $m[1],
+				'issuer' => Mcp_OAuth::legacy_issuer(),
+			);
+		}
+
+		return $none;
 	}
 
 	/**
@@ -394,9 +714,9 @@ final class McpModule extends Module {
 	 * @param \WP $wp The WP request object.
 	 */
 	public function maybe_handle_pretty_endpoint( $wp ): void {
-		// OAuth discovery documents (served at the site root).
+		// OAuth discovery documents.
 		//
-		// Read the doc name from the REQUEST PATH, not just our query var.
+		// Read the doc name from the REQUEST PATH, and ONLY from the path.
 		// `add_rewrite_rule( …, 'top' )` only means "top at the moment it
 		// runs", so whichever MCP plugin hooks `init` last ends up first in
 		// the table — an order set by plugin load order, which no plugin
@@ -406,18 +726,26 @@ final class McpModule extends Module {
 		// unambiguously ours. Observed live with two different plugins on one
 		// site. parse_request runs AFTER matching, so the path is the one
 		// signal no sibling rule can take away from us.
-		$doc = $this->wellknown_doc_from_path();
-		if ( '' === $doc && ! empty( $wp->query_vars[ self::WELLKNOWN_QUERY_VAR ] ) ) {
-			$doc = (string) $wp->query_vars[ self::WELLKNOWN_QUERY_VAR ];
-		}
+		//
+		// The query VAR is deliberately never consulted. It is public, so
+		// $_GET can set it on any URL, and answering from it would put our
+		// metadata on somebody else's address — the whole bug. Which rewrite
+		// RULE matched is a different thing: WordPress decides it, the query
+		// string cannot influence it, and it is only read to tell "a sibling
+		// owns this URL" from "we own it and nobody else can answer".
+		$matched_query = is_object( $wp ) && isset( $wp->matched_query ) ? (string) $wp->matched_query : '';
+		$claim         = $this->wellknown_claim_from_path( $matched_query );
+		$doc   = $claim['doc'];
 		if ( '' !== $doc ) {
 			$data = 'authorization-server' === $doc
-				? Mcp_OAuth::authorization_server_metadata()
-				: Mcp_OAuth::protected_resource_metadata();
+				? Mcp_OAuth::authorization_server_metadata( $claim['issuer'] )
+				: Mcp_OAuth::protected_resource_metadata( $claim['issuer'] );
 			status_header( 200 );
 			header( 'Content-Type: application/json; charset=utf-8' );
-			// Discovery metadata is public + cacheable.
-			header( 'Cache-Control: public, max-age=3600' );
+			// Public and cacheable, but short: this document IS the server's
+			// identity, and a cached copy outliving an issuer change is the
+			// one failure a client cannot recover from on its own. (#266)
+			header( 'Cache-Control: public, max-age=300' );
 			echo wp_json_encode( $data );
 			exit;
 		}
@@ -1025,7 +1353,9 @@ final class McpModule extends Module {
 	 */
 	private function discovery_response( array $data ): \WP_REST_Response {
 		$response = new \WP_REST_Response( $data, 200 );
-		$response->header( 'Cache-Control', 'public, max-age=3600' );
+		// Same short window as the /.well-known/ emit site, same reason: the
+		// document carries the server's identity. (#266)
+		$response->header( 'Cache-Control', 'public, max-age=300' );
 		return $response;
 	}
 

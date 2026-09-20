@@ -73,6 +73,12 @@ final class BloatModule extends Module {
 				'label'       => __( 'Strip jQuery Migrate on Frontend', 'xspeed' ),
 				'description' => __( 'Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins.', 'xspeed' ),
 			),
+			'strip_editor_styles' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Strip Block-Editor Styles on Frontend', 'xspeed' ),
+				'description' => __( 'Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched.', 'xspeed' ),
+			),
 			'restrict_rest_to_authed' => array(
 				'type'        => 'bool',
 				'default'     => false,
@@ -132,6 +138,11 @@ final class BloatModule extends Module {
 			add_action( 'wp_default_scripts', array( __CLASS__, 'strip_jquery_migrate' ) );
 		}
 
+		if ( ! empty( $opts['strip_editor_styles'] ) ) {
+			// Late, so anything enqueued at normal priority is already queued.
+			add_action( 'wp_enqueue_scripts', array( __CLASS__, 'dequeue_editor_styles' ), PHP_INT_MAX );
+		}
+
 		if ( ! empty( $opts['restrict_rest_to_authed'] ) ) {
 			add_filter( 'rest_authentication_errors', array( __CLASS__, 'restrict_rest' ) );
 		}
@@ -173,6 +184,54 @@ final class BloatModule extends Module {
 				return $rules;
 			}
 		);
+	}
+
+	/**
+	 * Editor-only style handles that have no business on an anonymous
+	 * frontend page. Deliberately NOT wp-block-library /
+	 * wp-block-library-theme / global-styles — those style the blocks
+	 * visitors actually see. Observed live: a plugin pulled wp-editor +
+	 * wp-components (and their deps) onto a marketing homepage, several
+	 * hundred KB of render-blocking CSS nothing on the page used.
+	 */
+	private const EDITOR_STYLE_HANDLES = array(
+		'wp-editor',
+		'wp-block-editor',
+		'wp-block-directory',
+		'wp-components',
+		'wp-preferences',
+		'wp-media-utils',
+		'wp-reusable-blocks',
+		'wp-patterns',
+		'wp-edit-blocks',
+		'wp-edit-post',
+		'wp-edit-site',
+		'wp-edit-widgets',
+		'wp-format-library',
+		'wp-list-reusable-blocks',
+		'wp-nux',
+	);
+
+	public static function dequeue_editor_styles(): void {
+		// Logged-in views legitimately reach editor surfaces (front-end
+		// editing, admin bar flows), and a builder editing screen is a
+		// front-end URL — same guard set as the other frontend strips.
+		if ( is_user_logged_in() || is_admin() || \XSpeed\Builder_Editor::is_active() ) {
+			return;
+		}
+		$styles = wp_styles();
+		foreach ( self::EDITOR_STYLE_HANDLES as $handle ) {
+			wp_dequeue_style( $handle );
+		}
+		// Dequeue alone is not enough: dependencies are resolved again at
+		// print time, so any queued sheet that lists one of these as a dep
+		// pulls it straight back. Strip the handles from every registered
+		// sheet's deps too — same technique strip_jquery_migrate() uses.
+		foreach ( $styles->registered as $dependency ) {
+			if ( is_array( $dependency->deps ?? null ) && array_intersect( $dependency->deps, self::EDITOR_STYLE_HANDLES ) ) {
+				$dependency->deps = array_values( array_diff( $dependency->deps, self::EDITOR_STYLE_HANDLES ) );
+			}
+		}
 	}
 
 	public static function block_feed(): void {

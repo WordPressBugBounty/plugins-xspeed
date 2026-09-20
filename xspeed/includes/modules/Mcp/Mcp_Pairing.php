@@ -59,9 +59,52 @@ final class Mcp_Pairing {
 	/**
 	 * The PRIMARY endpoint the user pastes into their AI client — this
 	 * site's own MCP URL. No hosted infra involved.
+	 *
+	 * Normalised, because get_home_url() is not: it concatenates the `home`
+	 * option with the path verbatim, so a site whose `home` carries a
+	 * trailing slash yields `https://site//xspeed/mcp`. That string is the
+	 * OAuth resource AND (since #266) the issuer, so every discovery URL a
+	 * client derives from it would carry the doubled slash and 404 — and the
+	 * connect URL the user pastes would too. Mcp_Hub::site_url_canonical()
+	 * defends the same way for the attach nonce.
 	 */
+	/**
+	 * Collapse the doubled slash a trailing-slash `home` option leaves behind.
+	 *
+	 * `get_home_url()` appends `'/' . ltrim( $path, '/' )` to the raw option,
+	 * so a site stored as `https://example.test/` yields
+	 * `https://example.test//xspeed/authorize`, and `rest_url()` inherits the
+	 * same doubling through its pretty-permalink branch. The URLs still
+	 * resolve, but they are published in discovery documents that clients
+	 * compare as strings.
+	 *
+	 * Only the run immediately after the authority is collapsed. A doubled
+	 * slash deeper in a path can be meaningful, and rebuilding REST URLs by
+	 * hand instead would lose `index.php/wp-json`, the plain-permalink
+	 * `?rest_route=` form, and anything the `rest_url` filter did. (#266 QA)
+	 *
+	 * A subdirectory install doubles the slash after the subdirectory rather
+	 * than after the host (`https://x/blog//wp-json/...`), so the whole path
+	 * is collapsed, not just the run behind the authority.
+	 *
+	 * @param string $url Absolute URL.
+	 */
+	public static function absolute( string $url ): string {
+		if ( ! preg_match( '#^([a-z][a-z0-9+.-]*://[^/?\#]+)(.*)$#is', $url, $m ) ) {
+			return $url;
+		}
+		// Only the path is collapsed -- never the query or the fragment,
+		// where a doubled slash can carry meaning (a nested URL in a
+		// redirect_to, say).
+		$rest  = $m[2];
+		$split = strcspn( $rest, '?#' );
+		$path  = (string) preg_replace( '#/{2,}#', '/', substr( $rest, 0, $split ) );
+
+		return $m[1] . $path . substr( $rest, $split );
+	}
+
 	public static function site_endpoint(): string {
-		return home_url( '/' . self::SITE_ENDPOINT_PATH );
+		return untrailingslashit( home_url( '/' ) ) . '/' . self::SITE_ENDPOINT_PATH;
 	}
 
 	/**
@@ -69,7 +112,7 @@ final class Mcp_Pairing {
 	 * the pretty rewrite can't be served (e.g. plain permalinks).
 	 */
 	public static function site_endpoint_fallback(): string {
-		return rest_url( 'xspeed/v1/mcp' );
+		return self::absolute( rest_url( 'xspeed/v1/mcp' ) );
 	}
 
 	/**

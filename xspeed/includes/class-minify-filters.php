@@ -100,16 +100,349 @@ final class Minify_Filters {
 	}
 
 	/**
+	 * Pristine tags as they looked before any of our transforms, keyed by
+	 * handle. See snapshot_tag() / revert_late_marked_tag().
+	 *
+	 * @var array<string,string>
+	 */
+	private static $pristine_tag = array();
+
+	/**
+	 * Priority for the late opt-out re-check. Past Borlabs' ScriptBlocker
+	 * at 999 — the highest stamper we have seen in the wild — so the
+	 * marker has certainly landed by the time we look. (#469)
+	 */
+	private const LATE_OPT_OUT_PRIORITY = 1000;
+
+	/**
+	 * The priority the late opt-out re-check runs at.
+	 *
+	 * A site whose stamper hooks even later can move ours past it.
+	 */
+	public static function late_opt_out_priority(): int {
+		/**
+		 * Filter the priority of xSpeed's late data-no-optimize re-check.
+		 *
+		 * @param int $priority Default 1000.
+		 */
+		return (int) apply_filters( 'xspeed_late_opt_out_priority', self::LATE_OPT_OUT_PRIORITY );
+	}
+
+	/**
+	 * Filter: `script_loader_tag`, priority 9 — remember the tag before we
+	 * touch it, so a marker stamped later can still be honored.
+	 *
+	 * Our three opt-out-aware transforms run at 15/20/30. A plugin that
+	 * stamps `data-no-optimize` AFTER them is invisible to all three:
+	 * Borlabs Cookie stamps at priority 100, so its consent config was
+	 * still minified into a hashed cache file AND delayed — the script
+	 * that has to run before anything else on the page ran only on first
+	 * interaction. Snapshotting here is what lets the late pass put the
+	 * original back verbatim, rather than trying to unpick each transform
+	 * in reverse. (#469)
+	 *
+	 * @param string $tag
+	 * @param string $handle
+	 * @param string $src
+	 */
+	public static function snapshot_tag( $tag, $handle, $src ): string {
+		if ( is_string( $tag ) && '' !== $tag && '' !== (string) $handle ) {
+			self::$pristine_tag[ (string) $handle ] = $tag;
+		}
+		return (string) $tag;
+	}
+
+	/**
+	 * Filter: `script_loader_tag`, priority `LATE_OPT_OUT_PRIORITY` — hand
+	 * back the untouched tag when a late filter stamped an opt-out marker
+	 * after our transforms had already run.
+	 *
+	 * The priority has to clear the stamper, not merely the transforms:
+	 * Borlabs stamps at 100 and Borlabs' own script blocker at 999, so an
+	 * earlier hook reads a tag whose marker has not landed yet. PHP_INT_MAX
+	 * would be unfriendly to a site that legitimately wants the last word,
+	 * so this sits just past the highest stamper we know of and is
+	 * filterable. Reverting to the snapshot is deliberate: undoing
+	 * a delay rewrite in place would mean re-deriving `src` from
+	 * `data-xs-src` and stripping markers, and #273 is a standing reminder
+	 * that regex-editing these attributes in reverse goes wrong quietly.
+	 *
+	 * The pristine tag still carries whatever priority-10 filters did to
+	 * it, so only OUR changes are dropped. (#469)
+	 *
+	 * @param string $tag
+	 * @param string $handle
+	 * @param string $src
+	 */
+	public static function revert_late_marked_tag( $tag, $handle, $src ): string {
+		if ( ! is_string( $tag ) || '' === $tag || ! self::tag_opts_out( $tag ) ) {
+			return (string) $tag;
+		}
+		$handle   = (string) $handle;
+		$pristine = isset( self::$pristine_tag[ $handle ] ) ? self::$pristine_tag[ $handle ] : '';
+		if ( '' !== $pristine && $pristine !== $tag ) {
+			// The marker is on the tag we were handed, not on the snapshot,
+			// so carry it — and everything else the late filter set in the
+			// same pass — over. A consumer reading the rendered HTML (or
+			// our own buffer passes) must still see the opt-out it asked
+			// for.
+			$tag = self::copy_late_attributes( $tag, $pristine );
+		}
+		// The snapshot was taken on `script_loader_tag`, by which point
+		// `script_loader_src` (priority 10) had ALREADY swapped in the
+		// hashed cache URL — so reverting the tag alone still leaves the
+		// minified src behind, which is the half the client actually
+		// reported. Undo that here too, using the URL rewrite_script()
+		// recorded. (#469)
+		return self::restore_marked_script_src( $tag, $handle, self::current_src( $tag, (string) $src ) );
+	}
+
+	/**
+	 * The src currently on a tag, falling back to the one WordPress passed.
+	 *
+	 * After a revert the tag carries the snapshot's src, which is not
+	 * necessarily the `$src` argument this late in the chain.
+	 *
+	 * @param string $tag      Tag to read.
+	 * @param string $fallback Value to use when the tag has no src.
+	 */
+	private static function current_src( string $tag, string $fallback ): string {
+		$open = self::open_tag_offsets( $tag );
+		if ( null !== $open
+			&& preg_match( '#(?<![-\w])src\s*=\s*["\']([^"\']*)["\']#i', $open['attrs'], $m ) ) {
+			return $m[1];
+		}
+		return $fallback;
+	}
+
+	/**
+	 * Carry the attributes a late filter added onto the snapshot tag.
+	 *
+	 * Copying only `data-no-*` would silently drop the rest of what the
+	 * stamper set in the same pass. Borlabs adds `data-cfasync="false"`
+	 * alongside its markers — the attribute that keeps Cloudflare Rocket
+	 * Loader off the consent config, i.e. the same class of breakage this
+	 * fix exists to prevent, reintroduced by the fix itself. So diff the
+	 * attribute names and bring over every one the snapshot lacks.
+	 *
+	 * Our own transform markers are excluded: they are what we are
+	 * reverting, and re-adding `data-xs-delay` would re-delay the script.
+	 *
+	 * @param string $from Tag as the late filter left it.
+	 * @param string $to   Snapshot tag to stamp onto.
+	 */
+	private static function copy_late_attributes( string $from, string $to ): string {
+		$late_tags = self::open_tags( $from );
+		$to_tags   = self::open_tags( $to );
+		if ( empty( $late_tags ) || empty( $to_tags ) || count( $late_tags ) !== count( $to_tags ) ) {
+			// Counts differ when a stamper/blocker injected or replaced a
+			// tag inside the concatenated string, or a transform dropped an
+			// inline block. Positional pairing is meaningless then — but
+			// returning the bare snapshot would silently strip the opt-out,
+			// and the buffer passes would re-optimize an unmarked tag: #469
+			// again, on the mismatch path. Over-marking merely leaves a tag
+			// unoptimized, so stamp the protective attributes onto every
+			// snapshot tag instead. (#470)
+			return self::stamp_protective_attributes( $from, $to, $to_tags );
+		}
+		// Pair the tags positionally and stamp each one from its own
+		// counterpart. A stamper runs over the whole concatenated string
+		// and may mark several of the tags in it; collapsing that onto one
+		// tag would strip the opt-out from the others, and the buffer
+		// passes re-test `tag_opts_out()` per tag, so an unmarked sibling
+		// is free to be re-optimized downstream — #469 again, one pass
+		// later. (#469)
+		$out = $to;
+		// Right to left: an earlier splice would shift every later offset.
+		for ( $i = count( $to_tags ) - 1; $i >= 0; $i-- ) {
+			$add = self::late_attribute_delta( $late_tags[ $i ]['attrs'], $to_tags[ $i ]['attrs'] );
+			if ( '' !== $add ) {
+				$out = substr_replace( $out, $add, $to_tags[ $i ]['attrs_end'], 0 );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Fallback when the late tag and the snapshot cannot be paired
+	 * positionally: copy only the attributes that protect the script from
+	 * optimizers — the opt-out markers plus `data-cfasync` — onto every
+	 * snapshot tag missing them. Values are taken as the stamper wrote
+	 * them on the late tag. (#470)
+	 *
+	 * @param string $from    Tag as the late filter left it.
+	 * @param string $to      Snapshot tag to stamp onto.
+	 * @param array  $to_tags open_tags() result for $to.
+	 */
+	private static function stamp_protective_attributes( string $from, string $to, array $to_tags ): string {
+		$protect = array();
+		foreach ( array( 'data-no-optimize', 'data-no-minify', 'data-cfasync' ) as $name ) {
+			if ( preg_match(
+				'#\s(' . preg_quote( $name, '#' ) . ')(\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*))?#i',
+				$from,
+				$m
+			) ) {
+				$protect[ $name ] = ' ' . $name . ( isset( $m[2] ) ? $m[2] : '' );
+			}
+		}
+		if ( empty( $protect ) ) {
+			return $to;
+		}
+		$out = $to;
+		// Right to left: an earlier splice would shift every later offset.
+		for ( $i = count( $to_tags ) - 1; $i >= 0; $i-- ) {
+			$add = '';
+			foreach ( $protect as $name => $attr ) {
+				if ( ! preg_match( '#\s' . preg_quote( $name, '#' ) . '\b#i', $to_tags[ $i ]['attrs'] ) ) {
+					$add .= $attr;
+				}
+			}
+			if ( '' !== $add ) {
+				$out = substr_replace( $out, $add, $to_tags[ $i ]['attrs_end'], 0 );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * The attributes present on the late tag but not the snapshot, minus
+	 * the ones our own transforms add.
+	 *
+	 * @param string $late_attrs Attribute string from the transformed tag.
+	 * @param string $to_attrs   Attribute string from the snapshot tag.
+	 */
+	private static function late_attribute_delta( string $late_attrs, string $to_attrs ): string {
+		$pattern = '#\s([-\w:]+)(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*))?#';
+		if ( ! preg_match_all( $pattern, $late_attrs, $late, PREG_SET_ORDER ) ) {
+			return '';
+		}
+		$have = array();
+		if ( preg_match_all( $pattern, $to_attrs, $existing, PREG_SET_ORDER ) ) {
+			foreach ( $existing as $attr ) {
+				$have[ strtolower( $attr[1] ) ] = true;
+			}
+		}
+		$add = '';
+		foreach ( $late as $attr ) {
+			$name = strtolower( $attr[1] );
+			if ( isset( $have[ $name ] ) || in_array( $name, self::OUR_TRANSFORM_ATTRS, true ) ) {
+				continue;
+			}
+			if ( 0 === strpos( $name, 'data-xs-' ) ) {
+				continue;
+			}
+			$add .= $attr[0];
+		}
+		return $add;
+	}
+
+	/**
+	 * Attributes our own transforms add. Copying any of these from the
+	 * transformed tag back onto the snapshot would re-apply the very
+	 * transform we are undoing:
+	 *
+	 *   defer/async — defer_script_tag()
+	 *   type        — delay_script_tag() parks an inline block as
+	 *                 text/xspeed-delayed; a type the author set is on the
+	 *                 snapshot already and matches by name before we get here
+	 *   src         — belongs to the snapshot, never to the late tag
+	 *
+	 * `data-xs-*` is handled by prefix separately. (#469)
+	 */
+	private const OUR_TRANSFORM_ATTRS = array( 'defer', 'async', 'type', 'src' );
+
+	/**
+	 * Locate the opening `<script>` that carries the src, falling back to
+	 * the last one when none does.
+	 *
+	 * WP_Scripts::do_item() hands `script_loader_tag` the concatenation of
+	 * before_inline + external + after_inline, so the FIRST `<script` is
+	 * routinely an inline block rather than the asset — the same trap
+	 * #234 fixed for defer and #273 for delay. Scanning attribute-wise
+	 * also means a quoted value containing `>` (an `onerror` guard, a JSON
+	 * payload) cannot truncate the tag the way `[^>]*` did. (#469)
+	 *
+	 * @param string $tag Full tag string.
+	 * @return array{attrs:string,attrs_end:int}|null
+	 */
+	private static function open_tag_offsets( string $tag ): ?array {
+		$tags     = self::open_tags( $tag );
+		$fallback = null;
+		foreach ( $tags as $found ) {
+			if ( preg_match( '#(?<![-\w])src\s*=#i', $found['attrs'] ) ) {
+				return $found;
+			}
+			$fallback = $found;
+		}
+		return $fallback;
+	}
+
+	/**
+	 * Every well-formed opening `<script>` in the string, in order.
+	 *
+	 * @param string $tag Full tag string.
+	 * @return array<int,array{attrs:string,attrs_end:int}>
+	 */
+	private static function open_tags( string $tag ): array {
+		if ( ! preg_match_all( '#<script\b#i', $tag, $m, PREG_OFFSET_CAPTURE ) ) {
+			return array();
+		}
+		$found = array();
+		foreach ( $m[0] as $hit ) {
+			$start = (int) $hit[1] + strlen( $hit[0] );
+			$end   = self::scan_open_tag_end( $tag, $start );
+			if ( null === $end ) {
+				continue;
+			}
+			$found[] = array(
+				'attrs'     => substr( $tag, $start, $end - $start ),
+				'attrs_end' => $end,
+			);
+		}
+		return $found;
+	}
+
+	/**
+	 * Offset of the `>` closing an opening tag, skipping any that sit
+	 * inside a quoted attribute value. Null when the tag is unterminated.
+	 *
+	 * @param string $tag    Full tag string.
+	 * @param int    $offset Index just past `<script`.
+	 */
+	private static function scan_open_tag_end( string $tag, int $offset ): ?int {
+		$len   = strlen( $tag );
+		$quote = '';
+		for ( $i = $offset; $i < $len; $i++ ) {
+			$char = $tag[ $i ];
+			if ( '' !== $quote ) {
+				if ( $char === $quote ) {
+					$quote = '';
+				}
+				continue;
+			}
+			if ( '"' === $char || "'" === $char ) {
+				$quote = $char;
+				continue;
+			}
+			if ( '>' === $char ) {
+				// A self-closing `/>` keeps the slash out of the attributes.
+				return ( $i > $offset && '/' === $tag[ $i - 1 ] ) ? $i - 1 : $i;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Filter: `script_loader_tag`, priority 15 — undo the minify-cache
 	 * rewrite for a script whose printed tag opts out.
 	 *
 	 * The src rewrite happens on `script_loader_src` (priority 10), long
 	 * before any plugin's own `script_loader_tag` filter can stamp
 	 * `data-no-minify` onto the tag — so the marker arrived too late to
-	 * prevent the rewrite. This runs after those filters had their say
-	 * (they typically hook at default priority 10; we're at 15, before
-	 * defer at 20 and delay at 30) and swaps the hashed cache URL back to
-	 * the recorded original.
+	 * prevent the rewrite. This runs after the filters that stamp at the
+	 * default priority 10 and swaps the hashed cache URL back to the
+	 * recorded original. A marker stamped later than our transforms is
+	 * caught by revert_late_marked_tag() in the late pass instead. (#469)
 	 *
 	 * @param string $tag
 	 * @param string $handle
@@ -1560,6 +1893,7 @@ final class Minify_Filters {
 		self::$delay_bootstrap_printed = false;
 		self::$js_measured_layout      = null;
 		self::$inline_bound_handles    = null;
+		self::$pristine_tag            = array();
 	}
 
 	/**

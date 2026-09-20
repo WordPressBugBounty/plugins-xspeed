@@ -196,7 +196,7 @@ final class Mcp_Hub {
 			'attached'       => $state['attached'],
 			'account_email'  => $state['account_email'],
 			'attached_at'    => $state['attached_at'],
-			'site_url'       => home_url( '/' ),
+			'site_url'       => Mcp_Pairing::absolute( home_url( '/' ) ),
 			// Method 1 paste-in credential — the existing per-site token.
 			// Empty until generate_token() (or a per-site Connect) mints one.
 			'site_token'     => Mcp_Pairing::site_token(),

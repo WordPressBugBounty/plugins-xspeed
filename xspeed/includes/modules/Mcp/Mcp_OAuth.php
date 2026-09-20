@@ -9,10 +9,15 @@
  * the end-to-end flow notes below.
  *
  * Flow: unauthenticated MCP call -> 401 + WWW-Authenticate (Mcp_Server) ->
- * client fetches /.well-known/oauth-protected-resource + oauth-authorization-
- * server -> dynamic registration (RFC 7591) -> /authorize (admin consent +
- * PKCE) -> /token (code + verifier -> access + refresh) -> MCP calls with
- * `Authorization: Bearer <access>` validated by validate_token().
+ * client fetches /.well-known/oauth-protected-resource/xspeed/mcp +
+ * /.well-known/oauth-authorization-server/xspeed/mcp -> dynamic registration
+ * (RFC 7591) -> /authorize (admin consent + PKCE) -> /token (code + verifier
+ * -> access + refresh) -> MCP calls with `Authorization: Bearer <access>`
+ * validated by validate_token(). Both canonical identifiers -- issuer and
+ * resource -- are the MCP endpoint URL, which is what puts the documents
+ * under that path rather than at the contested site root (#266). The root
+ * URLs are still answered, with the legacy host-only issuer, on sites where
+ * no other plugin has claimed them -- see legacy_issuer().
  *
  * Security contract:
  *   - PKCE S256 REQUIRED (OAuth 2.1 public clients); codes are single-use,
@@ -124,9 +129,41 @@ final class Mcp_OAuth {
 
 	// -- URLs ------------------------------------------------------------
 
-	/** Base site URL used as the OAuth issuer (no trailing slash). */
+	/**
+	 * The OAuth issuer identifier -- the MCP endpoint URL, identical to
+	 * resource().
+	 *
+	 * RFC 8414 §2 allows an issuer to carry a path, and §3.1 then moves its
+	 * metadata to /.well-known/oauth-authorization-server/xspeed/mcp, a URL
+	 * only this plugin answers. A bare-host issuer put the document at the
+	 * site root, which every other MCP-serving plugin on the same site also
+	 * wants, and WordPress hands that URL to whichever rewrite rule happens
+	 * to sit first in the table.
+	 *
+	 * Nothing stored carries the issuer -- access and refresh tokens are
+	 * opaque random strings, client records hold redirect_uris/name/created
+	 * -- so changing it invalidates no grant. A client that re-discovers
+	 * simply registers again and asks the admin for consent once more.
+	 * (#266)
+	 */
 	public static function issuer(): string {
-		return untrailingslashit( home_url() );
+		return self::resource();
+	}
+
+	/**
+	 * The host-only issuer earlier builds used, still served at the bare
+	 * /.well-known/oauth-* URLs when no other plugin has claimed them.
+	 *
+	 * RFC 8414 §3.3 makes a client reject a document whose `issuer` is not
+	 * the value it inserted into the URL it fetched, and a client that
+	 * fetched the ROOT document inserted nothing -- it derived that URL from
+	 * `https://site`. Stamping the path issuer there would be the same RFC
+	 * violation this change set out to remove, pointed the other way. So the
+	 * two locations carry two identities, each self-consistent, and a client
+	 * ends up on whichever one it asked for. (#266)
+	 */
+	public static function legacy_issuer(): string {
+		return untrailingslashit( home_url( '/' ) );
 	}
 
 	/** The protected resource identifier -- the MCP endpoint URL. */
@@ -141,15 +178,15 @@ final class Mcp_OAuth {
 	 * treat the admin as logged-out, looping back to login.
 	 */
 	public static function authorize_url(): string {
-		return home_url( '/xspeed/authorize' );
+		return Mcp_Pairing::absolute( home_url( '/xspeed/authorize' ) );
 	}
 
 	public static function token_url(): string {
-		return rest_url( 'xspeed/v1/mcp/oauth/token' );
+		return Mcp_Pairing::absolute( rest_url( 'xspeed/v1/mcp/oauth/token' ) );
 	}
 
 	public static function register_url(): string {
-		return rest_url( 'xspeed/v1/mcp/oauth/register' );
+		return Mcp_Pairing::absolute( rest_url( 'xspeed/v1/mcp/oauth/register' ) );
 	}
 
 	// -- Discovery documents (RFC 8414 / RFC 9728) -----------------------
@@ -158,12 +195,18 @@ final class Mcp_OAuth {
 	 * RFC 9728 protected-resource metadata -- tells the client which
 	 * authorization server(s) protect the MCP endpoint (this site).
 	 *
+	 * @param string|null $issuer The authorization server to name. Defaults
+	 *                            to the canonical path issuer; the root
+	 *                            /.well-known/ location passes the legacy
+	 *                            host-only one, so that the AS document a
+	 *                            client goes on to fetch is the one served
+	 *                            at the URL that issuer derives.
 	 * @return array<string,mixed>
 	 */
-	public static function protected_resource_metadata(): array {
+	public static function protected_resource_metadata( ?string $issuer = null ): array {
 		return array(
 			'resource'                => self::resource(),
-			'authorization_servers'   => array( self::issuer() ),
+			'authorization_servers'   => array( $issuer ?? self::issuer() ),
 			'scopes_supported'        => self::SUPPORTED_SCOPES,
 			'bearer_methods_supported' => array( 'header' ),
 		);
@@ -174,11 +217,16 @@ final class Mcp_OAuth {
 	 * capabilities we actually implement (auth-code grant, PKCE S256,
 	 * dynamic registration, refresh tokens).
 	 *
+	 * @param string|null $issuer Which identity this copy of the document
+	 *                            speaks for; see protected_resource_metadata().
+	 *                            Every endpoint URL below is identical either
+	 *                            way, which is why a client that switches
+	 *                            identities keeps its cached endpoints.
 	 * @return array<string,mixed>
 	 */
-	public static function authorization_server_metadata(): array {
+	public static function authorization_server_metadata( ?string $issuer = null ): array {
 		return array(
-			'issuer'                                => self::issuer(),
+			'issuer'                                => $issuer ?? self::issuer(),
 			'authorization_endpoint'                => self::authorize_url(),
 			'token_endpoint'                        => self::token_url(),
 			'registration_endpoint'                 => self::register_url(),

@@ -2,14 +2,14 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.3\n"
+"Project-Id-Version: xSpeed Cache 1.3.4\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-16T11:48:59+00:00\n"
+"POT-Creation-Date: 2026-09-20T11:23:49+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
@@ -1093,7 +1093,7 @@ msgid "AI Privacy"
 msgstr ""
 
 #: includes/modules/AIPrivacy/AIPrivacyModule.php:51
-msgid "Govern whether AI-powered features (Pro) may collect data from your visitors. The off-switch is here in Free because privacy is a fundamental right, not a paid feature."
+msgid "Decide whether AI features may use your visitors' data, and what the consent banner says. Applies even before you install Pro."
 msgstr ""
 
 #: includes/modules/AIPrivacy/AIPrivacyModule.php:70
@@ -1101,7 +1101,7 @@ msgid "Require consent before AI data collection"
 msgstr ""
 
 #: includes/modules/AIPrivacy/AIPrivacyModule.php:71
-msgid "When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made)."
+msgid "When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made): privacy is a fundamental right, not a paid feature."
 msgstr ""
 
 #: includes/modules/AIPrivacy/AIPrivacyModule.php:76
@@ -1161,18 +1161,26 @@ msgid "Remove the jquery-migrate compatibility shim from non-admin pages. Saves 
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:79
-msgid "Restrict REST API to Logged-In Users"
+msgid "Strip Block-Editor Styles on Frontend"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:80
+msgid "Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:85
+msgid "Restrict REST API to Logged-In Users"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:86
 msgid "Block /wp-json/ for anonymous requests. WooCommerce checkout, contact-form submissions, and many block-editor previews need anonymous REST — keep this off unless you know your site does not depend on it."
 msgstr ""
 
-#: includes/modules/Bloat/BloatModule.php:180
+#: includes/modules/Bloat/BloatModule.php:239
 msgid "Feeds are disabled."
 msgstr ""
 
-#: includes/modules/Bloat/BloatModule.php:229
+#: includes/modules/Bloat/BloatModule.php:288
 msgid "Anonymous REST access is disabled on this site."
 msgstr ""
 
@@ -1808,86 +1816,90 @@ msgstr ""
 msgid "Unknown command: %s. Call list_commands to see what is available."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:111
+#: includes/modules/Mcp/McpModule.php:149
 #: assets/admin.js
 msgid "MCP Server"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:113
-msgid "Control this site's cache from Claude and other AI agents."
+#: includes/modules/Mcp/McpModule.php:151
+msgid "Let Claude or another AI agent run this site — purge, check stats, change settings. This is the only thing you connect an AI to, and it is free with no API key."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:979
+#: includes/modules/Mcp/McpModule.php:440
+msgid "Another plugin now claims the site-wide OAuth discovery address, so xSpeed handed it over. Its own is /.well-known/oauth-protected-resource/xspeed/mcp — AI assistants already connected may ask for approval once more."
+msgstr ""
+
+#: includes/modules/Mcp/McpModule.php:1307
 msgid "Invalid or expired attach request."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1093
+#: includes/modules/Mcp/McpModule.php:1423
 msgid "You must be an administrator to authorize an AI agent to control this site."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1100
+#: includes/modules/Mcp/McpModule.php:1430
 msgid "Security check failed. Please try connecting again."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1227
+#: includes/modules/Mcp/McpModule.php:1557
 msgid "Read-only — inspect cache status and settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1228
+#: includes/modules/Mcp/McpModule.php:1558
 msgid "Read & write — purge caches, toggle caching, and change settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1229
+#: includes/modules/Mcp/McpModule.php:1559
 msgid "An AI agent"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1248
+#: includes/modules/Mcp/McpModule.php:1578
 msgid "Authorize AI access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1259
+#: includes/modules/Mcp/McpModule.php:1589
 msgid "Connect to xSpeed"
 msgstr ""
 
 #. translators: %s: AI client name.
-#: includes/modules/Mcp/McpModule.php:1261
+#: includes/modules/Mcp/McpModule.php:1591
 #, php-format
 msgid "%s wants to manage the cache on this site."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1262
+#: includes/modules/Mcp/McpModule.php:1592
 msgid "Site"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1263
+#: includes/modules/Mcp/McpModule.php:1593
 msgid "Signed in as"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1264
+#: includes/modules/Mcp/McpModule.php:1594
 msgid "Access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1269
+#: includes/modules/Mcp/McpModule.php:1599
 msgid "Deny"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1270
+#: includes/modules/Mcp/McpModule.php:1600
 msgid "Approve"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1280
+#: includes/modules/Mcp/McpModule.php:1610
 msgid "Authorization error"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1283
+#: includes/modules/Mcp/McpModule.php:1613
 msgid "Could not authorize"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1513
+#: includes/modules/Mcp/McpModule.php:1843
 msgid "An AI assistant is connected to this site. This module counts as on whenever a connection token exists, rather than having its own on/off setting."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1514
+#: includes/modules/Mcp/McpModule.php:1844
 msgid "No AI assistant is connected. This module counts as on once you connect one."
 msgstr ""
 
@@ -1908,45 +1920,45 @@ msgstr ""
 msgid "The test could not be started."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:213
+#: includes/modules/Mcp/Mcp_OAuth.php:261
 msgid "Too many client registrations. Try again later."
 msgstr ""
 
 #. translators: %d: maximum number of redirect URIs.
-#: includes/modules/Mcp/Mcp_OAuth.php:229
+#: includes/modules/Mcp/Mcp_OAuth.php:277
 #, php-format
 msgid "At most %d redirect_uris are allowed."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:241
+#: includes/modules/Mcp/Mcp_OAuth.php:289
 msgid "At least one valid redirect_uri is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:278
+#: includes/modules/Mcp/Mcp_OAuth.php:326
 msgid "Client registration limit reached."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:297
+#: includes/modules/Mcp/Mcp_OAuth.php:345
 msgid "The client registration could not be stored."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:336
+#: includes/modules/Mcp/Mcp_OAuth.php:384
 msgid "Unknown client_id."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:340
+#: includes/modules/Mcp/Mcp_OAuth.php:388
 msgid "redirect_uri does not match a registered value."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:343
+#: includes/modules/Mcp/Mcp_OAuth.php:391
 msgid "Only response_type=code is supported."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:347
+#: includes/modules/Mcp/Mcp_OAuth.php:395
 msgid "PKCE with code_challenge_method=S256 is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Pairing.php:408
+#: includes/modules/Mcp/Mcp_Pairing.php:451
 msgid "No active MCP connection to change. Connect first."
 msgstr ""
 
@@ -2551,6 +2563,38 @@ msgstr ""
 msgid "Share anonymous basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never personal data or page content. Turning this off stops all collection and clears the scheduled send."
 msgstr ""
 
+#: includes/modules/RenderSkip/RenderSkipModule.php:71
+msgid "Render Skip"
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:73
+msgid "Skip the browser's style & layout work for below-fold sections until the visitor scrolls near them — cuts main-thread blocking time on long builder pages without changing the content."
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:82
+msgid "Skip below-fold rendering"
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:83
+msgid "Stamp below-fold sections with content-visibility: auto so the browser defers their style and layout work until scroll approaches. Above-fold sections are never touched."
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:90
+msgid "Above-fold sections"
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:91
+msgid "How many top-level sections from the top of the page are treated as above the fold and left untouched. Raise this if a section near the top appears late."
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:96
+msgid "Section classes"
+msgstr ""
+
+#: includes/modules/RenderSkip/RenderSkipModule.php:97
+msgid "Class names that identify a top-level page section. Defaults cover Elementor sections and flexbox containers; add your theme's section class for non-Elementor pages."
+msgstr ""
+
 #: includes/modules/ResourceHints/ResourceHintsModule.php:60
 msgid "Resource Hints"
 msgstr ""
@@ -2921,12 +2965,12 @@ msgstr ""
 msgid "Benchmark failed"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:258
+#. Source: src/components/cache/TrendCharts.tsx:263
 #: assets/admin.js
 msgid "Benchmark trend"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:134
+#. Source: src/components/cache/TrendCharts.tsx:139
 #: assets/admin.js
 msgid "Benchmark: cached vs uncached (ms)"
 msgstr ""
@@ -2956,7 +3000,7 @@ msgstr ""
 msgid "Browse all"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:69
+#. Source: src/components/sidebarGroups.ts:79
 #: assets/admin.js
 msgid "Cache"
 msgstr ""
@@ -3061,7 +3105,7 @@ msgstr ""
 msgid "Cache, compression & more"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:270
+#. Source: src/components/cache/TrendCharts.tsx:275
 #: assets/admin.js
 msgid "cached"
 msgstr ""
@@ -3094,7 +3138,7 @@ msgstr ""
 msgid "Cancel"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:85
+#. Source: src/components/sidebarGroups.ts:95
 #: assets/admin.js
 msgid "CDN and Cloudflare edge delivery."
 msgstr ""
@@ -3189,6 +3233,11 @@ msgstr ""
 #. Source: src/components/score/ConnectHubModal.tsx:151
 #: assets/admin.js
 msgid "Connect"
+msgstr ""
+
+#. Source: src/components/sidebarGroups.ts:120
+#: assets/admin.js
+msgid "Connect an AI agent to this site, and control what AI features may use."
 msgstr ""
 
 #. Source: src/components/TopBar.tsx:138
@@ -3307,7 +3356,7 @@ msgstr ""
 msgid "Could not check the test status."
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:99
+#. Source: src/components/sidebarGroups.ts:109
 #: assets/admin.js
 msgid "Database cleanup, migration and logs."
 msgstr ""
@@ -3467,7 +3516,7 @@ msgstr ""
 msgid "GTmetrix test"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:90
+#. Source: src/components/sidebarGroups.ts:100
 #: assets/admin.js
 msgid "Health & insights"
 msgstr ""
@@ -3492,7 +3541,7 @@ msgstr ""
 msgid "Hide"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:120
+#. Source: src/components/cache/TrendCharts.tsx:125
 #. Source: src/components/health/HealthHero.tsx:37
 #. Source: src/components/overview/MetricGrid.tsx:44
 #: assets/admin.js
@@ -3514,7 +3563,7 @@ msgstr ""
 msgid "Hit ratio and benchmark history, with your settings changes marked."
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:222
+#. Source: src/components/cache/TrendCharts.tsx:227
 #: assets/admin.js
 msgid "Hit ratio trend"
 msgstr ""
@@ -3537,11 +3586,6 @@ msgstr ""
 #. Source: src/components/TopBar.tsx:138
 #: assets/admin.js
 msgid "Hub connected"
-msgstr ""
-
-#. Source: src/components/sidebarGroups.ts:106
-#: assets/admin.js
-msgid "Hub, MCP access, AI provider and privacy."
 msgstr ""
 
 #. Source: src/onboarding/steps/Connect.tsx:132
@@ -3604,7 +3648,7 @@ msgstr ""
 msgid "Last purged"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:236
+#. Source: src/components/cache/TrendCharts.tsx:241
 #: assets/admin.js
 msgid "Latest"
 msgstr ""
@@ -3620,7 +3664,7 @@ msgstr ""
 msgid "License"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:113
+#. Source: src/components/sidebarGroups.ts:128
 #: assets/admin.js
 msgid "License, branding, multisite and support."
 msgstr ""
@@ -3704,7 +3748,7 @@ msgstr ""
 msgid "min"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:78
+#. Source: src/components/sidebarGroups.ts:88
 #: assets/admin.js
 msgid "Minify, compress, lazy-load, fonts and hints."
 msgstr ""
@@ -3748,7 +3792,7 @@ msgstr ""
 msgid "Negligible difference — page is cheap to render or cache is cold."
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:83
+#. Source: src/components/sidebarGroups.ts:93
 #: assets/admin.js
 msgid "Network"
 msgstr ""
@@ -3964,7 +4008,7 @@ msgstr ""
 msgid "Open the full report"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:76
+#. Source: src/components/sidebarGroups.ts:86
 #: assets/admin.js
 msgid "Optimization"
 msgstr ""
@@ -3995,7 +4039,7 @@ msgstr ""
 msgid "Page"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:71
+#. Source: src/components/sidebarGroups.ts:81
 #: assets/admin.js
 msgid "Page, object and browser caching, plus preload."
 msgstr ""
@@ -4246,7 +4290,7 @@ msgstr ""
 msgid "Recent cache and settings activity."
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:148
+#. Source: src/components/cache/TrendCharts.tsx:153
 #: assets/admin.js
 msgid "Recent changes"
 msgstr ""
@@ -4272,7 +4316,7 @@ msgstr ""
 msgid "Refresh activity log"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:108
+#. Source: src/components/cache/TrendCharts.tsx:113
 #: assets/admin.js
 msgid "Refresh trends"
 msgstr ""
@@ -4358,7 +4402,7 @@ msgstr ""
 msgid "Run test"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:139
+#. Source: src/components/cache/TrendCharts.tsx:144
 #: assets/admin.js
 msgid "Run the benchmark at least twice to see a trend."
 msgstr ""
@@ -4526,7 +4570,7 @@ msgstr ""
 msgid "Size"
 msgstr ""
 
-#. Source: src/components/sidebarGroups.ts:92
+#. Source: src/components/sidebarGroups.ts:102
 #: assets/admin.js
 msgid "Speed score, diagnostics and analytics."
 msgstr ""
@@ -4571,7 +4615,7 @@ msgstr ""
 msgid "Take over the page cache from %s?"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:240
+#. Source: src/components/cache/TrendCharts.tsx:245
 #: assets/admin.js
 msgid "target ≥80%"
 msgstr ""
@@ -4643,7 +4687,7 @@ msgid "Token"
 msgstr ""
 
 #. Source: src/components/LogsView.tsx:34
-#. Source: src/components/sidebarGroups.ts:97
+#. Source: src/components/sidebarGroups.ts:107
 #: assets/admin.js
 msgid "Tools"
 msgstr ""
@@ -4653,7 +4697,7 @@ msgstr ""
 msgid "Trends"
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:126
+#. Source: src/components/cache/TrendCharts.tsx:131
 #: assets/admin.js
 msgid "Trends appear after a couple of days of traffic. The daily series is being collected now."
 msgstr ""
@@ -4683,7 +4727,7 @@ msgstr ""
 msgid "Turn on the page cache to start serving pages instantly."
 msgstr ""
 
-#. Source: src/components/cache/TrendCharts.tsx:273
+#. Source: src/components/cache/TrendCharts.tsx:278
 #: assets/admin.js
 msgid "uncached"
 msgstr ""

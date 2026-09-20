@@ -113,6 +113,25 @@ class Minifier {
 			// inline body that names a known third-party host.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'delay_inline_snippets' ), 21 );
 		}
+
+		// Everything above honors data-no-optimize / data-no-minify, but
+		// only sees markers stamped before priority 30. Borlabs Cookie
+		// stamps at 100, so its consent config was minified AND delayed
+		// despite carrying both markers. Snapshot the tag before our
+		// transforms (9) and hand the original back if a marker turns up
+		// after them (1000, past Borlabs' own 100 and 999). Registered
+		// whenever any of the three is on,
+		// since each one is individually enough to damage a marked
+		// script. (#469)
+		if ( ! empty( $opts['minify_js'] ) || ! empty( $opts['defer_js'] ) || ! empty( $opts['delay_js'] ) ) {
+			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'snapshot_tag' ), 9, 3 );
+			add_filter(
+				'script_loader_tag',
+				array( Minify_Filters::class, 'revert_late_marked_tag' ),
+				Minify_Filters::late_opt_out_priority(),
+				3
+			);
+		}
 		if ( ! empty( $opts['async_css'] ) ) {
 			add_filter( 'style_loader_tag',  array( Minify_Filters::class, 'async_style_tag' ), 20, 2 );
 			// style_loader_tag only fires for wp_enqueue_style()'d sheets.

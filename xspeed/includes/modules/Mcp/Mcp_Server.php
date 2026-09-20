@@ -261,7 +261,7 @@ final class Mcp_Server {
 	/**
 	 * Where this site actually serves its protected-resource metadata.
 	 *
-	 * Prefers the canonical /.well-known/ URL, but many hosts own that prefix
+	 * Prefers the canonical /.well-known/…/xspeed/mcp URL, but many hosts own that prefix
 	 * for ACME/Let's Encrypt and answer it before WordPress runs — the client
 	 * then follows a pointer to a 404 (or a redirect to the homepage) and the
 	 * OAuth flow dead-ends. RFC 9728 allows a single resource_metadata value,
@@ -269,7 +269,22 @@ final class Mcp_Server {
 	 * fallback, which no ACME tooling claims.
 	 */
 	private static function metadata_url(): string {
-		$pretty = home_url( '/.well-known/oauth-protected-resource' );
+		// RFC 9728 §3.1: a resource whose identifier carries a path is
+		// discovered at the path-suffixed form. Always this one, never the
+		// root form — even on a site where root is still ours to serve. The
+		// challenge is what steers every re-discovery, so pointing it at the
+		// canonical identity is what eventually moves clients onto it; and
+		// its value must not depend on whether some other plugin happens to
+		// be installed, or a client that cached the header would find the
+		// URL under it change meaning. Root exists for clients that never
+		// read this header at all. (#266)
+		//
+		// Built off untrailingslashit() because get_home_url() concatenates
+		// the `home` option verbatim: with a trailing slash stored there,
+		// home_url( '/.well-known/…' ) returns a doubled slash and the URL
+		// 404s.
+		$pretty = untrailingslashit( home_url( '/' ) )
+			. '/.well-known/oauth-protected-resource/' . Mcp_Pairing::SITE_ENDPOINT_PATH;
 
 		/**
 		 * Filter the advertised protected-resource metadata URL.
@@ -284,7 +299,7 @@ final class Mcp_Server {
 		// Rewrites absent (plain permalinks, or a flush that never landed)
 		// means the pretty URL cannot resolve at all — use the fallback.
 		if ( ! McpModule::wellknown_rewrites_active() ) {
-			return rest_url( McpModule::NS . '/mcp/.well-known/oauth-protected-resource' );
+			return Mcp_Pairing::absolute( rest_url( McpModule::NS . '/mcp/.well-known/oauth-protected-resource' ) );
 		}
 
 		return $pretty;

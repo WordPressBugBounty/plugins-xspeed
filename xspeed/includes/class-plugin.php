@@ -269,6 +269,7 @@ class Plugin {
 		// maintenance) into one sidebar sub-item (FBS-83633).
 		Module_Registry::register( new \XSpeed\Modules\CacheCoverage\CacheCoverageModule() );
 		Module_Registry::register( new \XSpeed\Modules\Fonts\FontsModule() );
+		Module_Registry::register( new \XSpeed\Modules\RenderSkip\RenderSkipModule() );
 		Module_Registry::register( new \XSpeed\Modules\ResourceHints\ResourceHintsModule() );
 		// AI Privacy (GDPR off-switch) ships in Free even though every AI
 		// *feature* is Pro — privacy is a right, not a paid tier. FEATURES.md
