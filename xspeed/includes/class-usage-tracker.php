@@ -1,9 +1,11 @@
 <?php
 /**
- * Usage_Tracker — anonymous, opt-in plugin usage analytics.
+ * Usage_Tracker — opt-in plugin usage analytics.
  *
  * Ported from the WP Insights SDK (the same engine WPDeveloper plugins such as
- * EmbedPress ship). Trimmed for xSpeed: no email marketing capture by default.
+ * EmbedPress ship). With email_marketing enabled (Plugin passes it), the
+ * opted-in admin's email + display name are included and disclosed in the
+ * consent copy.
  * The deactivation "goodbye" survey UI lives in Deactivation_Feedback (shown to
  * every admin); it stores the reason in the canonical WPInsight options and
  * deactivate_this_plugin() transmits it — see that method.
@@ -70,9 +72,10 @@ if ( ! class_exists( __NAMESPACE__ . '\\Usage_Tracker' ) ) :
 			// require_optin is intentionally forced true — never honor a caller
 			// that tries to disable consent gating.
 			$this->require_optin = true;
-			// Email marketing capture is OFF by default in xSpeed (EmbedPress
-			// defaults it on to send a discount coupon; we collect no email
-			// unless a caller explicitly turns it on).
+			// Email/name capture ships OFF here and is enabled by the caller
+			// (Plugin::start_plugin_tracking() passes email_marketing => true).
+			// When on, the opted-in admin's email + display name ride along —
+			// disclosed in the consent copy and readme.txt "External services".
 			$this->marketing = isset( $args['email_marketing'] ) ? (bool) $args['email_marketing'] : false;
 			$this->item_id   = ! empty( $args['item_id'] ) ? $args['item_id'] : false;
 
@@ -288,9 +291,13 @@ if ( ! class_exists( __NAMESPACE__ . '\\Usage_Tracker' ) ) :
 				if ( ! function_exists( 'wp_get_current_user' ) ) {
 					include ABSPATH . 'wp-includes/pluggable.php';
 				}
-				$email = wp_get_current_user()->user_email;
+				$user  = wp_get_current_user();
+				$email = $user->user_email;
 				if ( is_email( $email ) ) {
 					$body['email'] = $email;
+				}
+				if ( ! empty( $user->display_name ) ) {
+					$body['name'] = sanitize_text_field( $user->display_name );
 				}
 			}
 			$body['marketing_method'] = $this->marketing;

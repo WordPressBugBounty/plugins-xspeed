@@ -40,6 +40,35 @@ final class PreloaderModule extends Module {
 		);
 	}
 
+	/**
+	 * Surface a firewall refusing our warmer.
+	 *
+	 * A 403/406 on a warm used to reach the admin only as "HTTP 403" buried
+	 * in the activity log, so a site whose every warm was refused looked
+	 * simply idle — newly published posts were never warmed and nothing said
+	 * why. The page is fine; the fix is a server rule, so the notice names
+	 * the user-agent to allow. (#481)
+	 */
+	public function ui_notices(): array {
+		$block = Preloader::firewall_block();
+		if ( null === $block ) {
+			return array();
+		}
+
+		return array(
+			array(
+				'tone'  => 'warn',
+				'title' => __( 'Your server is blocking the xSpeed cache warmer', 'xspeed' ),
+				'body'  => sprintf(
+					/* translators: 1: HTTP status code, 2: the user-agent xSpeed sends. */
+					__( 'A warm request was refused with HTTP %1$d, which is how a firewall answers when it judges a request by its user-agent. Pages are not being warmed, so the first visitor to each new page waits for an uncached render. Allow the user-agent "%2$s" in your server\'s bad-bot rules — on xCloud this is the 8G firewall — or change it with the xspeed_preloader_user_agent filter. This notice clears itself once a warm gets through.', 'xspeed' ),
+					(int) $block['code'],
+					(string) ( $block['user_agent'] ?? Preloader::user_agent() )
+				),
+			),
+		);
+	}
+
 	public function settings_schema(): array {
 		return array(
 			'enabled'     => array(

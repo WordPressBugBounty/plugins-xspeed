@@ -7676,7 +7676,10 @@ class Cache {
 		$home = home_url( '/' );
 		$host = (string) wp_parse_url( $home, PHP_URL_HOST );
 		if ( '' === $host ) {
-			$result = array( 'active' => false, 'reason' => 'home_url has no host' );
+			// Environmental failure, not evidence the server config is wrong —
+			// mark it inconclusive so Health surfaces say "could not verify"
+			// instead of demanding a snippet paste. (#480)
+			$result = array( 'active' => false, 'inconclusive' => true, 'reason' => 'home_url has no host' );
 			set_transient( 'xspeed_rewrite_probe', $result, MINUTE_IN_SECONDS );
 			return $result;
 		}
@@ -7695,7 +7698,10 @@ class Cache {
 			wp_mkdir_p( $probe_dir );
 		}
 		if ( ! is_dir( $probe_dir ) ) {
-			$result = array( 'active' => false, 'reason' => 'cannot create probe dir' );
+			// A cache-dir permissions problem — the probe never ran, so this
+			// says nothing about the nginx config. Inconclusive, not
+			// "required". (#480)
+			$result = array( 'active' => false, 'inconclusive' => true, 'reason' => 'cannot create probe dir' );
 			set_transient( 'xspeed_rewrite_probe', $result, MINUTE_IN_SECONDS );
 			return $result;
 		}

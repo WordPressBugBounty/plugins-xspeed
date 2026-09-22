@@ -510,6 +510,10 @@ final class Minify_Filters {
 		if ( self::skip_in_non_frontend_context() ) {
 			return $tag;
 		}
+		// The author asked every optimizer to leave this tag alone.
+		if ( self::carries_optimizer_opt_out( $tag ) ) {
+			return $tag;
+		}
 		if ( '' === (string) $src ) {
 			return $tag;
 		}
@@ -566,7 +570,11 @@ final class Minify_Filters {
 		if ( self::skip_in_non_frontend_context() ) {
 			return $tag;
 		}
-		if ( self::is_excluded_script( (string) $handle, (string) $src ) ) {
+		// The author asked every optimizer to leave this tag alone.
+		if ( self::carries_optimizer_opt_out( $tag ) ) {
+			return $tag;
+		}
+		if ( self::is_excluded_script( (string) $handle, (string) $src, true ) ) {
 			return $tag;
 		}
 		// The tag itself asked to be left alone. (#456)
@@ -648,6 +656,102 @@ final class Minify_Filters {
 	 * own delayed-inline marker is already handled by the bootstrap.
 	 * Rewriting any of these breaks the page or its metadata.
 	 */
+	/**
+	 * Attributes by which a script's own author tells optimizers to stand down.
+	 *
+	 * The report behind #275 also asked us to leave a script alone when its
+	 * author "already marked it to load late". Read literally that means
+	 * `defer`/`async`, and that reading is wrong twice over: `defer` is
+	 * stamped onto every enqueued script by our OWN Defer JS filter at
+	 * priority 20, before Delay JS sees it at 30 — so honouring it would
+	 * switch Delay JS off entirely on sites running both — and `async` is the
+	 * shape of gtag, GTM and every pixel loader, which is precisely the
+	 * payload Delay JS exists to postpone. `defer`/`async` say WHEN TO FETCH,
+	 * not "leave me alone".
+	 *
+	 * These attributes do say it. Each is an established opt-out honoured by
+	 * another optimizer — WP Rocket, LiteSpeed, Autoptimize, NitroPack,
+	 * Jetpack Boost — so an author who prints one has already declared that
+	 * no optimizer should touch this tag. Consent banners are the main
+	 * beneficiary, but the rule is general and needs neither a handle nor a
+	 * recognised URL, so it works identically on both passes.
+	 *
+	 * Two deliberate omissions:
+	 *
+	 *   - `data-cfasync="false"` is a Cloudflare Rocket Loader opt-out, and
+	 *     ad stacks (Mediavine, Ezoic, AdThrive) print it on exactly the
+	 *     heavy loaders a site turns Delay JS on for. Honouring it would
+	 *     un-delay the ads.
+	 *   - `data-no-minify` is about minification, not execution timing.
+	 */
+	private const OPT_OUT_ATTRIBUTES = array(
+		'nowprocket',               // WP Rocket
+		'data-nowprocket',          // WP Rocket
+		'data-no-optimize',         // LiteSpeed
+		'data-noptimize',           // Autoptimize
+		'data-no-defer',            // used by several optimizers
+		'nitro-exclude',            // NitroPack
+		'data-jetpack-boost',       // Jetpack Boost (value "ignore")
+		'data-wpmeteor-nooptimize', // WP Meteor
+		'data-xs-nodelay',          // ours
+	);
+
+	/**
+	 * Does this tag carry an explicit "optimizers keep out" attribute?
+	 *
+	 * Same `(?<![-\w])` lookbehind the rest of this file uses, so
+	 * `data-nowprocket` does not also satisfy a bare `nowprocket` lookup, and
+	 * a trailing `\b` so `data-no-defer` does not match `data-no-deferral`.
+	 * Bare and valued forms both count: an author writes `nowprocket`,
+	 * `nowprocket=""` and `data-noptimize="1"` interchangeably.
+	 *
+	 * @param string $tag Full opening tag.
+	 */
+	private static function carries_optimizer_opt_out( string $tag ): bool {
+		// Read ATTRIBUTE NAMES, not the tag as a string. A substring scan
+		// matched `src="https://cdn/nowprocket/loader.js"`, `?nowprocket=1`,
+		// `class="nowprocket"` and any inline body that merely mentioned one
+		// of these names -- each silently un-delaying a script that should
+		// have been delayed.
+		//
+		// EVERY opening tag is checked, not just the first. On the enqueue
+		// path WP_Scripts::do_item() hands us translations + before-inline +
+		// the real tag + after-inline concatenated, so the first `<script`
+		// is often an inline block and the author's opt-out sits on the
+		// external tag behind it. Reading only the first tag missed it and
+		// delayed the script anyway -- the wrong direction: a consent banner
+		// its author told optimizers to leave alone would not appear.
+		//
+		// The tag regex is quote-aware because `[^>]*>` stops at a `>` inside
+		// a quoted value, and consent managers routinely ship JSON in a
+		// data-* attribute.
+		if ( ! preg_match_all( '#<script\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>#is', $tag, $tags ) ) {
+			return false;
+		}
+
+		foreach ( $tags[0] as $open ) {
+			// Walk name/value pairs. The name pattern is deliberately
+			// permissive: a name we cannot recognise (Alpine's `@load`, say)
+			// must still consume ITS OWN VALUE, or the value gets scanned as
+			// if it were more attribute names.
+			if ( ! preg_match_all(
+				'#\s+([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*))?#s',
+				substr( $open, 7, -1 ),
+				$found
+			) ) {
+				continue;
+			}
+
+			foreach ( $found[1] as $name ) {
+				if ( in_array( strtolower( $name ), self::OPT_OUT_ATTRIBUTES, true ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
 	private const NON_EXECUTABLE_TYPES = array(
 		'application/ld+json',
 		'application/json',
@@ -783,8 +887,19 @@ final class Minify_Filters {
 					return $tag;
 				}
 
-				// The tag itself asked to be left alone. (#456)
-				if ( self::tag_opts_out( $tag ) ) {
+				// The author asked every optimizer to leave this tag alone.
+				// Checked before src/type: it needs neither, so an
+				// un-enqueued banner printed straight into wp_head is
+				// covered the same as an enqueued one.
+				//
+				// Both checks, because they disagree on purpose and either
+				// saying "leave it" is the safe answer. tag_opts_out() is
+				// dev's (#456) and also drives the late re-check at #469;
+				// carries_optimizer_opt_out() reads attribute NAMES across
+				// every opening tag, so it is not fooled by a marker sitting
+				// inside a quoted value or an inline body, and it knows the
+				// other optimizers' markers.
+				if ( self::tag_opts_out( $tag ) || self::carries_optimizer_opt_out( $tag ) ) {
 					return $tag;
 				}
 
@@ -812,35 +927,46 @@ final class Minify_Filters {
 					}
 				}
 
-				// Recover the handle from the tag's id before deciding.
+				// An ENQUEUED script reaches this sweep too: the enqueue-path
+				// filter leaves an EXCLUDED tag unmarked, and unmarked is all
+				// this pass can see. Judging it on its URL alone re-delays the
+				// very script the exclusion protected — and a handle is not
+				// generally in its own URL, which is the shape Complianz
+				// (`cmplz-cookiebanner`), NotificationX (`notificationx-public`)
+				// and jQuery (`jquery-core`) all have. A site with jquery-core
+				// excluded still shipped jQuery delayed, and every inline
+				// `jQuery(...)` on the page threw "jQuery is not defined".
+				// WordPress prints `id="<handle>-js"` on every enqueued
+				// script, so the handle is right there in the tag. (#275)
 				//
-				// This pass used to pass '' as the handle, on the reasoning
-				// that a tag reaching the buffer was never enqueued and so has
-				// none. That holds for the third-party snippets this pass
-				// exists for — but NOT for enqueued scripts, which also travel
-				// through here, and which WordPress prints with
-				// `id="<handle>-js"`. Passing '' meant every handle-based
-				// exclusion was silently inert at this layer: the user writes
-				// `jquery-core`, the enqueue path honours it, and then the
-				// buffer pass — which only ever compared URLs — delayed the
-				// very script the list was protecting.
+				// The lookbehind matters: `data-id="cmplz-cookiebanner-js"` is
+				// somebody's own attribute, not the handle, and reading it as
+				// one would shield a script nobody excluded.
 				//
-				// That is how a site with jquery-core AND jquery-migrate
-				// excluded still shipped jQuery delayed while migrate loaded
-				// normally, and every inline `jQuery(...)` on the page threw
-				// "jQuery is not defined". The two behaved differently for no
-				// reason a user could see, which is what made it look like a
-				// matching quirk rather than a whole layer ignoring the list.
+				// Merge note for #374: if a URL->handle map built from
+				// wp_scripts() lands first, resolve through that and keep
+				// this as the FALLBACK rather than replacing it. The map is
+				// keyed on the REGISTERED src, and Minifier::rewrite_script()
+				// rewrites a local script's URL to a hashed /cache/xspeed/min/
+				// path at output time -- which is why remember_original_src()
+				// exists. So with minify_js on, the map misses every minified
+				// script and an excluded one would be re-delayed here. The
+				// `id` survives that rewrite.
 				$tag_handle = '';
-				if ( preg_match( '#\sid\s*=\s*(["\'])(.*?)\1#i', $tag, $id_m ) ) {
+				if ( preg_match( '#(?<![-\w])id\s*=\s*(["\'])(.*?)\1#is', $tag, $id_m ) ) {
 					// WP appends `-js`; anything else is somebody's own id and
 					// is still worth matching literally.
-					$tag_handle = (string) preg_replace( '/-js$/', '', $id_m[2] );
+					$tag_handle = (string) preg_replace( '/-js$/', '', trim( $id_m[2] ) );
 				}
 
-				if ( self::is_excluded_script( $tag_handle, $src ) ) {
+				if ( self::is_excluded_script( $tag_handle, $src, true ) ) {
 					return $tag;
 				}
+				// The handle is passed to the target test as well, so naming a
+				// handle in the delay list behaves the same here as it does on
+				// the enqueue path. The two layers disagreeing on what a target
+				// means is what made this look like a matching quirk rather
+				// than a whole layer ignoring the list.
 				if ( ! self::is_delay_target( $tag_handle, $src ) ) {
 					return $tag;
 				}
@@ -944,6 +1070,15 @@ final class Minify_Filters {
 				// A delayed document.write replays after the document has
 				// closed and replaces the page. Never delay one.
 				if ( false !== stripos( $body, 'document.write' ) ) {
+					return $whole;
+				}
+
+				// Our own inline scripts, by the id they are printed with.
+				// The src passes get this for free from the handle prefix,
+				// but here the handle is '' — and the facade observer's body
+				// names youtube/vimeo, so a user target like "youtube" would
+				// park the very script that makes those embeds cheap.
+				if ( preg_match( '#(?<![-\w])id\s*=\s*(["\'])xspeed-#i', $attrs ) ) {
 					return $whole;
 				}
 
@@ -1671,7 +1806,144 @@ final class Minify_Filters {
 		'wp-api-fetch',
 	);
 
-	private static function is_excluded_script( string $handle, string $src ): bool {
+	/**
+	 * Consent managers are never deferred, and never delayed by a broad
+	 * setting — only an EXPLICIT delay_js_targets entry naming one lifts
+	 * the floor (see is_excluded_script()); the `xspeed_js_exclusion_floor`
+	 * filter remains the code-level override.
+	 *
+	 * A consent banner is drawn by JavaScript, and it is the one thing on
+	 * the page that has to appear before anything else happens. Delay it
+	 * and a visitor who lands, reads and leaves without touching the page
+	 * is never asked — on an opt-in configuration the site then ran
+	 * without ever offering the choice.
+	 *
+	 * The editable list cannot carry this. A stored value replaces the
+	 * schema default outright (Settings_Manager::get()), so widening that
+	 * default would reach fresh installs only, and clearing the textarea
+	 * would drop the protection again. Same floor pattern as
+	 * Server_Rules::COOKIE_FLOOR. Trim or extend it through
+	 * `xspeed_js_exclusion_floor`.
+	 *
+	 * A URL token cannot survive a rewrite of that URL: Minify JS rewrites a
+	 * local script to a hashed /cache/xspeed/min/ path, and Combine JS folds
+	 * it into a bundle. On the enqueue path original_src() gives the pre-minify
+	 * URL back, but the buffer sweep has only the tag -- so with Minify JS on
+	 * and the `id` stripped, a banner shipped un-minified is not recognised.
+	 * Documented in docs/user/minification.md rather than papered over.
+	 *
+	 * Each entry goes through target_matches(): an exact handle OR a
+	 * case-insensitive URL substring. Both passes can match either — the
+	 * enqueue path is handed the handle, and the buffer sweep reads it back
+	 * out of the tag's `id`. A URL token additionally covers a banner that
+	 * was never enqueued at all, which is how Cookiebot prints itself. (#275)
+	 */
+	private const CONSENT_MANAGER_FLOOR = array(
+		// Prefer a plugin-directory or vendor-host URL token over a handle.
+		// A handle is only readable on the enqueue path and, on the buffer
+		// sweep, only if the tag still carries the `id` WordPress prints —
+		// which another plugin can strip. A URL token matches on both passes
+		// and covers a banner that was never enqueued at all. (#275 QA)
+
+		// CookieYes / GDPR Cookie Consent. Handle and plugin directory are
+		// the same string, so this covers both paths.
+		'cookie-law-info',
+		// Complianz: the plugin directory, covering -gdpr and -gdpr-premium.
+		// Was the `cmplz-cookiebanner` handle, which needed the `id` tag.
+		'complianz',
+		// NotificationX runs its GDPR cookie notice off the same handle as
+		// every other notification, so excluding it excludes them all. That
+		// is what the plugin's own team asked for. Directory token covers
+		// the Pro build too; was the `notificationx-public` handle.
+		'notificationx',
+		// Cookiebot prints its loader straight into wp_head, so only the
+		// buffer sweep ever sees it. This is the token Cookiebot's own WP
+		// Rocket and LiteSpeed integrations exclude.
+		'consent.cookiebot.com',
+		// Cookie Notice — named in the original report and one of the most
+		// installed consent plugins. Its banner is enqueued from
+		// /plugins/cookie-notice/js/front.min.js.
+		'cookie-notice',
+		// Cookie Notice in Cookie Compliance mode prints a different loader,
+		// whose host is overridable via CN_APP_WIDGET_URL — so key on the
+		// filename, not the CDN host.
+		'hu-banner',
+		// Moove GDPR Cookie Compliance. Directory token: its handle
+		// (`moove_gdpr_frontend`) does not appear in its own URL.
+		'gdpr-cookie-compliance',
+		// Termly's resource blocker, which also covers the legacy embed.
+		'app.termly.io',
+		// Usercentrics, reached three ways: Cookiebot's UC mode
+		// (web.cmp.usercentrics.eu), Termageddon (app.usercentrics.eu) and
+		// the privacy proxy.
+		'usercentrics.eu',
+		// Iubenda: both the consent solution and the consent database SDK.
+		'cdn.iubenda.com',
+		// OneTrust. Pasted snippet rather than a wordpress.org plugin, so
+		// this is the SDK host rather than a verified plugin path.
+		'cdn.cookielaw.org',
+		// Borlabs is commercial and renames its files per release; the
+		// vendor's own guidance is that this string stays in every path.
+		'borlabs-cookie',
+		// Real Cookie Banner, free and pro. Its anti-adblock mode serves the
+		// banner from an anonymised path that no URL token can match — use
+		// `xspeed_js_exclusion_floor` to add the handle on such a site.
+		'real-cookie-banner',
+		// SureCookie.
+		'surecookie',
+	);
+
+	/**
+	 * Per-request memo for exclusion_floor(). Null = not resolved.
+	 *
+	 * @var string[]|null
+	 */
+	private static $exclusion_floor = null;
+
+	/**
+	 * The built-in exclusion floor, after the site has had its say.
+	 *
+	 * @return string[]
+	 */
+	private static function exclusion_floor(): array {
+		if ( null === self::$exclusion_floor ) {
+			/**
+			 * Scripts that are never deferred or delayed, whatever the
+			 * user's exclusion list holds. Each entry is an exact script
+			 * handle or a case-insensitive URL substring.
+			 *
+			 * Return the array minus a token to let Delay JS postpone that
+			 * consent manager on purpose; add one to protect another script.
+			 *
+			 * @param string[] $floor Built-in floor.
+			 */
+			$floor                 = apply_filters( 'xspeed_js_exclusion_floor', self::CONSENT_MANAGER_FLOOR );
+			self::$exclusion_floor = array_values(
+				array_filter( array_map( 'strval', (array) $floor ), static fn( $t ) => '' !== $t )
+			);
+		}
+		return self::$exclusion_floor;
+	}
+
+	/**
+	 * @param string $handle           Script handle ('' on the buffer sweep
+	 *                                 when no id survived).
+	 * @param string $src              Script URL.
+	 * @param bool   $named_lifts_floor Delay paths only: a handle/URL the user
+	 *                                 EXPLICITLY typed into delay_js_targets
+	 *                                 passes the consent floor. Typing a
+	 *                                 consent manager's name into an
+	 *                                 allow-list is the site owner taking the
+	 *                                 consent-timing decision back — GDPR is
+	 *                                 theirs to weigh, not ours; the floor
+	 *                                 only exists so Delay JS can't hide a
+	 *                                 banner NOBODY pointed at. Their own
+	 *                                 exclusion list, ALWAYS_EXCLUDED_HANDLES
+	 *                                 and our beacons still win: on a
+	 *                                 conflict between the user's two lists,
+	 *                                 protection beats postponement.
+	 */
+	private static function is_excluded_script( string $handle, string $src, bool $named_lifts_floor = false ): bool {
 		if ( in_array( $handle, self::ALWAYS_EXCLUDED_HANDLES, true ) ) {
 			return true;
 		}
@@ -1685,6 +1957,19 @@ final class Minify_Filters {
 		// beacon added later cannot re-open the hole.
 		if ( 0 === strpos( $handle, 'xspeed-' ) ) {
 			return true;
+		}
+		// Ahead of the user list, and ahead of the empty-list early return
+		// below: an install that saved the Minify panel before this shipped
+		// has a stored list that knows nothing about consent managers, and
+		// one that cleared the textarea has no list at all. Neither may
+		// hide the banner. (#275)
+		foreach ( self::exclusion_floor() as $needle ) {
+			if ( self::target_matches( $needle, $handle, $src ) ) {
+				if ( $named_lifts_floor && self::is_user_named_target( $handle, $src ) ) {
+					break;
+				}
+				return true;
+			}
 		}
 		$opts     = self::opts();
 		$excluded = is_array( $opts['defer_js_excluded'] ?? null ) ? $opts['defer_js_excluded'] : array();
@@ -1892,6 +2177,7 @@ final class Minify_Filters {
 		self::$uploads_base            = null;
 		self::$delay_bootstrap_printed = false;
 		self::$js_measured_layout      = null;
+		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
 		self::$pristine_tag            = array();
 	}

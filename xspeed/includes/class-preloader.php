@@ -36,7 +36,22 @@ final class Preloader {
 	public const STATE_KEY      = 'xspeed_preloader_state';
 	public const STATE_TTL      = 86400; // 24h — long enough for slow crawls.
 	public const CRON_HOOK      = 'xspeed_preloader_tick';
-	public const USER_AGENT     = 'xSpeed-Preloader/1.0 (+cache warmer; admin-initiated)';
+	/**
+	 * User-agent for every request the preloader makes.
+	 *
+	 * Deliberately contains no substring from the 7G/8G bad-bot lists. The
+	 * previous value, "xSpeed-Preloader/1.0", matched the `loader` token in
+	 * the alphabetical slice `(linkscan|linkwalker|loader|lwp-download|...)`
+	 * — a match on "Pre*loader*" — so nginx ports of 8G answered every warm
+	 * with 403 and newly published posts were never warmed. Upstream 8G
+	 * v1.5 has since dropped `loader`, but forks and vendored copies (xCloud
+	 * among them) still ship the older slice, so the name has to stay clear
+	 * of it. "Warmer" matches nothing in either list. (#481)
+	 *
+	 * Read through user_agent() rather than using this constant directly, so
+	 * the `xspeed_preloader_user_agent` filter applies.
+	 */
+	public const USER_AGENT     = 'xSpeed-Warmer/1.0 (+cache warmer; admin-initiated)';
 	public const REQUEST_TIMEOUT = 8;
 
 	/**
@@ -56,6 +71,100 @@ final class Preloader {
 	 * raise it via `xspeed_preloader_remote_dimension_limit`.
 	 */
 	private const REMOTE_DIMENSION_LIMIT = 20;
+
+	/**
+	 * The user-agent every preloader request sends.
+	 *
+	 * Filterable because the blocking rule lives on the server, not here: a
+	 * host with its own bad-bot list can clear a warm without patching the
+	 * plugin or waiting for a release. An empty filter return is ignored —
+	 * sending no UA gets a request blocked at least as often. (#481)
+	 */
+	public static function user_agent(): string {
+		/**
+		 * Filter the preloader's user-agent string.
+		 *
+		 * @param string $user_agent Default self::USER_AGENT.
+		 */
+		$ua = apply_filters( 'xspeed_preloader_user_agent', self::USER_AGENT );
+
+		return ( is_string( $ua ) && '' !== trim( $ua ) ) ? trim( $ua ) : self::USER_AGENT;
+	}
+
+	/**
+	 * Is this status code the signature of a firewall refusing our warmer?
+	 *
+	 * 403 and 406 are what bad-bot rules (7G/8G, mod_security, Wordfence)
+	 * answer with. We only ever warm our OWN origin, and a page a visitor can
+	 * load must be loadable by us too — so these codes mean the request was
+	 * judged by its user-agent, not that the page is missing or broken. (#481)
+	 */
+	private static function is_firewall_block( int $code ): bool {
+		return in_array( $code, array( 403, 406 ), true );
+	}
+
+	/**
+	 * Explain a warm failure in terms the admin can act on.
+	 *
+	 * A bare "HTTP 403" sent people hunting a broken page; the page is fine,
+	 * and the fix is a server rule, so the message has to name the cause and
+	 * the exact UA to allow. (#481)
+	 */
+	private static function failure_detail( int $code ): string {
+		if ( ! self::is_firewall_block( $code ) ) {
+			return sprintf( 'HTTP %d', $code );
+		}
+
+		return sprintf(
+			'HTTP %d — your server\'s firewall is blocking the xSpeed cache warmer by user-agent, so this page was not warmed. Allow the user-agent "%s" (on xCloud this is the 8G firewall\'s bad-bot rule), or change it with the xspeed_preloader_user_agent filter.',
+			$code,
+			self::user_agent()
+		);
+	}
+
+	/** Option holding the last firewall-shaped warm refusal. */
+	public const FIREWALL_BLOCK_OPTION = 'xspeed_preloader_firewall_block';
+
+	/**
+	 * Record that the origin refused a warm by user-agent, for ui_notices().
+	 *
+	 * An option rather than a transient: the condition is a server rule that
+	 * persists until someone changes it, and a notice that expired on its own
+	 * would let a site go back to never warming, silently. Cleared by
+	 * clear_firewall_block() on the first warm that succeeds. (#481)
+	 */
+	private static function remember_firewall_block( string $url, int $code ): void {
+		if ( ! function_exists( 'update_option' ) ) {
+			return;
+		}
+		update_option(
+			self::FIREWALL_BLOCK_OPTION,
+			array(
+				'url'        => $url,
+				'code'       => $code,
+				'user_agent' => self::user_agent(),
+				'ts'         => time(),
+			),
+			false
+		);
+	}
+
+	/** Forget the firewall block once a warm gets through. */
+	public static function clear_firewall_block(): void {
+		if ( function_exists( 'delete_option' ) && self::firewall_block() ) {
+			delete_option( self::FIREWALL_BLOCK_OPTION );
+		}
+	}
+
+	/** The last firewall-shaped refusal, or null when there isn't one. */
+	public static function firewall_block(): ?array {
+		if ( ! function_exists( 'get_option' ) ) {
+			return null;
+		}
+		$block = get_option( self::FIREWALL_BLOCK_OPTION, null );
+
+		return ( is_array( $block ) && ! empty( $block['code'] ) ) ? $block : null;
+	}
 
 	/**
 	 * How many new remote images one warmed page may resolve.
@@ -281,7 +390,7 @@ final class Preloader {
 			array(
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
-				'user-agent' => self::USER_AGENT,
+				'user-agent' => self::user_agent(),
 				'blocking'   => true,
 			)
 		);
@@ -297,11 +406,17 @@ final class Preloader {
 		if ( $code >= 400 ) {
 			Activity_Log::record(
 				'preloader_warm_failed',
-				sprintf( 'Warm %s failed (%s): HTTP %d', $cause, $url, $code ),
+				sprintf( 'Warm %s failed (%s): %s', $cause, $url, self::failure_detail( $code ) ),
 				Activity_Log::WARN
 			);
+			if ( self::is_firewall_block( $code ) ) {
+				self::remember_firewall_block( $url, $code );
+			}
 			return false;
 		}
+		// A warm that got through proves the firewall is no longer refusing us,
+		// so the notice must go — otherwise it outlives the problem. (#481)
+		self::clear_firewall_block();
 		Activity_Log::record(
 			'preloader_warmed_one',
 			sprintf( 'Warmed %s (%s)', $url, $cause ),
@@ -316,7 +431,7 @@ final class Preloader {
 			array(
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
-				'user-agent' => self::USER_AGENT,
+				'user-agent' => self::user_agent(),
 				'headers'    => array(
 					'Accept' => 'text/html,application/xhtml+xml',
 				),
@@ -338,13 +453,17 @@ final class Preloader {
 		if ( $code >= 400 ) {
 			$state['errors'][] = array(
 				'url'   => $url,
-				'error' => sprintf( 'HTTP %d', $code ),
+				'error' => self::failure_detail( $code ),
 				'ts'    => time(),
 			);
 			$state['errors'] = array_slice( $state['errors'], -20 );
+			if ( self::is_firewall_block( $code ) ) {
+				self::remember_firewall_block( $url, $code );
+			}
 			return;
 		}
 
+		self::clear_firewall_block();
 		self::warm_remote_dimensions( (string) wp_remote_retrieve_body( $response ) );
 	}
 
@@ -607,7 +726,7 @@ final class Preloader {
 			array(
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
-				'user-agent' => self::USER_AGENT,
+				'user-agent' => self::user_agent(),
 			)
 		);
 		if ( is_wp_error( $res ) ) {

@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.4\n"
+"Project-Id-Version: xSpeed Cache 1.3.5\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-20T11:23:49+00:00\n"
+"POT-Creation-Date: 2026-09-22T10:29:06+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:8726
+#: includes/class-cache.php:8732
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:153
 #: includes/class-admin.php:243
-#: includes/class-cache.php:8740
+#: includes/class-cache.php:8746
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -252,61 +252,61 @@ msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:8218
+#: includes/class-cache.php:8224
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:8225
+#: includes/class-cache.php:8231
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:8280
+#: includes/class-cache.php:8286
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:8287
+#: includes/class-cache.php:8293
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:8290
+#: includes/class-cache.php:8296
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:8291
+#: includes/class-cache.php:8297
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:8292
+#: includes/class-cache.php:8298
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:8293
+#: includes/class-cache.php:8299
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:8294
+#: includes/class-cache.php:8300
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:8295
+#: includes/class-cache.php:8301
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:8296
+#: includes/class-cache.php:8302
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:8298
+#: includes/class-cache.php:8304
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:8809
+#: includes/class-cache.php:8815
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:675
 msgid "Unauthorized."
@@ -730,31 +730,31 @@ msgid "The page got measurably slower: median render time %1$dms before, %2$dms 
 msgstr ""
 
 #. translators: 1: number of URLs, 2: the sitemap failure detail.
-#: includes/class-preloader.php:151
+#: includes/class-preloader.php:260
 #, php-format
 msgid "Preloader queued %1$d URLs from the site content — %2$s"
 msgstr ""
 
 #. translators: %s: the sitemap failure detail.
-#: includes/class-preloader.php:159
+#: includes/class-preloader.php:268
 #, php-format
 msgid "Preloader could not start — %s"
 msgstr ""
 
 #. translators: 1: number of URLs, 2: plural suffix.
-#: includes/class-preloader.php:166
+#: includes/class-preloader.php:275
 #, php-format
 msgid "Preloader queued %1$d URL%2$s for warming."
 msgstr ""
 
 #. translators: 1: sitemap URL, 2: error detail.
-#: includes/class-preloader.php:622
+#: includes/class-preloader.php:741
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — %2$s"
 msgstr ""
 
 #. translators: 1: sitemap URL, 2: HTTP status code.
-#: includes/class-preloader.php:635
+#: includes/class-preloader.php:754
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — the server returned HTTP %2$d."
 msgstr ""
@@ -1085,6 +1085,7 @@ msgstr ""
 
 #: includes/class-video-facade.php:153
 #: includes/class-video-facade.php:199
+#: includes/class-video-facade.php:303
 msgid "Play video"
 msgstr ""
 
@@ -1633,72 +1634,100 @@ msgstr ""
 msgid "xSpeed static-rewrite cache"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:81
+#: includes/modules/Health/HealthModule.php:125
 msgid "xSpeed static-rewrite cache is active"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:84
+#: includes/modules/Health/HealthModule.php:128
 #: assets/admin.js
 msgid "Performance"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:87
+#: includes/modules/Health/HealthModule.php:131
 msgid "Cache hits bypass PHP for ~5-15ms TTFB."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:93
+#: includes/modules/Health/HealthModule.php:137
 msgid "xSpeed cache is disabled"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:95
+#: includes/modules/Health/HealthModule.php:139
 msgid "Enable the page cache in the xSpeed dashboard to start serving cached HTML for non-logged-in visitors."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:108
+#: includes/modules/Health/HealthModule.php:152
 msgid "xSpeed is serving cache hits through PHP"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:110
+#: includes/modules/Health/HealthModule.php:154
 msgid "Caching is working — hits are served by the xSpeed drop-in and tagged X-XSpeed-Cache: HIT (php). The faster .htaccess fast path is off because Apache's mod_headers module is not loaded, without which a static hit could not be tagged or counted. Enable mod_headers (a2enmod headers on Debian/Ubuntu, then restart Apache) to shave roughly 20-30ms off each cache hit."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:112
+#: includes/modules/Health/HealthModule.php:156
+#: includes/modules/Health/HealthModule.php:193
 msgid "xSpeed static rewrite is off (Separate Mobile Cache)"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:114
+#: includes/modules/Health/HealthModule.php:158
+#: includes/modules/Health/HealthModule.php:195
 msgid "Separate Mobile Cache is on, so cache hits are served by the PHP drop-in to keep per-device HTML correct. Turn Separate Mobile Cache off if your site serves the same HTML to every device to regain the faster static path."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:116
+#: includes/modules/Health/HealthModule.php:160
 msgid "xSpeed .htaccess rewrite block is missing"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:118
+#: includes/modules/Health/HealthModule.php:162
 msgid "Without the static-rewrite block, cache hits go through the PHP drop-in (~85ms TTFB) instead of the web server (~5-15ms). Toggle Enable Cache off and on in xSpeed to reinstall the block."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:125
+#: includes/modules/Health/HealthModule.php:187
+msgid "xSpeed nginx static rewrite is active"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:189
+msgid "nginx is serving cache hits directly — PHP is bypassed (~5-15ms TTFB). No action needed."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:199
+msgid "xSpeed is serving cache hits through PHP (pages contain nonces)"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:201
+msgid "Your nginx config is correct, but pages are not reaching the static cache, so hits are served by PHP. They contain nonces, and a static file is served with no PHP — nothing could ever refresh them, so every anonymous form on the page would break once they expire. Keeping these pages on PHP is deliberate."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:210
+msgid "xSpeed could not verify the nginx static rewrite"
+msgstr ""
+
+#. translators: %s: the reason the probe could not complete.
+#: includes/modules/Health/HealthModule.php:215
+#, php-format
+msgid "The check itself did not complete, so this is not evidence that your config is wrong — if you have already pasted the snippet it may well be working. Reason: %s"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:223
 msgid "xSpeed nginx server config required"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:127
+#: includes/modules/Health/HealthModule.php:225
 msgid "xSpeed can't write nginx config from PHP. Paste this snippet into your site's server { } block, then reload nginx so cache hits serve without booting PHP:"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:136
+#: includes/modules/Health/HealthModule.php:234
 msgid "xSpeed PHP drop-in cache active"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:138
+#: includes/modules/Health/HealthModule.php:236
 msgid "Static-rewrite caching needs Apache, LiteSpeed, or nginx. The PHP drop-in is still serving cache hits at ~85ms TTFB on this server."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:144
+#: includes/modules/Health/HealthModule.php:242
 msgid "Health"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:146
+#: includes/modules/Health/HealthModule.php:244
 msgid "Diagnostics, hit ratio, and recent cache activity."
 msgstr ""
 
@@ -2312,7 +2341,7 @@ msgid "Delay JavaScript Until Interaction"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:79
-msgid "Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on."
+msgid "Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are never delayed, so the visitor is still asked before anything else runs."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:84
@@ -2336,7 +2365,7 @@ msgid "Defer / Delay Exclusions"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:98
-msgid "Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). One per line."
+msgid "Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are always skipped and do not need listing here. One per line."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:112
@@ -2495,55 +2524,65 @@ msgstr ""
 msgid "Crawl the sitemap to warm cache so visitors never hit a cold MISS."
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:48
-msgid "Enable Preloader"
-msgstr ""
-
-#: includes/modules/Preloader/PreloaderModule.php:49
-msgid "When on, xSpeed crawls the sitemap on the schedule below and warms the page cache."
-msgstr ""
-
 #: includes/modules/Preloader/PreloaderModule.php:61
-msgid "Schedule"
+msgid "Your server is blocking the xSpeed cache warmer"
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:62
-msgid "How often to start a fresh crawl. Manual means you trigger it from the dashboard."
-msgstr ""
-
-#: includes/modules/Preloader/PreloaderModule.php:70
-msgid "Batch Size"
-msgstr ""
-
-#: includes/modules/Preloader/PreloaderModule.php:71
-msgid "URLs warmed per cron tick. Higher = faster crawl, more load on the origin."
+#. translators: 1: HTTP status code, 2: the user-agent xSpeed sends.
+#: includes/modules/Preloader/PreloaderModule.php:64
+#, php-format
+msgid "A warm request was refused with HTTP %1$d, which is how a firewall answers when it judges a request by its user-agent. Pages are not being warmed, so the first visitor to each new page waits for an uncached render. Allow the user-agent \"%2$s\" in your server's bad-bot rules — on xCloud this is the 8G firewall — or change it with the xspeed_preloader_user_agent filter. This notice clears itself once a warm gets through."
 msgstr ""
 
 #: includes/modules/Preloader/PreloaderModule.php:77
-msgid "Sitemap URL (optional)"
+msgid "Enable Preloader"
 msgstr ""
 
 #: includes/modules/Preloader/PreloaderModule.php:78
-msgid "Override the auto-detected WordPress core sitemap (/wp-sitemap.xml). Leave blank for default."
+msgid "When on, xSpeed crawls the sitemap on the schedule below and warms the page cache."
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:84
-msgid "Warm new content immediately"
-msgstr ""
-
-#: includes/modules/Preloader/PreloaderModule.php:85
-msgid "When a post or page is published, fetch it once so the first visitor sees a cache HIT, not a cold MISS."
+#: includes/modules/Preloader/PreloaderModule.php:90
+msgid "Schedule"
 msgstr ""
 
 #: includes/modules/Preloader/PreloaderModule.php:91
+msgid "How often to start a fresh crawl. Manual means you trigger it from the dashboard."
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:99
+msgid "Batch Size"
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:100
+msgid "URLs warmed per cron tick. Higher = faster crawl, more load on the origin."
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:106
+msgid "Sitemap URL (optional)"
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:107
+msgid "Override the auto-detected WordPress core sitemap (/wp-sitemap.xml). Leave blank for default."
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:113
+msgid "Warm new content immediately"
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:114
+msgid "When a post or page is published, fetch it once so the first visitor sees a cache HIT, not a cold MISS."
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:120
 msgid "Re-warm after comments"
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:92
+#: includes/modules/Preloader/PreloaderModule.php:121
 msgid "Re-warm a page after a comment is posted (Cache purges the page on comment; this fetches it back into cache)."
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:268
+#: includes/modules/Preloader/PreloaderModule.php:297
 msgid "Enable the preloader before starting a crawl."
 msgstr ""
 
@@ -2552,47 +2591,15 @@ msgid "Privacy & usage data"
 msgstr ""
 
 #: includes/modules/Privacy/PrivacyModule.php:49
-msgid "Control the anonymous usage analytics you were asked about in the setup wizard."
+msgid "Control the usage analytics you were asked about in the setup wizard."
 msgstr ""
 
 #: includes/modules/Privacy/PrivacyModule.php:58
-msgid "Share anonymous usage data"
+msgid "Share usage data"
 msgstr ""
 
 #: includes/modules/Privacy/PrivacyModule.php:59
-msgid "Share anonymous basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never personal data or page content. Turning this off stops all collection and clears the scheduled send."
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:71
-msgid "Render Skip"
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:73
-msgid "Skip the browser's style & layout work for below-fold sections until the visitor scrolls near them — cuts main-thread blocking time on long builder pages without changing the content."
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:82
-msgid "Skip below-fold rendering"
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:83
-msgid "Stamp below-fold sections with content-visibility: auto so the browser defers their style and layout work until scroll approaches. Above-fold sections are never touched."
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:90
-msgid "Above-fold sections"
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:91
-msgid "How many top-level sections from the top of the page are treated as above the fold and left untouched. Raise this if a section near the top appears late."
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:96
-msgid "Section classes"
-msgstr ""
-
-#: includes/modules/RenderSkip/RenderSkipModule.php:97
-msgid "Class names that identify a top-level page section. Defaults cover Elementor sections and flexbox containers; add your theme's section class for non-Elementor pages."
+msgid "Share a few basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never page content. Turning this off stops all collection and clears the scheduled send."
 msgstr ""
 
 #: includes/modules/ResourceHints/ResourceHintsModule.php:60
@@ -2757,6 +2764,38 @@ msgstr ""
 
 #: includes/modules/Support/SupportModule.php:41
 msgid "Where the \"Open ticket\" button takes the user."
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:89
+msgid "Turbo Render"
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:91
+msgid "Paints the top of your page first and brings the rest in as visitors scroll. Every section still loads in full."
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:100
+msgid "Render as visitors scroll"
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:101
+msgid "Lets the browser spend its first moments on what visitors actually see, then render the lower sections just before they scroll into view. The content of your page is unchanged — it simply arrives in a smarter order."
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:108
+msgid "Sections to render immediately"
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:109
+msgid "How many sections at the top of the page are rendered right away, before any deferring begins. The default of 2 suits most layouts. Increase it if a section near the top of your page appears a moment late."
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:114
+msgid "Section classes"
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:115
+msgid "Tells xSpeed which parts of your page count as sections. The defaults cover Elementor, Divi, Bricks, Oxygen, and Beaver Builder — and when none of them match, xSpeed falls back to your page's own top-level sections automatically. Add a class here only if you want to target something specific."
 msgstr ""
 
 #: xspeed.php:220
@@ -3495,7 +3534,7 @@ msgstr ""
 msgid "Go to Dashboard"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:168
+#. Source: src/onboarding/OnboardingApp.tsx:165
 #: assets/admin.js
 msgid "Go to the dashboard"
 msgstr ""
@@ -3978,7 +4017,7 @@ msgstr ""
 msgid "on your xSpeed Hub account."
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:159
+#. Source: src/onboarding/OnboardingApp.tsx:156
 #: assets/admin.js
 msgid "Onboarding data unavailable"
 msgstr ""
@@ -4778,7 +4817,7 @@ msgstr ""
 msgid "Want a hand?"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:162
+#. Source: src/onboarding/OnboardingApp.tsx:159
 #: assets/admin.js
 msgid "We couldn't load the setup wizard. Your site is unaffected — you can configure everything from the dashboard."
 msgstr ""

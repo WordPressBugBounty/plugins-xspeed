@@ -261,6 +261,10 @@ return;
 }
 var u=b.getAttribute('data-xspeed-video');if(!u)return;
 var f=document.createElement('iframe');
+// Released BEFORE src: the observer script's interceptor holds any
+// provider src it sees, and the player the visitor just asked for is
+// the one iframe that must load immediately.
+f.setAttribute('data-xspeed-loaded','1');
 f.setAttribute('src',u);
 f.setAttribute('frameborder','0');
 f.setAttribute('allow','accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture');
@@ -269,6 +273,111 @@ f.setAttribute('style','width:100%;aspect-ratio:16/9;border:0;');
 var t=b.getAttribute('aria-label');if(t)f.setAttribute('title',t);
 b.parentNode.replaceChild(f,b);
 },false);
+JS;
+	}
+
+	/**
+	 * The early interceptor for embeds that never appear in the HTML.
+	 *
+	 * A page-builder video widget builds its YouTube/Vimeo <iframe> from
+	 * its own script, so the server pass — which rewrites the response
+	 * buffer — never sees an element to replace, and the full player
+	 * (3MB+ of JS per embed) downloads on page load anyway. Measured live:
+	 * one homepage carried three JS-built embeds and 22MB of YouTube
+	 * player resources with the facade "on".
+	 *
+	 * Same playbook as Lazy_Loader::autoplay_script(), for the same
+	 * reason: builders set `src` BEFORE inserting the element, so a
+	 * MutationObserver alone is always too late — the fetch starts
+	 * off-DOM. So the property setter and setAttribute are wrapped, a
+	 * recognised provider src is parked in data-xspeed-held instead of
+	 * applied, and the observer only has to dress the inert element as a
+	 * facade once it lands in the DOM. The click handler above does the
+	 * swap; its data-xspeed-loaded release mark is honoured here so the
+	 * player it builds is never re-held.
+	 *
+	 * The provider patterns mirror parse_embed()/poster_url() and must
+	 * stay in step with them — one facade, two capture paths.
+	 */
+	public static function observer_script(): string {
+		$label = wp_json_encode( __( 'Play video', 'xspeed' ) );
+
+		return <<<JS
+(function(){
+var L={$label};
+function parse(u){
+if(!u)return null;
+u=String(u).replace(/^\/\//,'https://');
+var m=u.match(/^https?:\/\/(?:www\.)?(?:youtube(?:-nocookie)?\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,20})/i);
+if(m)return{p:'youtube',id:m[1]};
+m=u.match(/^https?:\/\/player\.vimeo\.com\/video\/(\d{6,12})/i);
+if(m)return{p:'vimeo',id:m[1]};
+return null;
+}
+function hold(el,val){
+if(!el||el.tagName!=='IFRAME')return false;
+if(el.getAttribute('data-xspeed-loaded')||el.hasAttribute('data-skip-lazy'))return false;
+if(!parse(val))return false;
+el.setAttribute('data-xspeed-held',String(val));
+return true;
+}
+try{
+var IP=window.HTMLIFrameElement&&HTMLIFrameElement.prototype;
+var SD=IP&&Object.getOwnPropertyDescriptor(IP,'src');
+if(SD&&SD.set){
+Object.defineProperty(IP,'src',{configurable:true,enumerable:SD.enumerable,
+get:function(){return SD.get.call(this);},
+set:function(v){if(hold(this,v))return;return SD.set.call(this,v);}});
+}
+var SA=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){
+if(n==='src'&&hold(this,v))return;
+return SA.call(this,n,v);
+};
+}catch(e){}
+function dress(f){
+if(!f.parentNode)return;
+var s=f.getAttribute('data-xspeed-held');
+var e=parse(s);
+if(!e)return;
+var u=s+(s.indexOf('autoplay=')>-1?'':(s.indexOf('?')>-1?'&':'?')+'autoplay=1');
+var b=document.createElement('button');
+b.type='button';
+b.className='xspeed-video-facade';
+b.setAttribute('data-xspeed-video',u);
+var t=f.getAttribute('title');
+b.setAttribute('aria-label',t?L+': '+t:L);
+var st='position:relative;display:block;width:100%;padding:0;border:0;cursor:pointer;background:#000;aspect-ratio:16/9;';
+if(e.p==='youtube'&&!/^(videoseries|live_stream)$/i.test(e.id))
+st+='background-image:url(https://i.ytimg.com/vi/'+encodeURIComponent(e.id)+'/hqdefault.jpg);background-size:cover;background-position:center;';
+b.setAttribute('style',st);
+b.innerHTML='<span class="xspeed-video-facade__play" aria-hidden="true" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:68px;height:48px;border-radius:14px;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;"><svg width="24" height="24" viewBox="0 0 24 24" fill="#fff" focusable="false"><path d="M8 5v14l11-7z"/></svg></span>';
+f.parentNode.replaceChild(b,f);
+}
+function sweep(root){
+if(!root||!root.querySelectorAll)return;
+if(root.tagName==='IFRAME'&&root.getAttribute('data-xspeed-held')){dress(root);return;}
+var h=root.querySelectorAll('iframe[data-xspeed-held]');
+for(var i=0;i<h.length;i++)dress(h[i]);
+// An embed written via innerHTML never passed through the wrapped
+// setters — its src is live, but the parser has only just created it,
+// so replacing it here still cancels the load before the player runs.
+if(root.tagName==='IFRAME'&&!root.getAttribute('data-xspeed-loaded')&&!root.hasAttribute('data-skip-lazy')&&parse(root.getAttribute('src'))){
+root.setAttribute('data-xspeed-held',root.getAttribute('src'));dress(root);return;
+}
+var f=root.querySelectorAll('iframe[src]:not([data-xspeed-loaded]):not([data-skip-lazy])');
+for(var j=0;j<f.length;j++){
+if(parse(f[j].getAttribute('src'))){f[j].setAttribute('data-xspeed-held',f[j].getAttribute('src'));dress(f[j]);}
+}
+}
+try{
+new MutationObserver(function(ms){
+for(var i=0;i<ms.length;i++)for(var j=0;j<ms[i].addedNodes.length;j++)sweep(ms[i].addedNodes[j]);
+}).observe(document.documentElement,{childList:true,subtree:true});
+}catch(e){}
+if(document.readyState!=='loading')sweep(document);
+else document.addEventListener('DOMContentLoaded',function(){sweep(document);});
+})();
 JS;
 	}
 }

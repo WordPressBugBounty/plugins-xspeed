@@ -76,6 +76,50 @@ final class HealthModule extends Module {
 	 * disabled — no point telling the user to install a rewrite they
 	 * haven't opted into.
 	 */
+	/**
+	 * Decide what the nginx static rewrite is actually doing.
+	 *
+	 * Extracted so the ordering is testable without a WordPress bootstrap,
+	 * and so Site Health and the dashboard Health panel cannot drift apart
+	 * again — the whole point of #480.
+	 *
+	 * Returns one of: 'active', 'mobile_separate', 'skipped_nonce',
+	 * 'unverified', 'required'.
+	 *
+	 * @param array<string, mixed> $probe        probe_static_rewrite() result.
+	 * @param string               $block_reason A known refusal, or ''.
+	 */
+	public static function nginx_rewrite_verdict( array $probe, string $block_reason ): string {
+		$is_active    = (bool) ( $probe['active'] ?? false );
+		$inconclusive = (bool) ( $probe['inconclusive'] ?? false );
+
+		// A known refusal OUTRANKS the probe. probe_static_rewrite() writes
+		// its own file under the static-cache dir and fetches that, which
+		// succeeds whenever the server can serve a static file at all — even
+		// when no real page is on the static path. It also outranks
+		// "inconclusive", so a blocked rewrite whose probe merely failed to
+		// complete is reported as the refusal it is. (FBS-83145)
+		if ( '' !== $block_reason ) {
+			if ( 'mobile_separate' === $block_reason ) {
+				return 'mobile_separate';
+			}
+			if ( 'skipped_nonce' === $block_reason ) {
+				return 'skipped_nonce';
+			}
+			return 'required';
+		}
+
+		if ( $is_active ) {
+			return 'active';
+		}
+
+		// The probe never reached a verdict (blocked loopback, self-signed
+		// cert, timeout, a CDN/WAF answering instead of the origin). That is
+		// not evidence the config is wrong, and must not produce a
+		// "paste this snippet" banner. (FBS-84012, #480)
+		return $inconclusive ? 'unverified' : 'required';
+	}
+
 	public function site_status_static_rewrite(): array {
 		$result = array(
 			'label'       => __( 'xSpeed static-rewrite cache is active', 'xspeed' ),
@@ -121,6 +165,60 @@ final class HealthModule extends Module {
 		}
 
 		if ( \XSpeed\Server::NGINX === $server_type ) {
+			// Ask the same question the dashboard Health panel asks, the same
+			// way. This test used to return "config required" unconditionally,
+			// so every correctly-configured nginx site — every xCloud site,
+			// where the panel installs the block for you — was told to paste a
+			// snippet it already had, and re-running the check never cleared
+			// it. Worse, the dashboard said the opposite at the same moment.
+			// Reuse probe_static_rewrite() + the refusal reasons so the two
+			// surfaces cannot disagree. (#480)
+			$probe        = \XSpeed\Cache::probe_static_rewrite( true );
+			$probe_reason = (string) ( $probe['reason'] ?? '' );
+
+			$block_reason = \XSpeed\Cache::static_rewrite_block_reason();
+			$skip         = \XSpeed\Cache::last_static_skip();
+			if ( '' === $block_reason && ! empty( $skip['reason'] ) ) {
+				$block_reason = 'skipped_' . (string) $skip['reason'];
+			}
+
+			switch ( self::nginx_rewrite_verdict( $probe, $block_reason ) ) {
+				case 'active':
+					$result['label']       = __( 'xSpeed nginx static rewrite is active', 'xspeed' );
+					$result['status']      = 'good';
+					$result['description'] = '<p>' . esc_html__( 'nginx is serving cache hits directly — PHP is bypassed (~5-15ms TTFB). No action needed.', 'xspeed' ) . '</p>';
+					return $result;
+
+				case 'mobile_separate':
+					$result['label']       = __( 'xSpeed static rewrite is off (Separate Mobile Cache)', 'xspeed' );
+					$result['status']      = 'recommended';
+					$result['description'] = '<p>' . esc_html__( 'Separate Mobile Cache is on, so cache hits are served by the PHP drop-in to keep per-device HTML correct. Turn Separate Mobile Cache off if your site serves the same HTML to every device to regain the faster static path.', 'xspeed' ) . '</p>';
+					return $result;
+
+				case 'skipped_nonce':
+					$result['label']       = __( 'xSpeed is serving cache hits through PHP (pages contain nonces)', 'xspeed' );
+					$result['status']      = 'recommended';
+					$result['description'] = '<p>' . esc_html__( 'Your nginx config is correct, but pages are not reaching the static cache, so hits are served by PHP. They contain nonces, and a static file is served with no PHP — nothing could ever refresh them, so every anonymous form on the page would break once they expire. Keeping these pages on PHP is deliberate.', 'xspeed' ) . '</p>';
+					return $result;
+
+				case 'unverified':
+					// The probe never reached a verdict (blocked loopback,
+					// self-signed cert, timeout, a CDN/WAF answering instead of
+					// the origin). Not evidence the config is wrong, so don't
+					// say "required" and don't dump a snippet the user has
+					// probably already pasted. (FBS-84012, and why #480 was filed.)
+					$result['label']       = __( 'xSpeed could not verify the nginx static rewrite', 'xspeed' );
+					$result['status']      = 'recommended';
+					$result['description'] = '<p>' . esc_html(
+						sprintf(
+							/* translators: %s: the reason the probe could not complete. */
+							__( 'The check itself did not complete, so this is not evidence that your config is wrong — if you have already pasted the snippet it may well be working. Reason: %s', 'xspeed' ),
+							$probe_reason
+						)
+					) . '</p>';
+					return $result;
+			}
+
 			$snippet               = \XSpeed\Cache::nginx_snippet();
 			$result['label']       = __( 'xSpeed nginx server config required', 'xspeed' );
 			$result['status']      = 'recommended';

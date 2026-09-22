@@ -2,6 +2,27 @@
 
 The three most recent releases are listed in readme.txt. Everything since 1.0.0 is below.
 
+= [1.3.5] – 2026-09-22 =
+
+**Consent banners now survive Delay JS on every site that ships one, Turbo Render works on any theme rather than only Elementor, JS-injected YouTube/Vimeo embeds load only on click, and nginx sites are no longer told to fix a configuration that was already correct.**
+
+Media:
+- New: YouTube and Vimeo players that a theme or plugin injects with JavaScript after page load now get the same click-to-load facade as regular embeds, so no player code loads until a visitor presses play.
+
+Optimization:
+- New: Turbo Render works on any theme or page builder. It recognises Divi, Bricks, Oxygen and Beaver Builder sections directly, and where no builder is recognised it falls back to the page's own structure, so the feature is no longer inert outside Elementor.
+- Improved: Turbo Render is the new name for the feature previously called Render Skip — the same mechanism, named for what the visitor gets rather than what the browser postpones.
+- Fixed: Consent banners from Cookie Notice, Moove, Termly, Usercentrics, Iubenda, OneTrust, Borlabs, Real Cookie Banner and SureCookie are never delayed, so a visitor is always offered the choice before leaving.
+- Fixed: Complianz and NotificationX banners stay protected even when another plugin strips the id WordPress prints on their script.
+- Fixed: An author's data-no-optimize, nowprocket or similar opt-out is now read as an attribute rather than matched anywhere in the tag, so a script is neither wrongly delayed nor wrongly skipped because the marker appeared in a URL, a class or a neighbouring inline block.
+- Fixed: A script you name yourself in the Delay JS target list is now delayed even when it is a consent banner — the built-in banner protection yields to an explicit choice.
+
+Health:
+- Fixed: nginx sites with a working configuration are no longer told to paste in a server snippet they already have. Site Health and the dashboard now reach the same verdict, and a check that cannot conclude says so instead of warning.
+
+Preloader:
+- Fixed: Cache warming no longer identifies itself in a way that common firewall rule sets block, so newly published posts are warmed again on sites running 7G/8G-style protection.
+
 = [1.3.4] – 2026-09-20 =
 
 **Consent-manager scripts marked late are now always left alone, below-fold sections skip rendering work until they are needed, and xSpeed's MCP server shares a site cleanly with other MCP plugins.**

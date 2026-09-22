@@ -230,25 +230,34 @@ final class Health {
 			$inconclusive = $inconclusive && ! $refused;
 
 			if ( Server::NGINX === $server_type ) {
-				if ( $is_active ) {
-					$nginx_detail = 'nginx is serving cache hits directly — PHP bypassed (~5-15ms TTFB).';
-				} elseif ( 'mobile_separate' === $block_reason ) {
-					$nginx_detail = 'nginx detected, but the static rewrite is disabled because Separate Mobile Cache is on.' . $mobile_block;
-				} elseif ( 'skipped_nonce' === $block_reason ) {
-					$nginx_detail = self::nonce_skip_detail( $skip );
-				} elseif ( $inconclusive ) {
-					$nginx_detail = sprintf(
-						'Could not verify the static rewrite — the check itself did not complete, so this is not evidence that your config is wrong. If you have already pasted the snippet, it may well be working. Reason: %s',
-						$probe_reason
-					);
-				} else {
-					$nginx_detail = 'nginx detected but not yet routing to the cache. Paste the snippet below into your site\'s server { } block, then reload nginx.';
+				// One verdict for both surfaces: this panel and the Site
+				// Health test must answer from the SAME ordering, or they
+				// drift apart again — the whole point of #480.
+				$verdict = \XSpeed\Modules\Health\HealthModule::nginx_rewrite_verdict( $probe, $block_reason );
+				switch ( $verdict ) {
+					case 'active':
+						$nginx_detail = 'nginx is serving cache hits directly — PHP bypassed (~5-15ms TTFB).';
+						break;
+					case 'mobile_separate':
+						$nginx_detail = 'nginx detected, but the static rewrite is disabled because Separate Mobile Cache is on.' . $mobile_block;
+						break;
+					case 'skipped_nonce':
+						$nginx_detail = self::nonce_skip_detail( $skip );
+						break;
+					case 'unverified':
+						$nginx_detail = sprintf(
+							'Could not verify the static rewrite — the check itself did not complete, so this is not evidence that your config is wrong. If you have already pasted the snippet, it may well be working. Reason: %s',
+							$probe_reason
+						);
+						break;
+					default: // 'required'.
+						$nginx_detail = 'nginx detected but not yet routing to the cache. Paste the snippet below into your site\'s server { } block, then reload nginx.';
 				}
 
 				$out[] = array(
 					'id'      => 'static_rewrite_nginx',
 					// Inconclusive is INFO, not WARN — we have no finding to warn about.
-					'tone'    => $is_active ? self::OK : ( $inconclusive ? self::INFO : self::WARN ),
+					'tone'    => 'active' === $verdict ? self::OK : ( 'unverified' === $verdict ? self::INFO : self::WARN ),
 					'label'   => 'Static-file rewrite (nginx server config)',
 					'detail'  => $nginx_detail,
 					// Always ship the snippet — even when active, so the

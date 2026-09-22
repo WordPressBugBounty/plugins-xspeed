@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.4
+Stable tag: 1.3.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -172,7 +172,7 @@ xSpeed Cache handles the edge cases other plugins miss:
 
 xSpeed Cache never collects personal data, stores IP addresses or uses tracking cookies. Every optimization runs locally on your server. By default it makes no calls to any third-party server. The only request is a quick check to your own site's home URL to confirm GZIP is active, rate-limited to once per hour.
 
-xSpeed Cache also includes **optional usage analytics**. You are asked in two places, both off by default: a clearly labeled consent control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data. Nothing is sent unless you opt in from one of them. When enabled, xSpeed Cache shares anonymous, non-sensitive diagnostics: your WordPress and PHP version, active theme and plugins, server type, site language, and which xSpeed Cache features you have switched on, so we know what to keep fast and compatible. No personal data and no page content are ever sent, and you can turn it off again at any time from xSpeed Cache → Settings → Privacy & usage data. See the External services section below.
+xSpeed Cache also includes **optional usage analytics**. You are asked in two places: a clearly labeled consent control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data. Nothing is sent until you confirm from one of them. When enabled, xSpeed Cache shares non-sensitive diagnostics: your WordPress and PHP version, active theme and plugins, server type, site language, and which xSpeed Cache features you have switched on, so we know what to keep fast and compatible. No page content is ever sent, and you can turn it off again at any time from xSpeed Cache → Settings → Privacy & usage data. See the External services section below.
 
 = Backed By a Team You Trust =
 
@@ -264,7 +264,7 @@ By default, no. The only request is a check to your own site's home URL to confi
 
 == External services ==
 
-xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. Analytics consent is asked in two places, both off by default — a clearly-labeled control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data — and nothing is sent unless you opt in from one of them; turning the switch off stops all collection and clears the scheduled send. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
+xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. Analytics consent is asked in two places — a clearly-labeled control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data — and nothing is sent until you confirm from one of them; turning the switch off stops all collection and clears the scheduled send. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
 
 = Self-hosted gzip probe =
 
@@ -306,6 +306,27 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.3.5] – 2026-09-22 =
+
+**Consent banners now survive Delay JS on every site that ships one, Turbo Render works on any theme rather than only Elementor, JS-injected YouTube/Vimeo embeds load only on click, and nginx sites are no longer told to fix a configuration that was already correct.**
+
+Media:
+- New: YouTube and Vimeo players that a theme or plugin injects with JavaScript after page load now get the same click-to-load facade as regular embeds, so no player code loads until a visitor presses play.
+
+Optimization:
+- New: Turbo Render works on any theme or page builder. It recognises Divi, Bricks, Oxygen and Beaver Builder sections directly, and where no builder is recognised it falls back to the page's own structure, so the feature is no longer inert outside Elementor.
+- Improved: Turbo Render is the new name for the feature previously called Render Skip — the same mechanism, named for what the visitor gets rather than what the browser postpones.
+- Fixed: Consent banners from Cookie Notice, Moove, Termly, Usercentrics, Iubenda, OneTrust, Borlabs, Real Cookie Banner and SureCookie are never delayed, so a visitor is always offered the choice before leaving.
+- Fixed: Complianz and NotificationX banners stay protected even when another plugin strips the id WordPress prints on their script.
+- Fixed: An author's data-no-optimize, nowprocket or similar opt-out is now read as an attribute rather than matched anywhere in the tag, so a script is neither wrongly delayed nor wrongly skipped because the marker appeared in a URL, a class or a neighbouring inline block.
+- Fixed: A script you name yourself in the Delay JS target list is now delayed even when it is a consent banner — the built-in banner protection yields to an explicit choice.
+
+Health:
+- Fixed: nginx sites with a working configuration are no longer told to paste in a server snippet they already have. Site Health and the dashboard now reach the same verdict, and a check that cannot conclude says so instead of warning.
+
+Preloader:
+- Fixed: Cache warming no longer identifies itself in a way that common firewall rule sets block, so newly published posts are warmed again on sites running 7G/8G-style protection.
 
 = [1.3.4] – 2026-09-20 =
 
@@ -350,19 +371,5 @@ Dashboard & Admin UX:
 
 Reliability:
 - Improved: Uninstall now removes all usage-tracking state, the scheduled send, and every leftover option row.
-
-= [1.3.2] – 2026-09-15 =
-
-**Purging is now a contract other caches can join: clearing xSpeed's page cache also invalidates LiteSpeed Cache and the host's nginx FastCGI cache, and every purge is scoped to exactly the site and pages it was asked for — including on multisite.**
-
-Caching:
-- New: A purge-event contract lets other caching layers invalidate together with xSpeed, so a purge clears every cache that matters in one action.
-- New: Purge All is forwarded to LiteSpeed Cache and the host's nginx FastCGI cache when they are present.
-- Fixed: One post change triggers exactly one invalidation, deleting a media file purges again, and a purge still finds its post when the hook hands over none.
-- Fixed: Purges are scoped per site on multisite — a purge no longer sends another site's URLs to this site's server cache, a default port is not treated as a different site, and full purges stay on the current site.
-- Fixed: A purge listener that throws no longer aborts the purge, a query string of "0" is still treated as a query, and a partial purge reports itself as partial instead of claiming success.
-
-Optimization:
-- Fixed: Delaying JavaScript no longer breaks inline scripts bound to a delayed handle, and replayed external scripts keep their original load order.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

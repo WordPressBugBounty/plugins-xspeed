@@ -186,6 +186,12 @@ final class LazyModule extends Module {
 			// after wp_head — and a layout rule that arrives in the footer
 			// fixes the gap only after the visitor has already seen it.
 			add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_facade_style' ) );
+			// Embeds that never touch the HTML: a builder widget builds its
+			// YouTube iframe from script, so the buffer pass has nothing to
+			// rewrite. Head, priority 1, for the same reason as the autoplay
+			// restorer below — it must be listening before the widget's
+			// script sets a src and commits the fetch.
+			add_action( 'wp_head', array( $this, 'print_observer_script' ), 1 );
 		}
 
 		// Same conditional-footer treatment for the autoplay restorer: it is
@@ -227,11 +233,21 @@ final class LazyModule extends Module {
 	 * it is ~400 bytes — a separate request would cost more than the code.
 	 */
 	public function print_facade_script(): void {
-		if ( ! Lazy_Loader::facade_used() ) {
-			return;
-		}
-
+		// No longer gated on facade_used(): the observer script can build a
+		// facade for a JS-injected embed on a page where the server pass
+		// rendered none, and a facade without its click handler is a play
+		// button that plays nothing. ~400 bytes on facade-less pages is the
+		// cost of never shipping that.
 		wp_print_inline_script_tag( \XSpeed\Video_Facade::facade_script(), array( 'id' => 'xspeed-video-facade' ) );
+	}
+
+	/**
+	 * Emit the interceptor for JS-injected embeds (see
+	 * Video_Facade::observer_script() for the mechanism and why the
+	 * footer is too late).
+	 */
+	public function print_observer_script(): void {
+		wp_print_inline_script_tag( \XSpeed\Video_Facade::observer_script(), array( 'id' => 'xspeed-video-facade-observer' ) );
 	}
 
 	/**

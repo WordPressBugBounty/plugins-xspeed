@@ -367,14 +367,14 @@ class Onboarding {
 			);
 		}
 
-		// Opt-in usage analytics. Only acted on when the key is present in the
-		// payload (legacy onboarding-complete sites are left untouched). The
-		// consent toggle defaults OFF in the wizard, so the common path is
-		// usage_tracking=false → tracker stays dormant, no outbound HTTP.
-		// (True since #437; before that the toggle shipped pre-checked and
-		// this comment described an intent the UI did not implement. The
-		// same consent is now also writable from Settings → Privacy & usage
-		// data, via PrivacyModule, which routes through the same opt_in().)
+		// Usage analytics consent. Only acted on when the key is present in
+		// the payload (legacy onboarding-complete sites are left untouched).
+		// The wizard toggle ships pre-checked, so the common path is
+		// usage_tracking=true → opt_in(true) registers the install. Nothing
+		// is sent before the admin clicks Apply. (#437 shipped it off; later
+		// reverted to pre-checked by product decision. The same consent is
+		// also writable from Settings → Privacy & usage data, via
+		// PrivacyModule, which routes through the same opt_in().)
 		if ( array_key_exists( 'usage_tracking', $params ) ) {
 			$tracker = Plugin::instance()->usage_tracker();
 			if ( $tracker ) {

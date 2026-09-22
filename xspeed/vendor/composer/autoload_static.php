@@ -77,11 +77,11 @@ class ComposerStaticInit658ed90fed7749ed814442769ec5d073
         'XSpeed\\Modules\\ObjectCache\\ObjectCacheModule' => __DIR__ . '/../..' . '/includes/modules/ObjectCache/ObjectCacheModule.php',
         'XSpeed\\Modules\\Preloader\\PreloaderModule' => __DIR__ . '/../..' . '/includes/modules/Preloader/PreloaderModule.php',
         'XSpeed\\Modules\\Privacy\\PrivacyModule' => __DIR__ . '/../..' . '/includes/modules/Privacy/PrivacyModule.php',
-        'XSpeed\\Modules\\RenderSkip\\RenderSkipModule' => __DIR__ . '/../..' . '/includes/modules/RenderSkip/RenderSkipModule.php',
         'XSpeed\\Modules\\ResourceHints\\ResourceHintsModule' => __DIR__ . '/../..' . '/includes/modules/ResourceHints/ResourceHintsModule.php',
         'XSpeed\\Modules\\Score\\ScoreModule' => __DIR__ . '/../..' . '/includes/modules/Score/ScoreModule.php',
         'XSpeed\\Modules\\Settings\\SettingsModule' => __DIR__ . '/../..' . '/includes/modules/Settings/SettingsModule.php',
         'XSpeed\\Modules\\Support\\SupportModule' => __DIR__ . '/../..' . '/includes/modules/Support/SupportModule.php',
+        'XSpeed\\Modules\\TurboRender\\TurboRenderModule' => __DIR__ . '/../..' . '/includes/modules/TurboRender/TurboRenderModule.php',
     );
 
     public static function getInitializer(ClassLoader $loader)

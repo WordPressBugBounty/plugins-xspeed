@@ -46,7 +46,7 @@ final class PrivacyModule extends Module {
 		return array(
 			'label'       => __( 'Privacy & usage data', 'xspeed' ),
 			'icon'        => 'ShieldCheck',
-			'description' => __( 'Control the anonymous usage analytics you were asked about in the setup wizard.', 'xspeed' ),
+			'description' => __( 'Control the usage analytics you were asked about in the setup wizard.', 'xspeed' ),
 		);
 	}
 
@@ -55,8 +55,8 @@ final class PrivacyModule extends Module {
 			'usage_tracking' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Share anonymous usage data', 'xspeed' ),
-				'description' => __( 'Share anonymous basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never personal data or page content. Turning this off stops all collection and clears the scheduled send.', 'xspeed' ),
+				'label'       => __( 'Share usage data', 'xspeed' ),
+				'description' => __( 'Share a few basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never page content. Turning this off stops all collection and clears the scheduled send.', 'xspeed' ),
 			),
 		);
 	}
@@ -144,7 +144,7 @@ final class PrivacyModule extends Module {
 				'name'      => 'xspeed privacy',
 				'callback'  => array( $this, 'cli_privacy' ),
 				'shortdesc' => 'Show or change usage-analytics consent.',
-				'ai_hint'   => 'Whether this site shares anonymous usage analytics, and the way to turn that on or off. Use for "am I sending telemetry", "stop sharing usage data", or any consent/privacy question about analytics.',
+				'ai_hint'   => 'Whether this site shares usage analytics, and the way to turn that on or off. Use for "am I sending telemetry", "stop sharing usage data", or any consent/privacy question about analytics.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',

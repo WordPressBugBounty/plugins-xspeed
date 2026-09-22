@@ -54,6 +54,7 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_overridden_constants' );
 	delete_option( 'xspeed_last_mobile_separate' );
 	delete_option( 'xspeed_redirect_to_onboarding' );
+	delete_option( 'xspeed_preloader_firewall_block' );
 	delete_option( 'xspeed_onboarding_complete' );
 	// Provenance a host plugin wrote before it activated us, and the profile
 	// that install came up with.

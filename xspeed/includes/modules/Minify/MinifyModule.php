@@ -76,7 +76,7 @@ final class MinifyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Delay JavaScript Until Interaction', 'xspeed' ),
-				'description' => __( 'Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on.', 'xspeed' ),
+				'description' => __( 'Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are never delayed, so the visitor is still asked before anything else runs.', 'xspeed' ),
 			),
 			'async_css' => array(
 				'type'        => 'bool',
@@ -95,7 +95,7 @@ final class MinifyModule extends Module {
 				'default'     => array( 'jquery-core', 'jquery-migrate' ),
 				'item_type'   => 'string',
 				'label'       => __( 'Defer / Delay Exclusions', 'xspeed' ),
-				'description' => __( 'Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). One per line.', 'xspeed' ),
+				'description' => __( 'Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are always skipped and do not need listing here. One per line.', 'xspeed' ),
 				// Only relevant once defer OR delay is on — the exclusion list
 				// governs both. Uses the `any` (OR) dependency form. (FBS-82227)
 				'dependsOn'   => array(
