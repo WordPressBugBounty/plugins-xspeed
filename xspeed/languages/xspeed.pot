@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.3.5\n"
+"Project-Id-Version: xSpeed Cache 1.3.6\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-22T10:29:06+00:00\n"
+"POT-Creation-Date: 2026-09-28T10:41:59+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:8732
+#: includes/class-cache.php:8804
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:153
 #: includes/class-admin.php:243
-#: includes/class-cache.php:8746
+#: includes/class-cache.php:8818
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -130,183 +130,183 @@ msgid "Clears this post and the pages that list it — the homepage, its archive
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:4163
+#: includes/class-cache.php:4170
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:5116
+#: includes/class-cache.php:5123
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:5120
+#: includes/class-cache.php:5127
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:5124
+#: includes/class-cache.php:5131
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:5128
+#: includes/class-cache.php:5135
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:5132
+#: includes/class-cache.php:5139
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:5379
+#: includes/class-cache.php:5386
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:5385
+#: includes/class-cache.php:5392
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:5606
+#: includes/class-cache.php:5630
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:5613
+#: includes/class-cache.php:5637
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5616
+#: includes/class-cache.php:5640
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5686
+#: includes/class-cache.php:5710
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:5692
+#: includes/class-cache.php:5716
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:5766
+#: includes/class-cache.php:5790
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5769
+#: includes/class-cache.php:5793
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:5799
+#: includes/class-cache.php:5823
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:5856
+#: includes/class-cache.php:5880
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:5857
+#: includes/class-cache.php:5881
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5859
+#: includes/class-cache.php:5883
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5874
+#: includes/class-cache.php:5898
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:5966
+#: includes/class-cache.php:5990
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:5981
+#: includes/class-cache.php:6005
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:5982
+#: includes/class-cache.php:6006
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:5999
+#: includes/class-cache.php:6023
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:6017
+#: includes/class-cache.php:6041
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:6018
+#: includes/class-cache.php:6042
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:6029
+#: includes/class-cache.php:6053
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:6033
+#: includes/class-cache.php:6057
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:8224
+#: includes/class-cache.php:8296
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:8231
+#: includes/class-cache.php:8303
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:8286
+#: includes/class-cache.php:8358
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:8293
+#: includes/class-cache.php:8365
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:8296
+#: includes/class-cache.php:8368
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:8297
+#: includes/class-cache.php:8369
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:8298
+#: includes/class-cache.php:8370
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:8299
+#: includes/class-cache.php:8371
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:8300
+#: includes/class-cache.php:8372
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:8301
+#: includes/class-cache.php:8373
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:8302
+#: includes/class-cache.php:8374
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:8304
+#: includes/class-cache.php:8376
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:8815
+#: includes/class-cache.php:8887
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:675
 msgid "Unauthorized."
@@ -987,7 +987,7 @@ msgstr ""
 msgid "The id argument is required."
 msgstr ""
 
-#: includes/class-rest-api.php:472
+#: includes/class-rest-api.php:479
 msgid "dashboard"
 msgstr ""
 
@@ -1085,7 +1085,7 @@ msgstr ""
 
 #: includes/class-video-facade.php:153
 #: includes/class-video-facade.php:199
-#: includes/class-video-facade.php:303
+#: includes/class-video-facade.php:309
 msgid "Play video"
 msgstr ""
 
@@ -1122,66 +1122,114 @@ msgid "Turn off WordPress defaults you do not use — saves bytes, requests, and
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:49
-msgid "Disable Dashicons on Frontend"
+msgid "Disable Emojis"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:50
-msgid "Drop the dashicons stylesheet from non-admin pages. Most themes do not need it. Saves ~45 KB per visitor."
+msgid "Remove the emoji detection script and its inline styles from every page. Modern browsers draw emojis natively, so visitors still see them. Saves a script and an inline stylesheet per page."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:55
-msgid "Disable oEmbed Discovery + wp-embed.min.js"
+msgid "Disable Dashicons on Frontend"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:56
-msgid "Strip the auto-embed handlers + the embed script. Posts that paste a YouTube URL will no longer auto-render the player — embed it via a block instead. Saves a request per page."
+msgid "Drop the dashicons stylesheet from non-admin pages. Most themes do not need it. Saves ~45 KB per visitor."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:61
-msgid "Disable RSS Feeds"
+msgid "Disable oEmbed Discovery + wp-embed.min.js"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:62
-msgid "Return a 404 on /feed/ and similar endpoints. Useful for sites that do not publish feeds and want to cut feed-fetcher traffic."
+msgid "Strip the auto-embed handlers + the embed script. Posts that paste a YouTube URL will no longer auto-render the player — embed it via a block instead. Saves a request per page."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:67
-msgid "Disable XML-RPC"
+msgid "Disable RSS Feeds"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:68
-msgid "Disable the legacy xmlrpc.php endpoint. Cuts pingback brute-force noise; safe to disable unless you use a remote WP client (Jetpack, WordPress mobile app)."
+msgid "Return a 404 on /feed/ and similar endpoints. Useful for sites that do not publish feeds and want to cut feed-fetcher traffic."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:73
-msgid "Strip jQuery Migrate on Frontend"
+msgid "Disable XML-RPC"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:74
-msgid "Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins."
+msgid "Disable the legacy xmlrpc.php endpoint. Cuts pingback brute-force noise; safe to disable unless you use a remote WP client (Jetpack, WordPress mobile app)."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:79
-msgid "Strip Block-Editor Styles on Frontend"
+msgid "Strip jQuery Migrate on Frontend"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:80
-msgid "Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched."
+msgid "Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins."
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:85
-msgid "Restrict REST API to Logged-In Users"
+msgid "Strip Block-Editor Styles on Frontend"
 msgstr ""
 
 #: includes/modules/Bloat/BloatModule.php:86
+msgid "Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:91
+msgid "Remove RSD Link"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:92
+msgid "Drop the Really Simple Discovery link from the page head. Only old desktop blogging clients read it."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:97
+msgid "Remove Shortlink"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:98
+msgid "Drop the ?p=123 shortlink tag and header from posts and pages. The shortlinks keep working; they are just no longer advertised."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:103
+msgid "Remove REST API Links"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:104
+msgid "Drop the /wp-json/ discovery link tag and Link header. The REST API itself stays on; to block it, use the setting below."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:109
+msgid "Hide WordPress Version"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:110
+msgid "Remove the WordPress generator tag from pages and feeds, so it no longer states the WordPress version. Other plugins print their own tags; those stay. Script and style URLs still carry ?ver= numbers."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:115
+msgid "Disable Self-Pingbacks"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:116
+msgid "Stop WordPress from sending a pingback to your own site when a post links to another of your posts. Pingbacks to other sites are not affected."
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:121
+msgid "Restrict REST API to Logged-In Users"
+msgstr ""
+
+#: includes/modules/Bloat/BloatModule.php:122
 msgid "Block /wp-json/ for anonymous requests. WooCommerce checkout, contact-form submissions, and many block-editor previews need anonymous REST — keep this off unless you know your site does not depend on it."
 msgstr ""
 
-#: includes/modules/Bloat/BloatModule.php:239
+#: includes/modules/Bloat/BloatModule.php:380
 msgid "Feeds are disabled."
 msgstr ""
 
-#: includes/modules/Bloat/BloatModule.php:288
+#: includes/modules/Bloat/BloatModule.php:429
 msgid "Anonymous REST access is disabled on this site."
 msgstr ""
 
@@ -1326,6 +1374,14 @@ msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:277
 msgid "These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and \"X-Accel-Expires: 0\" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:290
+msgid "LiteSpeed Static Fast Path"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:291
+msgid "Serve cache hits straight from the web server via .htaccess instead of the PHP drop-in. No PHP runs on a hit, so the saving depends on how quickly PHP answers on this host — a few milliseconds on a fast server, far more where PHP is the bottleneck. The trade: LiteSpeed cannot add the X-XSpeed-Cache header to statically served pages, and those hits are not counted in the dashboard hit ratio. Leave off to keep every hit visibly tagged and counted."
 msgstr ""
 
 #: includes/modules/CacheCoverage/CacheCoverageModule.php:36
@@ -1541,7 +1597,33 @@ msgstr ""
 msgid "Which cleanup categories run on the schedule above. Leave empty to keep auto-cleanup disabled even if a schedule is set."
 msgstr ""
 
-#: includes/modules/Database/DatabaseModule.php:149
+#: includes/modules/Database/DatabaseModule.php:62
+msgid "Limit Post Revisions"
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:63
+msgid "Cap how many revisions WordPress keeps for each post. Cleanup removes revisions that already exist; this stops them piling up again."
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:70
+msgid "Revisions to Keep"
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:71
+msgid "Used when Limit Post Revisions is on. 0 turns revisions off completely. Older revisions are trimmed the next time each post is saved; to remove the backlog now, clean Post Revisions above."
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:125
+msgid "The revision limit is set outside xSpeed"
+msgstr ""
+
+#. translators: %s: value of WP_POST_REVISIONS, e.g. 5 or false.
+#: includes/modules/Database/DatabaseModule.php:128
+#, php-format
+msgid "WP_POST_REVISIONS is set to %s, usually in wp-config.php, so Limit Post Revisions below has no effect. Remove that definition to manage the limit here."
+msgstr ""
+
+#: includes/modules/Database/DatabaseModule.php:232
 msgid "Provide at least one cleanup type."
 msgstr ""
 
@@ -1655,79 +1737,87 @@ msgstr ""
 msgid "Enable the page cache in the xSpeed dashboard to start serving cached HTML for non-logged-in visitors."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:152
+#: includes/modules/Health/HealthModule.php:155
+msgid "xSpeed is serving cache hits through PHP (LiteSpeed)"
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:157
+msgid "Caching is working — hits are served by the xSpeed drop-in and tagged X-XSpeed-Cache: HIT (php), so every hit is visible and counted. LiteSpeed's .htaccess engine cannot tag or log statically served files, so this is the default. To serve hits straight from the web server with no PHP (at the cost of that tagging and counting), turn on LiteSpeed Static Fast Path in xSpeed's Cache settings."
+msgstr ""
+
+#: includes/modules/Health/HealthModule.php:159
 msgid "xSpeed is serving cache hits through PHP"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:154
+#: includes/modules/Health/HealthModule.php:161
 msgid "Caching is working — hits are served by the xSpeed drop-in and tagged X-XSpeed-Cache: HIT (php). The faster .htaccess fast path is off because Apache's mod_headers module is not loaded, without which a static hit could not be tagged or counted. Enable mod_headers (a2enmod headers on Debian/Ubuntu, then restart Apache) to shave roughly 20-30ms off each cache hit."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:156
-#: includes/modules/Health/HealthModule.php:193
+#: includes/modules/Health/HealthModule.php:163
+#: includes/modules/Health/HealthModule.php:202
 msgid "xSpeed static rewrite is off (Separate Mobile Cache)"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:158
-#: includes/modules/Health/HealthModule.php:195
+#: includes/modules/Health/HealthModule.php:165
+#: includes/modules/Health/HealthModule.php:204
 msgid "Separate Mobile Cache is on, so cache hits are served by the PHP drop-in to keep per-device HTML correct. Turn Separate Mobile Cache off if your site serves the same HTML to every device to regain the faster static path."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:160
+#: includes/modules/Health/HealthModule.php:169
 msgid "xSpeed .htaccess rewrite block is missing"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:162
+#: includes/modules/Health/HealthModule.php:171
 msgid "Without the static-rewrite block, cache hits go through the PHP drop-in (~85ms TTFB) instead of the web server (~5-15ms). Toggle Enable Cache off and on in xSpeed to reinstall the block."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:187
+#: includes/modules/Health/HealthModule.php:196
 msgid "xSpeed nginx static rewrite is active"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:189
+#: includes/modules/Health/HealthModule.php:198
 msgid "nginx is serving cache hits directly — PHP is bypassed (~5-15ms TTFB). No action needed."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:199
+#: includes/modules/Health/HealthModule.php:208
 msgid "xSpeed is serving cache hits through PHP (pages contain nonces)"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:201
+#: includes/modules/Health/HealthModule.php:210
 msgid "Your nginx config is correct, but pages are not reaching the static cache, so hits are served by PHP. They contain nonces, and a static file is served with no PHP — nothing could ever refresh them, so every anonymous form on the page would break once they expire. Keeping these pages on PHP is deliberate."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:210
+#: includes/modules/Health/HealthModule.php:219
 msgid "xSpeed could not verify the nginx static rewrite"
 msgstr ""
 
 #. translators: %s: the reason the probe could not complete.
-#: includes/modules/Health/HealthModule.php:215
+#: includes/modules/Health/HealthModule.php:224
 #, php-format
 msgid "The check itself did not complete, so this is not evidence that your config is wrong — if you have already pasted the snippet it may well be working. Reason: %s"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:223
+#: includes/modules/Health/HealthModule.php:232
 msgid "xSpeed nginx server config required"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:225
+#: includes/modules/Health/HealthModule.php:234
 msgid "xSpeed can't write nginx config from PHP. Paste this snippet into your site's server { } block, then reload nginx so cache hits serve without booting PHP:"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:234
+#: includes/modules/Health/HealthModule.php:243
 msgid "xSpeed PHP drop-in cache active"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:236
+#: includes/modules/Health/HealthModule.php:245
 msgid "Static-rewrite caching needs Apache, LiteSpeed, or nginx. The PHP drop-in is still serving cache hits at ~85ms TTFB on this server."
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:242
+#: includes/modules/Health/HealthModule.php:251
 msgid "Health"
 msgstr ""
 
-#: includes/modules/Health/HealthModule.php:244
+#: includes/modules/Health/HealthModule.php:253
 msgid "Diagnostics, hit ratio, and recent cache activity."
 msgstr ""
 
@@ -1815,27 +1905,35 @@ msgstr ""
 msgid "Set preload=\"none\" on self-hosted <video> tags, overriding a player's own preload=\"auto\"/\"metadata\". Autoplaying videos are left alone — they need their bytes regardless. Browsers do not yet support loading=\"lazy\" on video; preload=\"none\" is the closest equivalent."
 msgstr ""
 
-#: includes/modules/Lazy/LazyModule.php:85
-msgid "Eager-load First N Images"
+#: includes/modules/Lazy/LazyModule.php:83
+msgid "Lazy-load Background Images"
 msgstr ""
 
-#: includes/modules/Lazy/LazyModule.php:86
-msgid "How many images at the top of the post get loading=\"eager\". 1 is usually right (the LCP hero image). 0 to lazy-load everything."
+#: includes/modules/Lazy/LazyModule.php:84
+msgid "Hold back background images set in an element's inline style (a Cover or Group block, a page-builder section) until the element is near the screen. Uses a small script; visitors without JavaScript get every background as usual. The first N backgrounds on the page load straight away, like images. Backgrounds set in a stylesheet are not affected."
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:91
-msgid "Add Missing Image Dimensions"
+msgid "Eager-load First N Images"
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:92
-msgid "When an <img class=\"wp-image-N\"> has no width/height, look the values up from the media library and inject them. Prevents the page-layout shift that hurts CLS scores."
+msgid "How many images at the top of the post get loading=\"eager\". 1 is usually right (the LCP hero image). 0 to lazy-load everything. Lazy-loaded background images use the same number."
+msgstr ""
+
+#: includes/modules/Lazy/LazyModule.php:97
+msgid "Add Missing Image Dimensions"
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:98
+msgid "When an <img class=\"wp-image-N\"> has no width/height, look the values up from the media library and inject them. Prevents the page-layout shift that hurts CLS scores."
+msgstr ""
+
+#: includes/modules/Lazy/LazyModule.php:104
 msgid "Excluded Images"
 msgstr ""
 
-#: includes/modules/Lazy/LazyModule.php:99
+#: includes/modules/Lazy/LazyModule.php:105
 msgid "Substring patterns that, if found anywhere in the <img> / <iframe> tag (typically a class or filename), exempt that element from lazy-loading. Useful for hero / logo / sprite images. Or add data-skip-lazy to the tag directly."
 msgstr ""
 
@@ -2203,7 +2301,7 @@ msgid "Migrate"
 msgstr ""
 
 #: includes/modules/Migration/MigrationModule.php:548
-#: includes/modules/Minify/MinifyModule.php:35
+#: includes/modules/Minify/MinifyModule.php:36
 msgid "Minify"
 msgstr ""
 
@@ -2296,119 +2394,137 @@ msgstr ""
 msgid "Your account can change settings but not switch plugins off, so %s is still active. Your settings were imported — ask an administrator to deactivate it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:34
+#: includes/modules/Minify/MinifyModule.php:35
 msgid "CSS & JavaScript"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:37
+#: includes/modules/Minify/MinifyModule.php:38
 msgid "Strip whitespace and rewrite enqueued CSS / JS."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:50
+#: includes/modules/Minify/MinifyModule.php:51
 msgid "Minify HTML"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:55
+#: includes/modules/Minify/MinifyModule.php:56
 msgid "Strip whitespace and comments from HTML output, including inline <style> and <script> blocks. Safe on most themes. Applies to cached (logged-out) responses — view the page in a private window to see the result."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:60
+#: includes/modules/Minify/MinifyModule.php:61
 msgid "Minify CSS"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:61
+#: includes/modules/Minify/MinifyModule.php:62
 msgid "Compress and rewrite enqueued local stylesheets. External CSS is left untouched."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:66
+#: includes/modules/Minify/MinifyModule.php:67
 msgid "Minify JavaScript"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:67
+#: includes/modules/Minify/MinifyModule.php:68
 msgid "Compress enqueued local scripts. Disable if you hit script-loading conflicts on the frontend."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:72
+#: includes/modules/Minify/MinifyModule.php:73
 msgid "Defer JavaScript"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:73
+#: includes/modules/Minify/MinifyModule.php:74
 msgid "Add defer=\"defer\" to enqueued script tags so they execute after HTML parsing. jQuery + its hard dependencies are skipped automatically."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:78
+#: includes/modules/Minify/MinifyModule.php:79
 msgid "Delay JavaScript Until Interaction"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:79
-msgid "Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are never delayed, so the visitor is still asked before anything else runs."
-msgstr ""
-
-#: includes/modules/Minify/MinifyModule.php:84
-msgid "Load CSS Asynchronously"
+#: includes/modules/Minify/MinifyModule.php:80
+msgid "Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are not delayed, so the visitor is still asked before anything else runs. To delay one on purpose, name it in Delay Only These Scripts."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:85
+msgid "Load CSS Asynchronously"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:86
 msgid "Rewrite stylesheet link tags to load non-blocking via the print-then-all pattern. Pairs well with critical-CSS workflows; can cause a flash of unstyled content if the theme has no critical CSS."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:90
+#: includes/modules/Minify/MinifyModule.php:91
 msgid "Remove Asset Query Strings"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:91
+#: includes/modules/Minify/MinifyModule.php:92
 msgid "Strip ?ver=X.Y from enqueued CSS / JS URLs. Some CDN caches and proxies cache better when query strings are absent. Files under wp-content/uploads keep their version — page builders and consent plugins rewrite generated CSS there in place, and ?ver is what tells browsers to refetch it. Plugin, theme and core assets are still stripped: with Browser Cache on, an update reaches returning visitors only when their browser cache expires."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:97
+#: includes/modules/Minify/MinifyModule.php:98
 msgid "Defer / Delay Exclusions"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:98
-msgid "Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are always skipped and do not need listing here. One per line."
-msgstr ""
-
-#: includes/modules/Minify/MinifyModule.php:112
-msgid "Delay Only These Scripts"
+#: includes/modules/Minify/MinifyModule.php:99
+msgid "Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are skipped without being listed here. An entry here also wins over the same script in Delay Only These Scripts. One per line."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:113
-msgid "Script handles OR URL substrings. When non-empty, matching scripts are delayed, plus the known third-party tags xSpeed recognises on its own (analytics, tag managers, chat widgets, review embeds, error trackers) — so a heavy vendor script is postponed even when it is not listed here. Leave empty to delay all scripts (minus the exclusions above). Handles are the more reliable selector — a URL substring has to match the script's original URL, and minification rewrites that to a hashed cache path. One per line."
+msgid "Delay Only These Scripts"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:121
-msgid "Delay Failsafe Timeout (ms)"
+#: includes/modules/Minify/MinifyModule.php:114
+msgid "Script handles OR URL substrings. When non-empty, matching scripts are delayed, plus the known third-party tags xSpeed recognises on its own (analytics, tag managers, chat widgets, review embeds, error trackers) — so a heavy vendor script is postponed even when it is not listed here. Leave empty to delay all scripts (minus the exclusions above). Handles are the more reliable selector — a URL substring has to match the script's original URL, and minification rewrites that to a hashed cache path. Cookie-consent banners are only delayed when an entry names one, for example notificationx or cookiebot. A broad entry such as /plugins/ does not delay them. One per line."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:123
-msgid "Load delayed scripts automatically after this many milliseconds when the visitor never interacts. Set to 0 for interaction-only, with no timer: a timer that fires inside a lab tool's measurement window loads the \"delayed\" scripts anyway and inflates the reported TTI. Keep a non-zero value if a delayed script must eventually run for visitors who never scroll, tap, or type."
+#: includes/modules/Minify/MinifyModule.php:115
+msgid "Consent banners and Delay JS"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:129
-msgid "Combine CSS Files"
+#. translators: %s: comma-separated list of consent plugins, each followed by the word to type in parentheses.
+#: includes/modules/Minify/MinifyModule.php:118
+#, php-format
+msgid "These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Defer / Delay Exclusions always wins."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:130
-msgid "Concatenate enqueued local stylesheets into a single file (with @import and url(…) paths resolved). External CSS is left alone. Pairs poorly with HTTP/2 push — only enable on HTTP/1.1 hosts."
+#: includes/modules/Minify/MinifyModule.php:126
+msgid "Smart Delay (Carry Inline Snippets)"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:127
+msgid "Normally a script is left running at load when inline code on the page depends on it — on builder pages that keeps most scripts eager even with Delay JavaScript on. Smart Delay postpones those scripts anyway and parks their inline snippets with them; everything replays in page order on the first interaction. The most aggressive setting on this page: test menus, sliders, and toggles before leaving it on. Exclusions above still win, and consent banners still run first."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:135
+msgid "Delay Failsafe Timeout (ms)"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:137
+msgid "Load delayed scripts automatically after this many milliseconds when the visitor never interacts. Set to 0 for interaction-only, with no timer: a timer that fires inside a lab tool's measurement window loads the \"delayed\" scripts anyway and inflates the reported TTI. Keep a non-zero value if a delayed script must eventually run for visitors who never scroll, tap, or type."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:143
+msgid "Combine CSS Files"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:144
+msgid "Concatenate enqueued local stylesheets into a single file (with @import and url(…) paths resolved). External CSS is left alone. Pairs poorly with HTTP/2 push — only enable on HTTP/1.1 hosts."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:149
 msgid "Combine JavaScript Files"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:136
+#: includes/modules/Minify/MinifyModule.php:150
 msgid "Concatenate enqueued local scripts into a single file. External scripts + scripts marked async / deferred are left alone. Disable if you hit dependency-order issues; the combiner respects WordPress enqueue order but inline scripts attached via wp_add_inline_script can shift behavior."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:273
+#: includes/modules/Minify/MinifyModule.php:287
 msgid "HTML minification is paused because WP_DEBUG is enabled in wp-config.php. Readable HTML is usually what you want while debugging, so xSpeed leaves the markup alone. Cached pages are served un-minified until WP_DEBUG is turned off."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:274
+#: includes/modules/Minify/MinifyModule.php:288
 msgid "HTML minification is paused because a plugin or theme is returning true from the xspeed_skip_minify filter. Cached pages are served un-minified until that filter stops suppressing it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:279
+#: includes/modules/Minify/MinifyModule.php:293
 msgid "HTML minification is on but currently paused"
 msgstr ""
 
@@ -2798,6 +2914,14 @@ msgstr ""
 msgid "Tells xSpeed which parts of your page count as sections. The defaults cover Elementor, Divi, Bricks, Oxygen, and Beaver Builder — and when none of them match, xSpeed falls back to your page's own top-level sections automatically. Add a class here only if you want to target something specific."
 msgstr ""
 
+#: includes/modules/TurboRender/TurboRenderModule.php:120
+msgid "Excluded classes"
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:121
+msgid "Sections with any of these classes always render right away. Use this when a design overlaps its neighbours — a card that hangs over the section below it gets cut off at the boundary when either section is deferred."
+msgstr ""
+
 #: xspeed.php:220
 msgid "is missing files and could not start, so no new pages are being cached. Pages already in the cache are still being served, and while the plugin is in this state nothing clears them automatically. Deactivating xSpeed empties the cache; reinstalling the plugin restores it. Deactivating alone will not repair the installation."
 msgstr ""
@@ -2856,7 +2980,7 @@ msgstr ""
 msgid "A key is saved. Type to replace it; use ✕ to remove it."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:238
+#. Source: src/components/cache/CacheHero.tsx:245
 #: assets/admin.js
 msgid "Absorbed"
 msgstr ""
@@ -2928,7 +3052,7 @@ msgstr ""
 msgid "Also cleared: %s."
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:181
+#. Source: src/components/overview/Recommendations.tsx:184
 #: assets/admin.js
 msgid "Also worth a look"
 msgstr ""
@@ -2989,7 +3113,7 @@ msgstr ""
 msgid "Automatic cleanup ran %1$s ago — %2$d file(s) removed, %3$d in total."
 msgstr ""
 
-#. Source: src/components/overview/MetricGrid.tsx:47
+#. Source: src/components/overview/MetricGrid.tsx:57
 #: assets/admin.js
 msgid "Avg saved"
 msgstr ""
@@ -3014,17 +3138,17 @@ msgstr ""
 msgid "Benchmark: cached vs uncached (ms)"
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:230
+#. Source: src/components/overview/Recommendations.tsx:233
 #: assets/admin.js
 msgid "Book"
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:221
+#. Source: src/components/overview/Recommendations.tsx:224
 #: assets/admin.js
 msgid "Book a free setup review with our team."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:242
+#. Source: src/components/cache/CacheHero.tsx:249
 #: assets/admin.js
 msgid "bot / 404 requests in 24h — excluded from the hit ratio."
 msgstr ""
@@ -3129,7 +3253,7 @@ msgid "Cache purged"
 msgstr ""
 
 #. Source: src/components/health/HealthHero.tsx:30
-#. Source: src/components/overview/MetricGrid.tsx:46
+#. Source: src/components/overview/MetricGrid.tsx:56
 #: assets/admin.js
 msgid "Cache size"
 msgstr ""
@@ -3151,7 +3275,7 @@ msgstr ""
 
 #. Source: src/components/cache/StatDrilldown.tsx:140
 #. Source: src/components/health/HealthHero.tsx:29
-#. Source: src/components/overview/MetricGrid.tsx:45
+#. Source: src/components/overview/MetricGrid.tsx:55
 #: assets/admin.js
 msgid "Cached pages"
 msgstr ""
@@ -3581,8 +3705,8 @@ msgid "Hide"
 msgstr ""
 
 #. Source: src/components/cache/TrendCharts.tsx:125
-#. Source: src/components/health/HealthHero.tsx:37
-#. Source: src/components/overview/MetricGrid.tsx:44
+#. Source: src/components/health/HealthHero.tsx:42
+#. Source: src/components/overview/MetricGrid.tsx:45
 #: assets/admin.js
 msgid "Hit ratio"
 msgstr ""
@@ -3595,6 +3719,11 @@ msgstr ""
 #. Source: src/components/cache/CacheHero.tsx:217
 #: assets/admin.js
 msgid "Hit Ratio · 24h · origin"
+msgstr ""
+
+#. Source: src/components/health/HealthHero.tsx:42
+#: assets/admin.js
+msgid "Hit ratio (PHP-served only)"
 msgstr ""
 
 #. Source: src/components/cache/TrendCharts.tsx:83
@@ -3667,12 +3796,12 @@ msgstr ""
 msgid "Just say what you want"
 msgstr ""
 
-#. Source: src/components/overview/MetricGrid.tsx:51
+#. Source: src/components/overview/MetricGrid.tsx:61
 #: assets/admin.js
 msgid "Key metrics"
 msgstr ""
 
-#. Source: src/components/overview/MetricGrid.tsx:44
+#. Source: src/components/overview/MetricGrid.tsx:53
 #: assets/admin.js
 msgid "last 24 hours"
 msgstr ""
@@ -3716,6 +3845,11 @@ msgstr ""
 #. Source: src/components/score/ScanCard.tsx:284
 #: assets/admin.js
 msgid "Lighthouse performance, out of 100"
+msgstr ""
+
+#. Source: src/components/cache/CacheHero.tsx:238
+#: assets/admin.js
+msgid "LiteSpeed Static Fast Path is on: cache hits are served by the web server with no PHP, carry no X-XSpeed-Cache header, and are not counted here — so a low ratio reflects the trade you chose, not a broken cache."
 msgstr ""
 
 #. Source: src/App.tsx:456
@@ -4007,7 +4141,7 @@ msgid "On a managed host (xCloud, Cloudways and similar), changing it in their c
 msgstr ""
 
 #. Source: src/components/health/HealthHero.tsx:30
-#. Source: src/components/overview/MetricGrid.tsx:46
+#. Source: src/components/overview/MetricGrid.tsx:56
 #: assets/admin.js
 msgid "on disk"
 msgstr ""
@@ -4118,7 +4252,7 @@ msgstr ""
 msgid "Paste this site’s URL + token into the"
 msgstr ""
 
-#. Source: src/components/overview/MetricGrid.tsx:47
+#. Source: src/components/overview/MetricGrid.tsx:57
 #: assets/admin.js
 msgid "per page load"
 msgstr ""
@@ -4139,6 +4273,11 @@ msgstr ""
 #. Source: src/components/score/ScorePanel.tsx:448
 #: assets/admin.js
 msgid "Performance score and Core Web Vitals."
+msgstr ""
+
+#. Source: src/components/overview/MetricGrid.tsx:52
+#: assets/admin.js
+msgid "PHP-served only — static fast path hits are not counted"
 msgstr ""
 
 #. Source: src/components/score/ScorePanel.tsx:713
@@ -4334,8 +4473,8 @@ msgstr ""
 msgid "Recent changes"
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:116
-#. Source: src/components/overview/Recommendations.tsx:120
+#. Source: src/components/overview/Recommendations.tsx:119
+#. Source: src/components/overview/Recommendations.tsx:123
 #: assets/admin.js
 msgid "Recommended for your site"
 msgstr ""
@@ -4539,7 +4678,7 @@ msgid "See how this site performs for real visitors."
 msgstr ""
 
 #. Source: src/components/health/HealthHero.tsx:29
-#. Source: src/components/overview/MetricGrid.tsx:45
+#. Source: src/components/overview/MetricGrid.tsx:55
 #: assets/admin.js
 msgid "served without PHP"
 msgstr ""
@@ -4812,7 +4951,7 @@ msgstr ""
 msgid "Waiting for connection…"
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:218
+#. Source: src/components/overview/Recommendations.tsx:221
 #: assets/admin.js
 msgid "Want a hand?"
 msgstr ""
@@ -4937,7 +5076,7 @@ msgstr ""
 msgid "You're all set"
 msgstr ""
 
-#. Source: src/components/overview/Recommendations.tsx:131
+#. Source: src/components/overview/Recommendations.tsx:134
 #: assets/admin.js
 msgid "You're all set — no recommendations right now."
 msgstr ""

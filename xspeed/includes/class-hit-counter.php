@@ -233,6 +233,13 @@ final class Hit_Counter {
 		// Cache::static_rewrite_allowed(). So Apache is the lone server that
 		// serves static hits below PHP yet logs them to the SERVER's access
 		// log, which is what we scan here.
+		//
+		// LiteSpeed stays out even with the Static Fast Path opt-in (#509):
+		// its access log records the ORIGINAL request line ("GET / …"), not
+		// the rewritten static-file path, so the needle below can never
+		// match and scanning would only pretend to count. Verified on
+		// OpenLiteSpeed 1.8. Those hits are genuinely uncounted, which the
+		// dashboard discloses via stats.static_hits_uncounted.
 		if ( Server::APACHE !== Server::type() ) {
 			return 0;
 		}

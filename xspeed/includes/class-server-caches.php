@@ -5,7 +5,13 @@
  * xSpeed owns one cache. A LiteSpeed stack has two: ours, and LSCache holding
  * its own copy of the same URL at the server. Purging ours and stopping there
  * left the server still serving the page we had just invalidated — measured on
- * OpenLiteSpeed before this existed.
+ * OpenLiteSpeed before this existed. Two adapters ship: LiteSpeed, and the
+ * nginx FastCGI cache reached through the Nginx Helper plugin.
+ *
+ * Each adapter decides for itself which purges are worth forwarding, from the
+ * `intent` and `scope` on the context. They do not answer alike, and the
+ * reasoning for each lives on the adapter — see `forward_nginx_helper()`,
+ * which stands down on a content purge where `forward_litespeed()` does not.
  *
  * This is the counterpart to Render_Caches. That one clears caches of RENDERED
  * OUTPUT owned by page builders; this one clears caches of whole RESPONSES
@@ -34,8 +40,8 @@ defined( 'ABSPATH' ) || exit;
 final class Server_Caches {
 
 	/*
-	 * There is deliberately no boot()/add_action here. `Cache` calls forward()
-	 * directly, before it fires the public purge actions.
+	 * Forwarding itself is deliberately not a listener. `Cache` calls
+	 * forward() directly, before it fires the public purge actions.
 	 *
 	 * As a listener this would be one callback among many, and WordPress stops
 	 * dispatching an action's remaining callbacks when an earlier one throws —
@@ -44,7 +50,55 @@ final class Server_Caches {
 	 * reported a successful purge. Shipped behaviour should not be hostage to
 	 * that. Third parties still extend through `xspeed_purge_server_caches`
 	 * below, which runs after we have done our own work.
+	 *
+	 * Both built-in adapters are reached only from forward(). Neither
+	 * registers a hook of its own, so this is the single place that decides
+	 * whether a given purge reaches a server cache.
+	 *
+	 * boot() below is the one exception, and it registers nothing that
+	 * forwards — only the end-of-import purge that forward_nginx_helper()'s
+	 * import gate depends on.
 	 */
+
+	/**
+	 * Register the end-of-import purge.
+	 *
+	 * `forward_nginx_helper()` stands down for the length of an import: a
+	 * WXR run fires hundreds of individually-justified purges, and clearing
+	 * the whole nginx zone once per imported post is the waste that gate
+	 * exists to stop. That trade is only correct if a single purge follows
+	 * the import — otherwise the install finishes with nginx still serving
+	 * every pre-import page for the rest of its TTL, which is worse than the
+	 * waste. This is that purge, and nothing else issues it.
+	 *
+	 * `import_end` is WordPress's own signal, fired by the WXR importer and
+	 * by every importer that follows its lead. An importer that fires
+	 * `import_start` and then dies without `import_end` leaves the zone
+	 * stale — the same outcome as not having the gate, so no worse than
+	 * before, and not worth a `shutdown` fallback that would fire a full
+	 * purge on every request that ever touched an importer.
+	 */
+	public static function boot(): void {
+		if ( ! function_exists( 'add_action' ) ) {
+			return;
+		}
+		add_action( 'import_end', array( __CLASS__, 'purge_after_import' ) );
+	}
+
+	/**
+	 * Clear everything once, now that the import is done.
+	 *
+	 * `complete` intent, which is what `Cache::purge_all()` announces by
+	 * default — and the one intent the import gate lets through, so this
+	 * reaches the server layer even though `did_action( 'import_start' )` is
+	 * still true for the rest of the request.
+	 */
+	public static function purge_after_import(): void {
+		if ( ! class_exists( __NAMESPACE__ . '\\Cache' ) ) {
+			return;
+		}
+		Cache::purge_all( 'import finished' );
+	}
 
 	/**
 	 * Forward one purge to every server cache we recognise.
@@ -69,6 +123,18 @@ final class Server_Caches {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG && function_exists( 'error_log' ) ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- built-in integration failure after local invalidation.
 				error_log( '[xspeed] LiteSpeed response purge failed: ' . $e->getMessage() );
+			}
+		}
+
+		// Its own try, for the same reason the LiteSpeed one has its own: two
+		// server caches can be in front of one site, and a bad day for one
+		// adapter must not leave the other serving stale HTML.
+		try {
+			self::forward_nginx_helper( $context );
+		} catch ( \Throwable $e ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG && function_exists( 'error_log' ) ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- built-in integration failure after local invalidation.
+				error_log( '[xspeed] nginx FastCGI response purge failed: ' . $e->getMessage() );
 			}
 		}
 
@@ -104,6 +170,10 @@ final class Server_Caches {
 	 *
 	 * Detected by constant, not plugin path. `LSCWP_V` is defined by the
 	 * plugin bootstrap and survives a renamed folder.
+	 *
+	 * Forwards on every intent, including `content` — unlike the nginx
+	 * adapter, which stands down there. See `forward_nginx_helper()` for why
+	 * the two differ.
 	 *
 	 * @param array<string,mixed> $context Public purge context.
 	 */
@@ -157,6 +227,152 @@ final class Server_Caches {
 		foreach ( array_values( array_unique( $targets ) ) as $target ) {
 			do_action( 'litespeed_purge_url', $target );
 		}
+	}
+
+	/**
+	 * nginx FastCGI full-page cache, through the Nginx Helper plugin.
+	 *
+	 * Forwards on every intent, and on `content` only when Nginx Helper is not
+	 * purging for itself or `xspeed_nginx_helper_defer_content_purge` says
+	 * to. That asymmetry with `forward_litespeed()`, which forwards on all of
+	 * them, is deliberate.
+	 *
+	 * The two server caches are not alike in what a purge costs. LSCache is
+	 * per-site and tag-based: a site purge bumps one tag for one blog. The
+	 * nginx FastCGI zone is ONE directory per WordPress install, and clearing
+	 * it is a recursive unlink of every cached page — on multisite, of every
+	 * site on the network. So the blast radius of forwarding is an order of
+	 * magnitude apart for the same event.
+	 *
+	 * The other half is that we are not the only one purging. Nginx Helper
+	 * hooks `transition_post_status`, `before_delete_post` and the comment
+	 * hooks itself and purges only the URLs the edit touched (the post, the
+	 * homepage, the post's archives), behind its own `enable_purge` option and
+	 * an import guard. Its term hooks purge the homepage alone, which is why
+	 * a renamed or deleted term is `presentation` and still forwards. On a content
+	 * purge it has already done the narrow, correct thing. Forwarding on top
+	 * of that replaced targeted purging with a whole-install wipe at the same
+	 * frequency: publishing one post cleared every cached page on the site,
+	 * and an import cost one full wipe per post. (QA #444.)
+	 *
+	 * That argument only holds while Nginx Helper's `enable_purge` is on. It
+	 * defaults to off, and with it off Nginx Helper purges nothing on a
+	 * content edit. Standing down there left the edited post stale at the
+	 * server for the whole TTL, where before this adapter existed it was
+	 * cleared. So a content purge forwards when Nginx Helper is not purging
+	 * for itself. (QA #448)
+	 *
+	 * The trade that stays: Nginx Helper purges the post, the homepage and
+	 * the post's archives. An ordinary page that lists recent posts is none of
+	 * those, and keeps its old list until the server TTL expires. The
+	 * `xspeed_nginx_helper_defer_content_purge` filter returns to clearing
+	 * the whole zone on every content purge outside an import, for a site that
+	 * needs those pages current.
+	 *
+	 * `presentation` and `complete` still forward, because neither of those is
+	 * something Nginx Helper covers. It has no hook for `switch_theme`,
+	 * `activated_plugin` or `wp_update_nav_menu`, and no notion of a settings
+	 * write or a core update — and each of those changes the markup of every
+	 * page, not a listed few. An unrecognised intent forwards too: a purge
+	 * whose reason we do not know is likelier to need the server layer than
+	 * not, and a redundant purge costs a cold cache while a skipped one costs
+	 * wrong HTML for the whole TTL.
+	 *
+	 * Whether LiteSpeed should also stand down on `content` is a fair question
+	 * and was deliberately not revisited here — it has no targeted self-purge
+	 * to fall back on, so standing it down would leave LSCache stale where
+	 * nginx is merely over-cleared.
+	 *
+	 * @param array<string,mixed> $context Public purge context.
+	 */
+	private static function forward_nginx_helper( array $context ): void {
+		// Guarded rather than assumed: Free is upgraded as a unit, but a
+		// half-copied update can leave this file newer than that one.
+		if ( ! class_exists( __NAMESPACE__ . '\\Host_Page_Caches' ) ) {
+			return;
+		}
+
+		$url   = isset( $context['url'] ) && is_string( $context['url'] ) ? $context['url'] : '';
+		$scope = isset( $context['scope'] ) && is_string( $context['scope'] )
+			? $context['scope']
+			: ( '' !== $url ? 'urls' : 'site' );
+
+		// `urls` is a per-URL purge, which this integration does not do yet —
+		// see Host_Page_Caches. Standing down is the honest answer: the
+		// alternative, treating a one-page purge as a reason to clear the
+		// whole install, is the bug this method exists to fix.
+		if ( 'urls' === $scope || 'none' === $scope ) {
+			return;
+		}
+
+		$intent = isset( $context['intent'] ) && is_string( $context['intent'] ) && '' !== $context['intent']
+			? $context['intent']
+			: 'complete';
+
+		// Nothing to decide on a site with no nginx zone, so the filter below
+		// is only asked when there is one.
+		if ( ! Host_Page_Caches::nginx_helper_is_fastcgi() ) {
+			return;
+		}
+
+		if ( 'content' === $intent ) {
+			/**
+			 * Whether a content purge (a post saved, a comment approved, a
+			 * term added) is left to Nginx Helper instead of clearing the
+			 * whole nginx cache.
+			 *
+			 * Defaults to true when Nginx Helper's automatic purging is on,
+			 * since it has already purged the post, the homepage and the
+			 * post's archives. Return false to clear the whole zone instead,
+			 * for a site whose pages list posts somewhere Nginx Helper does
+			 * not purge.
+			 *
+			 * @param bool                $defer   Whether to leave it to Nginx Helper.
+			 * @param array<string,mixed> $context Public purge context.
+			 */
+			$defer = (bool) apply_filters(
+				'xspeed_nginx_helper_defer_content_purge',
+				Host_Page_Caches::nginx_helper_purges_changes(),
+				$context
+			);
+			if ( $defer ) {
+				return;
+			}
+		}
+
+		// An import is a long run of legitimate purges that each individually
+		// justify a forward — new terms, new menu items — and together clear
+		// the install's cache hundreds of times for one operation. Nginx
+		// Helper stands its own purging down for exactly this (its
+		// `is_import_request()`), and a single purge after the import is both
+		// cheaper and more correct. An explicit `complete` still goes through:
+		// an operator who presses Purge All mid-import means it.
+		if ( 'complete' !== $intent && self::is_importing() ) {
+			return;
+		}
+
+		// No host check, deliberately — the mirror of the one in
+		// forward_litespeed(). There, a purge aimed at another blog must not
+		// flush THIS request's LSCache, because LSCache is per-site. nginx
+		// keys one zone per install, so the other blog's cached pages live in
+		// the same directory as ours: skipping on a foreign host would leave
+		// the pages the purge was actually for still being served. Pro's
+		// Multisite::purge_site() runs inside switch_to_blog() and reaches
+		// here with that blog's host.
+		Host_Page_Caches::purge_nginx_helper();
+	}
+
+	/**
+	 * Whether WordPress is importing content right now.
+	 */
+	private static function is_importing(): bool {
+		if ( defined( 'WP_IMPORTING' ) && WP_IMPORTING ) {
+			return true;
+		}
+
+		// The WXR importer defines WP_IMPORTING, but not every importer does;
+		// `import_start` is the signal the others share.
+		return function_exists( 'did_action' ) && did_action( 'import_start' ) > 0;
 	}
 
 	/**

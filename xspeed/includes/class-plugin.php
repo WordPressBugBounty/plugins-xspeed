@@ -94,14 +94,15 @@ class Plugin {
 		// (Elementor's element cache + generated CSS). Registers a listener
 		// only; nothing runs until Cache::purge_render_caches() asks.
 		Render_Caches::boot();
-		// Server_Caches needs no boot(): Cache::dispatch_purge_event() calls it
-		// directly so a throwing third-party listener cannot skip it.
-
-		// Forward a full purge to a full-page cache owned by the WEB SERVER
-		// (nginx FastCGI, via the host's Nginx Helper install). Registers a
-		// listener on xspeed_after_purge_all only; it stands down unless
-		// that cache is actually configured.
-		Host_Page_Caches::boot();
+		// Forwarding needs no boot(): Cache::dispatch_purge_event() calls
+		// Server_Caches::forward() directly so a throwing third-party listener
+		// cannot skip it. Both built-in server-cache adapters live behind it —
+		// LiteSpeed, and the nginx FastCGI cache reached through the host's
+		// Nginx Helper install (Host_Page_Caches), which is why neither is
+		// booted here. This boot() registers one listener only: the single
+		// purge that runs after an import, which the nginx adapter's import
+		// gate stands down in favour of.
+		Server_Caches::boot();
 
 		// Register Free modules via the same action xspeed-pro uses, so
 		// the bootstrap path is symmetric across tiers.

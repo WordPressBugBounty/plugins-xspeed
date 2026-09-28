@@ -816,6 +816,9 @@ final class Migration {
 			'lazy_iframes' => ! empty( $r['lazyload_iframes'] ),
 			'lazy_videos'  => ! empty( $r['lazyload_youtube'] ),
 		);
+		if ( ! empty( $r['lazyload_css_bg_img'] ) ) {
+			$patch['lazy']['lazy_background_images'] = true;
+		}
 
 		// Separate Mobile Cache — do NOT import this as ON. WP Rocket's
 		// "separate cache files for mobile" is frequently left on by habit even
@@ -836,6 +839,17 @@ final class Migration {
 			if ( ! empty( $r['sitemap_preload_url'] ) && is_array( $r['sitemap_preload_url'] ) ) {
 				$patch['preloader']['sitemap_urls'] = array_values( array_filter( array_map( 'strval', $r['sitemap_preload_url'] ) ) );
 			}
+		}
+
+		// Bloat — WP Rocket's "Disable Emoji" and "Disable WordPress embeds".
+		$bloat = array_filter(
+			array(
+				'disable_emojis' => ! empty( $r['emoji'] ),
+				'disable_oembed' => ! empty( $r['embeds'] ),
+			)
+		);
+		if ( $bloat ) {
+			$patch['bloat'] = $bloat;
 		}
 
 		// CDN — WP Rocket stores CDN hosts in cdn_cnames (array).
@@ -1473,13 +1487,12 @@ final class Migration {
 		}
 
 		// ── Disable bloat ─────────────────────────────────────────────
-		// Only map the one LiteSpeed "remove" toggle with a clean xSpeed
-		// equivalent: removing the emoji + oEmbed scripts ≈ disable_oembed.
-		// (LiteSpeed's optm-emoji_rm strips the wp-emoji + wp-embed pair.)
-		// jQuery-migrate / dashicons / XML-RPC / RSS / REST aren't
-		// LiteSpeed-managed, so we don't guess at them.
+		// optm-emoji_rm is LiteSpeed's only bloat toggle. It used to map to
+		// disable_oembed, which turned oEmbed off unasked and left emojis on
+		// (#217, #532). jQuery-migrate / dashicons / XML-RPC / RSS / REST
+		// aren't LiteSpeed-managed, so we don't guess at them.
 		if ( $on( 'optm-emoji_rm' ) ) {
-			$patch['bloat'] = array( 'disable_oembed' => true );
+			$patch['bloat'] = array( 'disable_emojis' => true );
 		}
 
 		// ── Browser cache (LiteSpeed: cache-browser) ──────────────────

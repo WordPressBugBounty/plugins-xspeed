@@ -3482,6 +3482,14 @@ class Cache {
 	 * Content saves also require this scope while their local operation is a
 	 * complete bucket sweep.
 	 *
+	 * A new term is `content`, not `presentation`. It has no posts yet, so no
+	 * page renders it until a post is saved with it, and that save is its own
+	 * content purge. Classed as presentation, it cleared the host's whole
+	 * nginx cache every time a post was published with a tag that did not
+	 * exist yet, which is most publishing. Renaming or deleting a term stays
+	 * presentation: the new name shows on every post in the term, and Nginx
+	 * Helper purges only the homepage for either. (QA #448)
+	 *
 	 * @return array{scope:string,intent:string,urls:array<int,string>}
 	 */
 	private static function invalidation_for_hook( string $hook ): array {
@@ -3489,7 +3497,6 @@ class Cache {
 			'switch_theme',
 			'activated_plugin',
 			'deactivated_plugin',
-			'created_term',
 			'edited_term',
 			'delete_term',
 			'wp_update_nav_menu',
@@ -5562,6 +5569,23 @@ class Cache {
 			// absorbed before reaching PHP. The dashboard labels the ratio
 			// "origin-layer only" instead of implying it's the full picture. (#118)
 			'edge_cache'   => self::edge_cache_detected(),
+			// LiteSpeed Static Fast Path (#509): the web server serves hits
+			// with no PHP, no way to tag them, and no way to count them. The
+			// dashboard labels the ratio as PHP-layer only so a low number
+			// reads as the trade the user chose, not a fault.
+			//
+			// rewrite_installed() is part of the condition (QA on #513): when
+			// the .htaccess write failed (read-only file), hits still take
+			// the drop-in path and ARE counted — the disclosure would be the
+			// opposite of the truth. Health carries the "block missing"
+			// warning for that state; this flag only speaks when static
+			// serving is genuinely in effect.
+			'static_hits_uncounted' => (
+				Server::LITESPEED === Server::type()
+				&& ! empty( Settings::get()['cache_enabled'] )
+				&& self::static_rewrite_allowed()
+				&& self::rewrite_installed()
+			),
 			/*
 			 * Whether the page cache is actually SERVING, as opposed to
 			 * switched on in settings. The hero read the setting alone and
@@ -6472,6 +6496,26 @@ class Cache {
 		return is_array( $stored ) ? $stored : array();
 	}
 
+	/**
+	 * Strict truthiness for the LiteSpeed Static Fast Path opt-in.
+	 *
+	 * On non-LiteSpeed servers the key is out of the schema and carried by
+	 * preserved_keys(), so a REST/MCP write lands VERBATIM — QA on #513
+	 * stored the string "false" on Apache and the fast path installed
+	 * itself the moment the site moved to LiteSpeed, because
+	 * empty("false") is false. Only an explicit, unambiguous "yes" may
+	 * enable a path that trades away hit tagging; any other value —
+	 * "false", "no", arbitrary junk — stays OFF, which is the default the
+	 * user never left.
+	 */
+	private static function litespeed_optin_enabled( $value ): bool {
+		if ( true === $value || 1 === $value ) {
+			return true;
+		}
+		return is_string( $value )
+			&& in_array( strtolower( trim( $value ) ), array( '1', 'true', 'on', 'yes' ), true );
+	}
+
 	public static function sync_mobile_flag( $enabled = null ): void {
 		if ( null === $enabled ) {
 			$stored  = self::stored_cache_opts();
@@ -6646,10 +6690,22 @@ class Cache {
 	 * header.) See maybe_emit_lscache_headers() for the paired LSCache
 	 * stand-down that stops LiteSpeed's own module from shadowing the
 	 * drop-in.
+	 *
+	 * Opt-in (#509): `litespeed_static_rewrite` re-enables the fast path on
+	 * LiteSpeed for users who value raw TTFB over hit accounting. The trade
+	 * is stated in the setting's copy: statically served hits carry no
+	 * X-XSpeed-Cache header and are not counted (LiteSpeed logs the
+	 * original request line, so even the access-log scan cannot see
+	 * them — see Hit_Counter::collect_server_log_hits()). The drop-in
+	 * default above stays — nobody is surprised into an unverifiable cache.
 	 */
 	public static function static_rewrite_allowed(): bool {
-		// LiteSpeed: drop-in serves hits (visible + counted) — see docblock.
-		if ( Server::LITESPEED === Server::type() ) {
+		// Stored read — reached from boot(); see stored_cache_opts().
+		$opts = self::stored_cache_opts();
+		// LiteSpeed: drop-in serves hits (visible + counted) unless the user
+		// explicitly opted into the static fast path — see docblock.
+		if ( Server::LITESPEED === Server::type()
+			&& ! self::litespeed_optin_enabled( $opts['litespeed_static_rewrite'] ?? false ) ) {
 			return false;
 		}
 		// Apache without mod_headers is in EXACTLY the position LiteSpeed
@@ -6665,8 +6721,6 @@ class Cache {
 		if ( Server::APACHE === Server::type() && ! Server::apache_has_mod_headers() ) {
 			return false;
 		}
-		// Stored read — reached from boot(); see stored_cache_opts().
-		$opts = self::stored_cache_opts();
 		return empty( $opts['mobile_separate'] );
 	}
 
@@ -6786,6 +6840,8 @@ class Cache {
 				return 'Separate Mobile Cache is on, which disables the device-blind static rewrite. Cache hits are served by PHP instead. If your site serves the same HTML to every device, turn it off in Cache settings for much faster hits.';
 			case 'no_mod_headers':
 				return "Apache's mod_headers is not loaded, so the static rewrite cannot mark its responses as cache hits. Enable mod_headers, or leave hits on the PHP path.";
+			case 'litespeed_dropin':
+				return 'On LiteSpeed, cache hits are served by the PHP drop-in so every hit is tagged X-XSpeed-Cache and counted in the hit ratio — LiteSpeed\'s .htaccess engine cannot do either for statically served files. If raw TTFB matters more to you than hit accounting, turn on LiteSpeed Static Fast Path in Cache settings to serve hits straight from the web server.';
 			case 'skipped_nonce':
 				return 'The server config is correct, but pages are not reaching the static cache because they contain nonces, so hits are served by PHP instead. A static file is served with no PHP, so a nonce baked into one could never be refreshed and every anonymous form on the page would break once it expired — keeping these pages on PHP is deliberate. Nonces usually come from plugin widgets; disabling the ones the site does not use lets its pages be served statically again.';
 			default:
@@ -6806,7 +6862,23 @@ class Cache {
 			return '';
 		}
 		if ( Server::LITESPEED === Server::type() ) {
-			return ''; // Intended on LiteSpeed — not a "block".
+			// The opt-in is read RAW (stored_cache_opts), not through
+			// Settings_Manager::get(): the schema's bool coercion is a PHP
+			// cast, and (bool) "false" is true — so a junk string stored on
+			// another server (where the key bypasses the schema) would come
+			// back from the coercion layer as an ENABLE. Raw + the strict
+			// parse below is the same read static_rewrite_allowed() makes,
+			// so the two can't disagree either. (QA on #513)
+			$stored = self::stored_cache_opts();
+			// The intended default — but no longer silent: with the opt-in
+			// off, Health must be able to explain the PHP path and point at
+			// the toggle instead of falling through to "reinstall the block"
+			// advice that cannot work here. (#509)
+			if ( ! self::litespeed_optin_enabled( $stored['litespeed_static_rewrite'] ?? false ) ) {
+				return 'litespeed_dropin';
+			}
+			$cache_opts = Settings_Manager::get( 'cache' );
+			return ! empty( $cache_opts['mobile_separate'] ) ? 'mobile_separate' : '';
 		}
 		if ( Server::APACHE === Server::type() && ! Server::apache_has_mod_headers() ) {
 			return 'no_mod_headers';
@@ -8821,9 +8893,32 @@ class Cache {
 		if ( ! array_key_exists( $type, self::purge_types() ) ) {
 			$type = 'all';
 		}
-		self::purge_type( $type );
 
-		wp_safe_redirect( self::safe_purge_redirect( wp_get_referer() ) );
+		// Answer the browser BEFORE purging. "Purge All" fans out to the local
+		// sweep, the object cache, CSS/edge listeners (outbound HTTP) and
+		// third-party render caches, all in this one request — on a large site
+		// that can outlive PHP-FPM's request_terminate_timeout, FPM kills the
+		// worker mid-purge, and nginx answers the admin's click with a 502.
+		// fastcgi_finish_request() exists on exactly those FPM setups: send
+		// the redirect, close the connection, then keep purging in the same
+		// process. Elsewhere (mod_php, CLI tests) fall back to purge-then-
+		// redirect as before.
+		$redirect = self::safe_purge_redirect( wp_get_referer() );
+		if ( function_exists( 'ignore_user_abort' ) ) {
+			ignore_user_abort( true );
+		}
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 300 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort under safe-mode-like restrictions.
+		}
+		if ( function_exists( 'fastcgi_finish_request' ) ) {
+			wp_safe_redirect( $redirect );
+			fastcgi_finish_request();
+			self::purge_type( $type );
+			exit;
+		}
+
+		self::purge_type( $type );
+		wp_safe_redirect( $redirect );
 		exit;
 	}
 

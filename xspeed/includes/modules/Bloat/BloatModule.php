@@ -7,7 +7,7 @@
  * two filters. Per the SETTINGS.md standard, every toggle ships with a
  * label + description that names the actual ergonomic value.
  *
- * Six toggles, all opt-in (default false). The defaults are
+ * Every toggle is opt-in (default false). The defaults are
  * conservative because every site has at least one plugin that quietly
  * depends on the surface this module strips — better to make the user
  * choose than to break themes on activation.
@@ -43,6 +43,12 @@ final class BloatModule extends Module {
 
 	public function settings_schema(): array {
 		return array(
+			'disable_emojis' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Disable Emojis', 'xspeed' ),
+				'description' => __( 'Remove the emoji detection script and its inline styles from every page. Modern browsers draw emojis natively, so visitors still see them. Saves a script and an inline stylesheet per page.', 'xspeed' ),
+			),
 			'disable_dashicons_frontend' => array(
 				'type'        => 'bool',
 				'default'     => false,
@@ -79,6 +85,36 @@ final class BloatModule extends Module {
 				'label'       => __( 'Strip Block-Editor Styles on Frontend', 'xspeed' ),
 				'description' => __( 'Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched.', 'xspeed' ),
 			),
+			'remove_rsd_link' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Remove RSD Link', 'xspeed' ),
+				'description' => __( 'Drop the Really Simple Discovery link from the page head. Only old desktop blogging clients read it.', 'xspeed' ),
+			),
+			'remove_shortlink' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Remove Shortlink', 'xspeed' ),
+				'description' => __( 'Drop the ?p=123 shortlink tag and header from posts and pages. The shortlinks keep working; they are just no longer advertised.', 'xspeed' ),
+			),
+			'remove_rest_api_links' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Remove REST API Links', 'xspeed' ),
+				'description' => __( 'Drop the /wp-json/ discovery link tag and Link header. The REST API itself stays on; to block it, use the setting below.', 'xspeed' ),
+			),
+			'hide_wp_version' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Hide WordPress Version', 'xspeed' ),
+				'description' => __( 'Remove the WordPress generator tag from pages and feeds, so it no longer states the WordPress version. Other plugins print their own tags; those stay. Script and style URLs still carry ?ver= numbers.', 'xspeed' ),
+			),
+			'disable_self_pingbacks' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Disable Self-Pingbacks', 'xspeed' ),
+				'description' => __( 'Stop WordPress from sending a pingback to your own site when a post links to another of your posts. Pingbacks to other sites are not affected.', 'xspeed' ),
+			),
 			'restrict_rest_to_authed' => array(
 				'type'        => 'bool',
 				'default'     => false,
@@ -109,6 +145,10 @@ final class BloatModule extends Module {
 	 */
 	public function boot_on_init(): void {
 		$opts = Settings_Manager::get( self::SLUG );
+
+		if ( ! empty( $opts['disable_emojis'] ) ) {
+			self::disable_emojis();
+		}
 
 		if ( ! empty( $opts['disable_dashicons_frontend'] ) ) {
 			add_action( 'wp_enqueue_scripts', array( __CLASS__, 'dequeue_dashicons' ), 100 );
@@ -143,6 +183,30 @@ final class BloatModule extends Module {
 			add_action( 'wp_enqueue_scripts', array( __CLASS__, 'dequeue_editor_styles' ), PHP_INT_MAX );
 		}
 
+		if ( ! empty( $opts['remove_rsd_link'] ) ) {
+			remove_action( 'wp_head', 'rsd_link' );
+		}
+
+		if ( ! empty( $opts['remove_shortlink'] ) ) {
+			remove_action( 'wp_head', 'wp_shortlink_wp_head' );
+			remove_action( 'template_redirect', 'wp_shortlink_header', 11 );
+		}
+
+		if ( ! empty( $opts['remove_rest_api_links'] ) ) {
+			remove_action( 'wp_head', 'rest_output_link_wp_head' );
+			remove_action( 'template_redirect', 'rest_output_link_header', 11 );
+			remove_action( 'xmlrpc_rsd_apis', 'rest_output_rsd' );
+		}
+
+		if ( ! empty( $opts['hide_wp_version'] ) ) {
+			remove_action( 'wp_head', 'wp_generator' );
+			add_filter( 'the_generator', '__return_empty_string' );
+		}
+
+		if ( ! empty( $opts['disable_self_pingbacks'] ) ) {
+			add_action( 'pre_ping', array( __CLASS__, 'strip_self_pings' ) );
+		}
+
 		if ( ! empty( $opts['restrict_rest_to_authed'] ) ) {
 			add_filter( 'rest_authentication_errors', array( __CLASS__, 'restrict_rest' ) );
 		}
@@ -154,6 +218,40 @@ final class BloatModule extends Module {
 		}
 		wp_dequeue_style( 'dashicons' );
 		wp_deregister_style( 'dashicons' );
+	}
+
+	/**
+	 * The front-end hooks live in default-filters.php, which loads before
+	 * `init`, so removing them here works. The admin ones are added by
+	 * wp-admin/includes/admin-filters.php, which loads after `init`; they
+	 * are removed on `admin_init` instead. wp_enqueue_emoji_styles is the
+	 * WP 6.4+ path; print_emoji_styles is kept for older cores.
+	 */
+	public static function disable_emojis(): void {
+		remove_action( 'wp_head', 'print_emoji_detection_script', 7 );
+		remove_action( 'embed_head', 'print_emoji_detection_script' );
+		remove_action( 'wp_enqueue_scripts', 'wp_enqueue_emoji_styles' );
+		remove_action( 'enqueue_embed_scripts', 'wp_enqueue_emoji_styles' );
+		remove_action( 'wp_print_styles', 'print_emoji_styles' );
+		remove_filter( 'the_content_feed', 'wp_staticize_emoji' );
+		remove_filter( 'comment_text_rss', 'wp_staticize_emoji' );
+		remove_filter( 'wp_mail', 'wp_staticize_emoji_for_email' );
+		add_filter( 'tiny_mce_plugins', array( __CLASS__, 'strip_tinymce_emoji' ) );
+		add_action( 'admin_init', array( __CLASS__, 'disable_admin_emojis' ) );
+	}
+
+	public static function disable_admin_emojis(): void {
+		remove_action( 'admin_print_scripts', 'print_emoji_detection_script' );
+		remove_action( 'admin_enqueue_scripts', 'wp_enqueue_emoji_styles' );
+		remove_action( 'admin_print_styles', 'print_emoji_styles' );
+	}
+
+	/**
+	 * @param mixed $plugins
+	 * @return mixed
+	 */
+	public static function strip_tinymce_emoji( $plugins ) {
+		return is_array( $plugins ) ? array_values( array_diff( $plugins, array( 'wpemoji' ) ) ) : $plugins;
 	}
 
 	public static function disable_oembed(): void {
@@ -234,6 +332,49 @@ final class BloatModule extends Module {
 		}
 	}
 
+	/**
+	 * `pre_ping` passes the link list by reference.
+	 *
+	 * @param array $links
+	 */
+	public static function strip_self_pings( &$links ): void {
+		if ( ! is_array( $links ) ) {
+			return;
+		}
+		$links = array_values(
+			array_filter(
+				$links,
+				static function ( $link ): bool {
+					return ! self::is_own_url( (string) $link );
+				}
+			)
+		);
+	}
+
+	/**
+	 * Same host (any scheme, any case, with or without www.) and a path
+	 * inside the home path. A plain prefix check missed http:// links on
+	 * an https site, which migrated sites still carry, and matched
+	 * example.test.evil.test as home.
+	 */
+	public static function is_own_url( string $url ): bool {
+		$home_parts = wp_parse_url( (string) home_url() );
+		$parts      = wp_parse_url( $url );
+		if ( ! is_array( $home_parts ) || ! is_array( $parts ) || empty( $parts['host'] ) || empty( $home_parts['host'] ) ) {
+			return false;
+		}
+		$strip = static function ( string $host ): string {
+			$host = strtolower( $host );
+			return 0 === strpos( $host, 'www.' ) ? substr( $host, 4 ) : $host;
+		};
+		if ( $strip( $parts['host'] ) !== $strip( $home_parts['host'] ) ) {
+			return false;
+		}
+		$home_path = rtrim( (string) ( $home_parts['path'] ?? '' ), '/' );
+		$path      = (string) ( $parts['path'] ?? '' );
+		return '' === $home_path || $path === $home_path || 0 === strpos( $path, $home_path . '/' );
+	}
+
 	public static function block_feed(): void {
 		wp_die(
 			esc_html__( 'Feeds are disabled.', 'xspeed' ),
@@ -310,8 +451,8 @@ final class BloatModule extends Module {
 	}
 
 	/**
-	 * Bloat has no master switch -- it is on when any of its disable_* /
-	 * strip_* / restrict_* flags is set. (#363)
+	 * Bloat has no master switch -- it is on when any of its boolean
+	 * flags is set. (#363)
 	 */
 	public function is_active(): ?bool {
 		return $this->any_bool_flag_on();

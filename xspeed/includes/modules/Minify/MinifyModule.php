@@ -20,6 +20,7 @@ namespace XSpeed\Modules\Minify;
 defined( 'ABSPATH' ) || exit;
 
 use XSpeed\Minifier as LegacyMinifier;
+use XSpeed\Minify_Filters;
 use XSpeed\Module;
 use XSpeed\Settings_Manager;
 
@@ -76,7 +77,7 @@ final class MinifyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Delay JavaScript Until Interaction', 'xspeed' ),
-				'description' => __( 'Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are never delayed, so the visitor is still asked before anything else runs.', 'xspeed' ),
+				'description' => __( 'Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are not delayed, so the visitor is still asked before anything else runs. To delay one on purpose, name it in Delay Only These Scripts.', 'xspeed' ),
 			),
 			'async_css' => array(
 				'type'        => 'bool',
@@ -95,7 +96,7 @@ final class MinifyModule extends Module {
 				'default'     => array( 'jquery-core', 'jquery-migrate' ),
 				'item_type'   => 'string',
 				'label'       => __( 'Defer / Delay Exclusions', 'xspeed' ),
-				'description' => __( 'Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are always skipped and do not need listing here. One per line.', 'xspeed' ),
+				'description' => __( 'Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are skipped without being listed here. An entry here also wins over the same script in Delay Only These Scripts. One per line.', 'xspeed' ),
 				// Only relevant once defer OR delay is on — the exclusion list
 				// governs both. Uses the `any` (OR) dependency form. (FBS-82227)
 				'dependsOn'   => array(
@@ -110,7 +111,20 @@ final class MinifyModule extends Module {
 				'default'     => array(),
 				'item_type'   => 'string',
 				'label'       => __( 'Delay Only These Scripts', 'xspeed' ),
-				'description' => __( 'Script handles OR URL substrings. When non-empty, matching scripts are delayed, plus the known third-party tags xSpeed recognises on its own (analytics, tag managers, chat widgets, review embeds, error trackers) — so a heavy vendor script is postponed even when it is not listed here. Leave empty to delay all scripts (minus the exclusions above). Handles are the more reliable selector — a URL substring has to match the script\'s original URL, and minification rewrites that to a hashed cache path. One per line.', 'xspeed' ),
+				'description' => __( 'Script handles OR URL substrings. When non-empty, matching scripts are delayed, plus the known third-party tags xSpeed recognises on its own (analytics, tag managers, chat widgets, review embeds, error trackers) — so a heavy vendor script is postponed even when it is not listed here. Leave empty to delay all scripts (minus the exclusions above). Handles are the more reliable selector — a URL substring has to match the script\'s original URL, and minification rewrites that to a hashed cache path. Cookie-consent banners are only delayed when an entry names one, for example notificationx or cookiebot. A broad entry such as /plugins/ does not delay them. One per line.', 'xspeed' ),
+				'info_title'  => __( 'Consent banners and Delay JS', 'xspeed' ),
+				'info'        => sprintf(
+					/* translators: %s: comma-separated list of consent plugins, each followed by the word to type in parentheses. */
+					__( 'These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Defer / Delay Exclusions always wins.', 'xspeed' ),
+					implode( ', ', Minify_Filters::consent_manager_labels() )
+				),
+				'dependsOn'   => array( 'field' => 'delay_js' ),
+			),
+			'delay_js_smart' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Smart Delay (Carry Inline Snippets)', 'xspeed' ),
+				'description' => __( 'Normally a script is left running at load when inline code on the page depends on it — on builder pages that keeps most scripts eager even with Delay JavaScript on. Smart Delay postpones those scripts anyway and parks their inline snippets with them; everything replays in page order on the first interaction. The most aggressive setting on this page: test menus, sliders, and toggles before leaving it on. Exclusions above still win, and consent banners still run first.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'delay_js' ),
 			),
 			'delay_js_timeout' => array(

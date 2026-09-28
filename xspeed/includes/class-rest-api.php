@@ -439,7 +439,14 @@ class Rest_Api {
 				// renders a callout (+ "Check now" equality probe) from these.
 				'mobile_separate'    => array(
 					'enabled'      => ! empty( Settings::get()['cache_enabled'] ) ? (bool) ( Settings_Manager::get( 'cache' )['mobile_separate'] ?? false ) : false,
-					'blocking'     => $rewrite_capable && 'mobile_separate' === Cache::static_rewrite_block_reason(),
+					// Gated to servers that HAVE a static fast path — see the
+					// matching comment in Admin::bootstrap_payload(): on IIS /
+					// unknown, block_reason still falls through to
+					// mobile_separate and reporting it as "blocking" would nag
+					// about a rewrite that does not exist there (#108).
+					// LiteSpeed joined the capable set with the opt-in (#509).
+					'blocking'     => ( $rewrite_capable || Server::LITESPEED === $server_type )
+						&& 'mobile_separate' === Cache::static_rewrite_block_reason(),
 					'needs_review' => Cache::mobile_separate_needs_review(),
 				),
 			)

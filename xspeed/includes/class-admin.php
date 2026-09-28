@@ -552,7 +552,16 @@ class Admin {
 				// without waiting for a status re-fetch.
 				'mobile_separate' => array(
 					'enabled'      => (bool) ( $opts['cache_enabled'] ? ( Settings_Manager::get( 'cache' )['mobile_separate'] ?? false ) : false ),
-					'blocking'     => $rewrite_capable && 'mobile_separate' === Cache::static_rewrite_block_reason(),
+					// Gated to servers that HAVE a static fast path — on IIS or
+					// an undetected server block_reason still falls through to
+					// mobile_separate, and reporting that as "blocking" would
+					// nag about a rewrite that does not exist there (#108).
+					// LiteSpeed joined the capable set with the Static Fast
+					// Path opt-in (#509); its own refusal (litespeed_dropin)
+					// outranks mobile_separate, so this stays false there
+					// until the opt-in is on.
+					'blocking'     => ( $rewrite_capable || Server::LITESPEED === $server_type )
+						&& 'mobile_separate' === Cache::static_rewrite_block_reason(),
 					'needs_review' => Cache::mobile_separate_needs_review(),
 				),
 				// One consolidated nginx server-block snippet aggregating

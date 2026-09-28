@@ -99,6 +99,12 @@ class Minifier {
 			// plain defer — when both are on, delay wins (the bootstrap
 			// will re-attach as a regular <script> on interaction).
 			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'delay_script_tag' ), 30, 3 );
+			// Smart Delay: a delayed handle's before/after snippets park with
+			// it, or the inline consumer would run at parse time against a
+			// global that now arrives on first interaction. This filter fires
+			// for every inline script WordPress prints, so it also covers
+			// pages the cache buffer never filters.
+			add_filter( 'wp_inline_script_attributes', array( Minify_Filters::class, 'park_smart_inline' ), 30, 2 );
 			add_action( 'wp_footer',         array( Minify_Filters::class, 'print_delay_bootstrap' ), 1000 );
 			// script_loader_tag only fires for wp_enqueue_script()'d assets.
 			// Analytics / pixel / chat-widget tags printed straight into

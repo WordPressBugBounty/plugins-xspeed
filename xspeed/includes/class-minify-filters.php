@@ -186,7 +186,7 @@ final class Minify_Filters {
 			// same pass — over. A consumer reading the rendered HTML (or
 			// our own buffer passes) must still see the opt-out it asked
 			// for.
-			$tag = self::copy_late_attributes( $tag, $pristine );
+			$tag = self::copy_late_attributes( $tag, $pristine, $handle );
 		}
 		// The snapshot was taken on `script_loader_tag`, by which point
 		// `script_loader_src` (priority 10) had ALREADY swapped in the
@@ -231,7 +231,7 @@ final class Minify_Filters {
 	 * @param string $from Tag as the late filter left it.
 	 * @param string $to   Snapshot tag to stamp onto.
 	 */
-	private static function copy_late_attributes( string $from, string $to ): string {
+	private static function copy_late_attributes( string $from, string $to, string $handle ): string {
 		$late_tags = self::open_tags( $from );
 		$to_tags   = self::open_tags( $to );
 		if ( empty( $late_tags ) || empty( $to_tags ) || count( $late_tags ) !== count( $to_tags ) ) {
@@ -255,7 +255,7 @@ final class Minify_Filters {
 		$out = $to;
 		// Right to left: an earlier splice would shift every later offset.
 		for ( $i = count( $to_tags ) - 1; $i >= 0; $i-- ) {
-			$add = self::late_attribute_delta( $late_tags[ $i ]['attrs'], $to_tags[ $i ]['attrs'] );
+			$add = self::late_attribute_delta( $late_tags[ $i ]['attrs'], $to_tags[ $i ]['attrs'], $handle );
 			if ( '' !== $add ) {
 				$out = substr_replace( $out, $add, $to_tags[ $i ]['attrs_end'], 0 );
 			}
@@ -306,12 +306,23 @@ final class Minify_Filters {
 
 	/**
 	 * The attributes present on the late tag but not the snapshot, minus
-	 * the ones our own transforms add.
+	 * the ones OUR transforms put there for this handle.
+	 *
+	 * Only attributes recorded in $our_late_attrs are dropped — a blanket
+	 * defer/type skip threw away a defer the STAMPER set in the same pass
+	 * as its marker. Themify prints main.js with defer + data-no-optimize
+	 * together, and its config rides a deferred data: URI script printed
+	 * just before it; stripping the theme's defer made main.js
+	 * parser-blocking, so it ran ahead of its config and the theme died
+	 * with "themify_vars is not defined". `src` is still never copied:
+	 * it belongs to the snapshot, and restore_marked_script_src() owns
+	 * undoing a minified URL.
 	 *
 	 * @param string $late_attrs Attribute string from the transformed tag.
 	 * @param string $to_attrs   Attribute string from the snapshot tag.
+	 * @param string $handle     Script handle the tags belong to.
 	 */
-	private static function late_attribute_delta( string $late_attrs, string $to_attrs ): string {
+	private static function late_attribute_delta( string $late_attrs, string $to_attrs, string $handle ): string {
 		$pattern = '#\s([-\w:]+)(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*))?#';
 		if ( ! preg_match_all( $pattern, $late_attrs, $late, PREG_SET_ORDER ) ) {
 			return '';
@@ -325,7 +336,7 @@ final class Minify_Filters {
 		$add = '';
 		foreach ( $late as $attr ) {
 			$name = strtolower( $attr[1] );
-			if ( isset( $have[ $name ] ) || in_array( $name, self::OUR_TRANSFORM_ATTRS, true ) ) {
+			if ( isset( $have[ $name ] ) || 'src' === $name || isset( self::$our_late_attrs[ $handle ][ $name ] ) ) {
 				continue;
 			}
 			if ( 0 === strpos( $name, 'data-xs-' ) ) {
@@ -337,19 +348,18 @@ final class Minify_Filters {
 	}
 
 	/**
-	 * Attributes our own transforms add. Copying any of these from the
-	 * transformed tag back onto the snapshot would re-apply the very
-	 * transform we are undoing:
+	 * Attribute names OUR transforms added in this request, keyed by
+	 * handle: defer_script_tag() records `defer`, delay_script_tag()
+	 * records `type` when it parks an inline block. Copying one of these
+	 * from the late tag back onto the snapshot would re-apply the very
+	 * transform the revert is undoing — but the same names coming from a
+	 * STAMPER are the author's intent and must survive, so the skip is
+	 * per-handle, never by name alone. `data-xs-*` is handled by prefix
+	 * separately. (#469)
 	 *
-	 *   defer/async — defer_script_tag()
-	 *   type        — delay_script_tag() parks an inline block as
-	 *                 text/xspeed-delayed; a type the author set is on the
-	 *                 snapshot already and matches by name before we get here
-	 *   src         — belongs to the snapshot, never to the late tag
-	 *
-	 * `data-xs-*` is handled by prefix separately. (#469)
+	 * @var array<string,array<string,true>>
 	 */
-	private const OUR_TRANSFORM_ATTRS = array( 'defer', 'async', 'type', 'src' );
+	private static $our_late_attrs = array();
 
 	/**
 	 * Locate the opening `<script>` that carries the src, falling back to
@@ -549,7 +559,13 @@ final class Minify_Filters {
 		//
 		// The lookahead scans only within the tag (`[^>]*`) for ` src=`, so
 		// an inline `<script id="…-js-before">` can never match.
-		return (string) preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)#i', '<script defer="defer"', $tag, 1 );
+		$deferred = (string) preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)#i', '<script defer="defer"', $tag, 1 );
+		if ( $deferred !== $tag ) {
+			// Remember that THIS defer is ours, so the late opt-out revert
+			// drops it — and only it, never a stamper's own defer.
+			self::$our_late_attrs[ (string) $handle ]['defer'] = true;
+		}
+		return $deferred;
 	}
 
 	/**
@@ -593,7 +609,14 @@ final class Minify_Filters {
 		// delay_js_targets is still delayed — an explicit entry is the user
 		// saying they know the inline consumer is safe to break or absent.
 		if ( isset( self::inline_bound_handles()[ (string) $handle ] )
-			&& ! self::is_user_named_target( (string) $handle, (string) $src ) ) {
+			&& ! self::is_user_named_target( (string) $handle, (string) $src )
+			// Smart Delay inverts this protection: the handle is delayed and
+			// its own before/after snippets are parked WITH it (see
+			// park_smart_inline()), so the consumer no longer runs against a
+			// missing global — it replays after its provider, in page order.
+			// On a builder page nearly every script is inline-bound, which is
+			// why delay-all without this delayed almost nothing.
+			&& ! self::smart_delay_enabled() ) {
 			return $tag;
 		}
 		// A non-executable type means this tag is data, or is being held by
@@ -638,7 +661,7 @@ final class Minify_Filters {
 		// A non-default original type is stashed in data-xs-type so the
 		// bootstrap can restore it on replay (#274 — type is what a script
 		// IS; a parked `type="module"` must come back as a module).
-		$tag = (string) preg_replace_callback(
+		$parked = (string) preg_replace_callback(
 			'#<script\b([^>]*)>#i',
 			static function ( array $m ): string {
 				return '<script' . self::park_type_attrs( $m[1] ) . '>';
@@ -646,7 +669,12 @@ final class Minify_Filters {
 			$tag,
 			1
 		);
-		return $tag;
+		if ( $parked !== $tag ) {
+			// The parked type is ours to drop on a late opt-out revert; an
+			// author-set type sits on the snapshot and survives regardless.
+			self::$our_late_attrs[ (string) $handle ]['type'] = true;
+		}
+		return $parked;
 	}
 
 	/**
@@ -1089,8 +1117,11 @@ final class Minify_Filters {
 				// inline script on the page. Inline code is delayed only on a
 				// positive identification — the body names a known vendor
 				// host, or a fragment the user targeted — and the exclusion
-				// list still wins first.
-				if ( self::is_excluded_script( '', $body ) ) {
+				// list still wins first. A target naming a consent manager
+				// lifts the floor here the same way it does for a src tag;
+				// without it the same entry delayed the file and left the
+				// vendor's inline code eager.
+				if ( self::is_excluded_script( '', $body, true ) ) {
 					return $whole;
 				}
 				if ( ! self::matches_known_third_party( $body ) && ! self::matches_user_targets( $body ) ) {
@@ -1134,65 +1165,44 @@ final class Minify_Filters {
 		$timeout = isset( $opts['delay_js_timeout'] ) ? (int) $opts['delay_js_timeout'] : 8000;
 		$timeout = max( 0, min( 60000, $timeout ) );
 
-		// Tiny vanilla bootstrap; keep it self-contained so the page
-		// has no JS dependencies before the first interaction.
-		?>
-<script id="xspeed-delay-bootstrap">
-(function(){
-  var events=['mousemove','keydown','touchstart','scroll','wheel'];
-  var fired=false;
-  function load(){
-    if(fired)return;fired=true;
-    events.forEach(function(e){window.removeEventListener(e,load,{passive:true,capture:true});});
-    var delayed=document.querySelectorAll('script[data-xs-delay]');
-    delayed.forEach(function(s){
-      var n=document.createElement('script');
-      // A dynamically-created script is async by default, so replayed
-      // EXTERNALS would race each other; async=false restores document
-      // order among the externals. Narrower guarantee, stated plainly:
-      // a replayed INLINE script still executes synchronously at its
-      // replaceChild, i.e. possibly before an earlier external has
-      // finished LOADING — so an inline consumer of a delayed external
-      // is only safe when both were delayed by explicit user targeting
-      // (the inline-bound guard keeps the implicit case eager).
-      n.async=false;
-      // Nonce hiding: a connected element's nonce CONTENT attribute reads
-      // as "", so copying it via the attribute loop would hand the clone
-      // an empty nonce and a nonce-based CSP would block the replay. The
-      // IDL property still carries the real value.
-      if(s.nonce){n.nonce=s.nonce;}
-      Array.prototype.slice.call(s.attributes).forEach(function(a){
-        if(a.name==='data-xs-src'){n.setAttribute('src',a.value);return;}
-        if(a.name==='data-xs-delay')return;
-        if(a.name==='nonce')return;
-        // A parked inline tag's ORIGINAL type (module, mostly) rides in
-        // data-xs-type — restore it, or the replay runs a module as a
-        // classic script and its imports throw. (#274)
-        if(a.name==='data-xs-type'){n.setAttribute('type',a.value);return;}
-        // `type` is what a script IS, not decoration, so it is carried over
-        // — with ONE exception: our own inline parking marker, which exists
-        // only to stop the browser executing the original and must not be
-        // copied onto the replacement. Dropping type wholesale broke two
-        // things: `type="module"` became a classic script (core's Script
-        // Modules — Navigation, lightbox, Query Loop — threw "Cannot use
-        // import statement outside a module" on the default theme), and
-        // `type="text/plain"`, which is precisely how a consent manager
-        // parks a blocked third-party script, became executable again. The
-        // second is a privacy failure, not a broken feature. (#274)
-        if(a.name==='type'&&a.value==='text/xspeed-delayed')return;
-        n.setAttribute(a.name,a.value);
-      });
-      if(!s.hasAttribute('data-xs-src')){n.text=s.text;}
-      s.parentNode.replaceChild(n,s);
-    });
-  }
-  events.forEach(function(e){window.addEventListener(e,load,{passive:true,capture:true});});
-<?php if ( $timeout > 0 ) : ?>
-  setTimeout(load,<?php echo (int) $timeout; ?>);
-<?php endif; ?>
-})();
-</script>
-		<?php
+		// The script is includes/js/delay-bootstrap.js, which also carries
+		// the design notes for the lifecycle replay (#494). `npm run build`
+		// minifies it into assets/delay-bootstrap.min.js; the timeout goes in
+		// place of its one placeholder.
+		//
+		// The tag goes out through wp_print_inline_script_tag(), like Free's
+		// other inline scripts, so a CSP plugin's wp_inline_script_attributes
+		// filter can give it a nonce. Printed bare, a nonce CSP blocked it
+		// and nothing was ever replayed.
+		$js = str_replace( 'XSPEED_DELAY_TIMEOUT', (string) $timeout, self::delay_bootstrap_js() );
+		wp_print_inline_script_tag( $js, array( 'id' => 'xspeed-delay-bootstrap' ) );
+	}
+
+	/** The delay bootstrap's code, read once per request. */
+	private static $delay_bootstrap_js = null;
+
+	/**
+	 * The built delay bootstrap, without the line that records its source.
+	 * If the build is missing, the readable source is valid JS too, only
+	 * larger: printing nothing would leave every delayed script parked for
+	 * good, because the tags are already rewritten by the time this runs.
+	 */
+	private static function delay_bootstrap_js(): string {
+		if ( null !== self::$delay_bootstrap_js ) {
+			return self::$delay_bootstrap_js;
+		}
+		$root  = dirname( __DIR__ );
+		$built = $root . '/assets/delay-bootstrap.min.js';
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local plugin file, not a remote URL.
+		$js = is_readable( $built ) ? (string) file_get_contents( $built ) : '';
+		if ( '' !== $js ) {
+			$js = (string) preg_replace( '#\A/\*[^\n]*\*/\n#', '', $js );
+		} else {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local plugin file, not a remote URL.
+			$js = (string) file_get_contents( $root . '/includes/js/delay-bootstrap.js' );
+		}
+		self::$delay_bootstrap_js = trim( $js );
+		return self::$delay_bootstrap_js;
 	}
 
 	/**
@@ -1808,9 +1818,9 @@ final class Minify_Filters {
 
 	/**
 	 * Consent managers are never deferred, and never delayed by a broad
-	 * setting — only an EXPLICIT delay_js_targets entry naming one lifts
-	 * the floor (see is_excluded_script()); the `xspeed_js_exclusion_floor`
-	 * filter remains the code-level override.
+	 * setting — only a delay_js_targets entry that NAMES the vendor lifts
+	 * the floor (see user_named_consent_manager()); the
+	 * `xspeed_js_exclusion_floor` filter remains the code-level override.
 	 *
 	 * A consent banner is drawn by JavaScript, and it is the one thing on
 	 * the page that has to appear before anything else happens. Delay it
@@ -1894,6 +1904,60 @@ final class Minify_Filters {
 	);
 
 	/**
+	 * What a site owner types to name each floor entry, and what the admin
+	 * shows them. Keyed by CONSENT_MANAGER_FLOOR token; a test holds the two
+	 * in step.
+	 *
+	 * The keyword is the part of the token a person would actually write
+	 * (`cookiebot`, not `consent.cookiebot.com`), and it is always a substring
+	 * of the token, so an entry that names the vendor this way still matches
+	 * the vendor's URL. A brand name that appears nowhere in the URL
+	 * (`cookieyes`, `onetrust`, `cmplz`) is deliberately not a keyword: it
+	 * could never match the tag, so offering it would promise a lift that
+	 * cannot happen. The exact handle always works as well.
+	 *
+	 * Cookiebot in Usercentrics CMP mode loads from web.cmp.usercentrics.eu,
+	 * so the floor catches it as Usercentrics and `usercentrics` names it,
+	 * not `cookiebot`.
+	 */
+	private const CONSENT_MANAGER_NAMES = array(
+		'cookie-law-info'        => array( 'label' => 'CookieYes', 'keyword' => 'cookie-law-info' ),
+		'complianz'              => array( 'label' => 'Complianz', 'keyword' => 'complianz' ),
+		'notificationx'          => array( 'label' => 'NotificationX', 'keyword' => 'notificationx' ),
+		'consent.cookiebot.com'  => array( 'label' => 'Cookiebot', 'keyword' => 'cookiebot' ),
+		'cookie-notice'          => array( 'label' => 'Cookie Notice', 'keyword' => 'cookie-notice' ),
+		'hu-banner'              => array( 'label' => 'Cookie Notice (Cookie Compliance)', 'keyword' => 'hu-banner' ),
+		'gdpr-cookie-compliance' => array( 'label' => 'GDPR Cookie Compliance (Moove)', 'keyword' => 'gdpr-cookie-compliance' ),
+		'app.termly.io'          => array( 'label' => 'Termly', 'keyword' => 'termly' ),
+		'usercentrics.eu'        => array( 'label' => 'Usercentrics', 'keyword' => 'usercentrics' ),
+		'cdn.iubenda.com'        => array( 'label' => 'Iubenda', 'keyword' => 'iubenda' ),
+		'cdn.cookielaw.org'      => array( 'label' => 'OneTrust', 'keyword' => 'cookielaw' ),
+		'borlabs-cookie'         => array( 'label' => 'Borlabs Cookie', 'keyword' => 'borlabs' ),
+		'real-cookie-banner'     => array( 'label' => 'Real Cookie Banner', 'keyword' => 'real-cookie-banner' ),
+		'surecookie'             => array( 'label' => 'SureCookie', 'keyword' => 'surecookie' ),
+	);
+
+	/**
+	 * "Label (keyword)" for every built-in consent manager, for the admin.
+	 *
+	 * Reads the built-in list, not the filtered floor: the admin describes
+	 * what ships, and a site that trimmed the floor in code knows it did.
+	 *
+	 * @return string[]
+	 */
+	public static function consent_manager_labels(): array {
+		$out = array();
+		foreach ( self::CONSENT_MANAGER_FLOOR as $token ) {
+			$name  = self::CONSENT_MANAGER_NAMES[ $token ] ?? array(
+				'label'   => $token,
+				'keyword' => $token,
+			);
+			$out[] = $name['label'] . ' (' . $name['keyword'] . ')';
+		}
+		return $out;
+	}
+
+	/**
 	 * Per-request memo for exclusion_floor(). Null = not resolved.
 	 *
 	 * @var string[]|null
@@ -1929,9 +1993,10 @@ final class Minify_Filters {
 	 * @param string $handle           Script handle ('' on the buffer sweep
 	 *                                 when no id survived).
 	 * @param string $src              Script URL.
-	 * @param bool   $named_lifts_floor Delay paths only: a handle/URL the user
-	 *                                 EXPLICITLY typed into delay_js_targets
-	 *                                 passes the consent floor. Typing a
+	 * @param bool   $named_lifts_floor Delay paths only: a delay_js_targets
+	 *                                 entry that NAMES the consent manager
+	 *                                 passes the floor (see
+	 *                                 user_named_consent_manager()). Typing a
 	 *                                 consent manager's name into an
 	 *                                 allow-list is the site owner taking the
 	 *                                 consent-timing decision back — GDPR is
@@ -1965,8 +2030,11 @@ final class Minify_Filters {
 		// hide the banner. (#275)
 		foreach ( self::exclusion_floor() as $needle ) {
 			if ( self::target_matches( $needle, $handle, $src ) ) {
-				if ( $named_lifts_floor && self::is_user_named_target( $handle, $src ) ) {
-					break;
+				// `continue`, not `break`: a second floor token matching the
+				// same tag has to be named too, or a filter-added token
+				// would be lifted by an entry that names only the first.
+				if ( $named_lifts_floor && self::user_named_consent_manager( $needle, $handle, $src ) ) {
+					continue;
 				}
 				return true;
 			}
@@ -2037,6 +2105,129 @@ final class Minify_Filters {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a delay_js_targets entry NAMES the consent manager whose floor
+	 * token matched this tag, and so lifts the floor for it.
+	 *
+	 * is_user_named_target() is not enough here: it asks whether any entry
+	 * matches the tag, and a delay target is a URL substring. `/plugins/`,
+	 * `.js`, `min.js`, `frontend` or the site's own host each match every
+	 * consent banner on the page, so one broad entry switched the floor off
+	 * for all of them and brought #275 back. An entry names the vendor when
+	 * it is the exact handle, or when it contains the vendor's keyword (or
+	 * its floor token) and still matches the tag, so `notificationx` and
+	 * `/plugins/notificationx/` lift NotificationX, `termly` cannot lift
+	 * Cookiebot, and `/plugins/` lifts nothing.
+	 *
+	 * A token added through `xspeed_js_exclusion_floor` has no keyword, so
+	 * only an entry containing that token, or the exact handle, names it.
+	 *
+	 * @param string $floor_token The floor entry that matched this tag.
+	 * @param string $handle      Script handle ('' when unknown).
+	 * @param string $src         Script URL, or the body on the inline pass.
+	 */
+	private static function user_named_consent_manager( string $floor_token, string $handle, string $src ): bool {
+		$opts    = self::opts();
+		$targets = is_array( $opts['delay_js_targets'] ?? null ) ? $opts['delay_js_targets'] : array();
+		$names   = array( $floor_token );
+		if ( isset( self::CONSENT_MANAGER_NAMES[ $floor_token ] ) ) {
+			$names[] = self::CONSENT_MANAGER_NAMES[ $floor_token ]['keyword'];
+		}
+		foreach ( $targets as $needle ) {
+			$needle = trim( (string) $needle );
+			if ( '' === $needle ) {
+				continue;
+			}
+			$names_it = '' !== $handle && $handle === $needle;
+			foreach ( $names as $name ) {
+				if ( false !== stripos( $needle, $name ) ) {
+					$names_it = true;
+					break;
+				}
+			}
+			if ( $names_it && self::target_matches( $needle, $handle, $src ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Both toggles on: delay_js and its carry-the-inline-snippets mode. */
+	private static function smart_delay_enabled(): bool {
+		$opts = self::opts();
+		return ! empty( $opts['delay_js'] ) && ! empty( $opts['delay_js_smart'] );
+	}
+
+	/**
+	 * Would Smart Delay postpone this handle's tag?
+	 *
+	 * The snippet-parking filter runs when WordPress prints a handle's
+	 * `before` snippet — BEFORE script_loader_tag sees the tag itself — so
+	 * the decision cannot be read back from what happened to the tag; both
+	 * sides evaluate this same predicate. It mirrors the handle/src checks
+	 * of delay_script_tag() only: the tag-level outs there (an optimizer
+	 * opt-out attribute, a non-executable type) are invisible here, so a
+	 * tag that keeps itself eager through one of those can still have its
+	 * snippets parked. That parks an init until first interaction rather
+	 * than throwing, and Smart Delay is opt-in — acceptable, and documented
+	 * on the setting.
+	 */
+	private static function smart_delays_handle( string $handle ): bool {
+		if ( '' === $handle ) {
+			return false;
+		}
+		$src = self::original_src( $handle );
+		if ( self::is_excluded_script( $handle, $src, true ) ) {
+			return false;
+		}
+		return self::is_delay_target( $handle, $src );
+	}
+
+	/**
+	 * Park a delayed handle's own before/after snippet, in Smart Delay mode.
+	 *
+	 * Runs on `wp_inline_script_attributes`, which fires for every inline
+	 * script WordPress prints itself — so it works on pages the HTML buffer
+	 * never filters (a BYPASS route like /cart), where the handle's tag is
+	 * still delayed by script_loader_tag. `-js-extra` stays eager on
+	 * purpose: it is data assignments, harmless early and sometimes read by
+	 * eager code.
+	 *
+	 * @param mixed  $attributes Inline script attributes.
+	 * @param string $javascript The snippet body.
+	 * @return mixed
+	 */
+	public static function park_smart_inline( $attributes, $javascript = '' ) {
+		if ( ! is_array( $attributes ) || ! self::smart_delay_enabled() || self::skip_in_non_frontend_context() ) {
+			return $attributes;
+		}
+		$id = isset( $attributes['id'] ) ? (string) $attributes['id'] : '';
+		if ( ! preg_match( '#^(.+)-js-(?:before|after)$#', $id, $m ) ) {
+			return $attributes;
+		}
+		if ( ! self::smart_delays_handle( $m[1] ) ) {
+			return $attributes;
+		}
+		$type = isset( $attributes['type'] ) ? (string) $attributes['type'] : '';
+		if ( in_array( $type, self::NON_EXECUTABLE_TYPES, true ) ) {
+			return $attributes; // data, or parked by someone else on purpose.
+		}
+		// A delayed document.write replays after the document has closed
+		// and replaces the page. Same rule as delay_inline_snippets().
+		if ( false !== stripos( (string) $javascript, 'document.write' ) ) {
+			return $attributes;
+		}
+		if ( '' !== $type && ! in_array( $type, self::DEFAULT_JS_TYPES, true ) ) {
+			$stash = (string) preg_replace( '#[^a-z0-9/+.\-]#', '', $type );
+			if ( '' !== $stash ) {
+				$attributes['data-xs-type'] = $stash;
+			}
+		}
+		$attributes['type']          = 'text/xspeed-delayed';
+		$attributes['data-xs-delay'] = '1';
+		return $attributes;
 	}
 
 	private static function is_delay_target( string $handle, string $src ): bool {
@@ -2180,6 +2371,7 @@ final class Minify_Filters {
 		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
 		self::$pristine_tag            = array();
+		self::$our_late_attrs          = array();
 	}
 
 	/**

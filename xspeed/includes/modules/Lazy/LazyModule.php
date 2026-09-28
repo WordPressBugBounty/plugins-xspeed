@@ -77,13 +77,19 @@ final class LazyModule extends Module {
 				'label'       => __( 'Lazy-load HTML5 Videos', 'xspeed' ),
 				'description' => __( 'Set preload="none" on self-hosted <video> tags, overriding a player\'s own preload="auto"/"metadata". Autoplaying videos are left alone — they need their bytes regardless. Browsers do not yet support loading="lazy" on video; preload="none" is the closest equivalent.', 'xspeed' ),
 			),
+			'lazy_background_images' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Lazy-load Background Images', 'xspeed' ),
+				'description' => __( 'Hold back background images set in an element\'s inline style (a Cover or Group block, a page-builder section) until the element is near the screen. Uses a small script; visitors without JavaScript get every background as usual. The first N backgrounds on the page load straight away, like images. Backgrounds set in a stylesheet are not affected.', 'xspeed' ),
+			),
 			'eager_first_n'          => array(
 				'type'        => 'int',
 				'default'     => 1,
 				'min'         => 0,
 				'max'         => 10,
 				'label'       => __( 'Eager-load First N Images', 'xspeed' ),
-				'description' => __( 'How many images at the top of the post get loading="eager". 1 is usually right (the LCP hero image). 0 to lazy-load everything.', 'xspeed' ),
+				'description' => __( 'How many images at the top of the post get loading="eager". 1 is usually right (the LCP hero image). 0 to lazy-load everything. Lazy-loaded background images use the same number.', 'xspeed' ),
 			),
 			'add_missing_dimensions' => array(
 				'type'        => 'bool',
@@ -156,6 +162,7 @@ final class LazyModule extends Module {
 			|| ! empty( $opts['lazy_iframes'] )
 			|| ! empty( $opts['lazy_videos'] )
 			|| ! empty( $opts['video_facade'] )
+			|| ! empty( $opts['lazy_background_images'] )
 			|| ! empty( $opts['add_missing_dimensions'] );
 		if ( ! $any_enabled ) {
 			return;
@@ -194,6 +201,13 @@ final class LazyModule extends Module {
 			add_action( 'wp_head', array( $this, 'print_observer_script' ), 1 );
 		}
 
+		// Head, because the rule that holds a background back has to apply
+		// before first paint, or the browser has already requested it.
+		if ( ! empty( $opts['lazy_background_images'] ) ) {
+			add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_background_style' ) );
+			add_action( 'wp_head', array( $this, 'print_background_script' ), 1 );
+		}
+
 		// Same conditional-footer treatment for the autoplay restorer: it is
 		// only printed on a response that actually deferred one.
 		if ( ! empty( $opts['lazy_videos'] ) ) {
@@ -226,6 +240,26 @@ final class LazyModule extends Module {
 		wp_register_style( 'xspeed-video-facade', false, array(), XSPEED_VERSION );
 		wp_enqueue_style( 'xspeed-video-facade' );
 		wp_add_inline_style( 'xspeed-video-facade', \XSpeed\Video_Facade::facade_style() );
+	}
+
+	public function enqueue_background_style(): void {
+		wp_register_style( 'xspeed-lazy-bg', false, array(), XSPEED_VERSION );
+		wp_enqueue_style( 'xspeed-lazy-bg' );
+		wp_add_inline_style( 'xspeed-lazy-bg', Lazy_Loader::background_style() );
+	}
+
+	/**
+	 * data-xs-nodelay: Delay JS would otherwise hold this back until the
+	 * first interaction, and every held background would stay blank.
+	 */
+	public function print_background_script(): void {
+		wp_print_inline_script_tag(
+			Lazy_Loader::background_script(),
+			array(
+				'id'              => 'xspeed-lazy-bg',
+				'data-xs-nodelay' => true,
+			)
+		);
 	}
 
 	/**

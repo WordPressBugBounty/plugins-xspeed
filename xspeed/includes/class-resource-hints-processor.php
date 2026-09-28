@@ -329,6 +329,24 @@ final class Resource_Hints_Processor {
 			$candidates[] = $bg;
 		}
 
+		// PASS 1c — <video poster="…">. A full-screen hero video paints its
+		// poster first, and that first frame IS the LCP; measured on a live
+		// page, a preloaded poster cut the LCP load delay from 1.5 s to 21 ms.
+		foreach ( self::video_poster_candidates( $html, $exclusions, $skip_ranges ) as $vp ) {
+			$candidates[] = $vp;
+		}
+
+		// PASS 1d — background rules in inline <style> blocks. Page builders
+		// put the hero's background-image in generated per-post CSS printed
+		// inline (Elementor's `.elementor-N .elementor-element-X` rules), not
+		// in a style attribute — so PASS 1b never saw the element that
+		// actually paints as LCP on five of seven measured sites. External
+		// stylesheets stay out for the same reasons as before (#247): fetching
+		// CSS from an output-buffer pass costs more than the preload saves.
+		foreach ( self::style_block_candidates( $html, $exclusions, $skip_ranges ) as $sb ) {
+			$candidates[] = $sb;
+		}
+
 		if ( empty( $candidates ) ) {
 			return array( $html, '' );
 		}
@@ -475,6 +493,245 @@ final class Resource_Hints_Processor {
 		}
 
 		return $found;
+	}
+
+	/**
+	 * Collect `<video poster="…">` first frames as LCP candidates.
+	 *
+	 * The poster is what the viewer sees until (and unless) the video plays —
+	 * on a background-video hero, delayed by the Lazy module, it is the ONLY
+	 * frame the initial paint has. Scored like a background: the element's
+	 * declared inline-style area, or the unknown-size floor, with the order
+	 * offset past every <img> so a poster never ties ahead of one.
+	 *
+	 * @param string                        $html        Full page HTML.
+	 * @param string[]                      $exclusions  Substring patterns the user excluded.
+	 * @param array<int,array{0:int,1:int}> $skip_ranges Byte ranges of chrome containers.
+	 * @return array<int,array{tag:string,src:string,srcset:string,sizes:string,score:float,order:int,background:bool}>
+	 */
+	private static function video_poster_candidates( string $html, array $exclusions, array $skip_ranges ): array {
+		if ( ! preg_match_all( '#<video\b[^>]*\bposter\s*=\s*(["\'])(.*?)\1[^>]*>#i', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
+			return array();
+		}
+
+		$found = array();
+		foreach ( $matches[0] as $index => $match ) {
+			[ $tag, $offset ] = $match;
+			$src              = trim( html_entity_decode( $matches[2][ $index ][0], ENT_QUOTES ) );
+			if ( '' === $src || 0 === stripos( $src, 'data:' ) ) {
+				continue;
+			}
+			if ( self::offset_in_ranges( $offset, $skip_ranges ) ) {
+				continue;
+			}
+			foreach ( $exclusions as $needle ) {
+				if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
+					continue 2;
+				}
+			}
+			if ( self::looks_too_small( $tag ) ) {
+				continue;
+			}
+
+			$area = self::style_area( self::attr( $tag, 'style' ) );
+			if ( 0 === $area ) {
+				$area = self::UNKNOWN_SIZE_SCORE;
+			}
+
+			$found[] = array(
+				'tag'        => $tag,
+				'src'        => $src,
+				'srcset'     => '',
+				'sizes'      => '',
+				'score'      => (float) $area,
+				'order'      => 100000 + $index,
+				'background' => true,
+			);
+		}
+
+		return $found;
+	}
+
+	/**
+	 * How many <style>-block background rules are considered per page. The
+	 * scan is linear, but each rule costs one class-lookup pass over the
+	 * body, so a pathological page (thousands of generated rules) is capped
+	 * rather than trusted.
+	 */
+	private const STYLE_RULE_BUDGET = 40;
+
+	/**
+	 * Collect background-image rules from inline <style> blocks whose
+	 * selector matches an element in the body.
+	 *
+	 * The match is deliberately narrow: the rule's RIGHTMOST simple selector
+	 * must carry a class or id, and the first element in the body bearing it
+	 * (outside chrome containers) is taken as the painted element. Rules
+	 * inside @media (or any other at-rule block) are skipped — a desktop-only
+	 * background preloaded on mobile is a wasted high-priority fetch, and the
+	 * markup gives no viewport to resolve the query against.
+	 *
+	 * @param string                        $html        Full page HTML.
+	 * @param string[]                      $exclusions  Substring patterns the user excluded.
+	 * @param array<int,array{0:int,1:int}> $skip_ranges Byte ranges of chrome containers.
+	 * @return array<int,array{tag:string,src:string,srcset:string,sizes:string,score:float,order:int,background:bool}>
+	 */
+	private static function style_block_candidates( string $html, array $exclusions, array $skip_ranges ): array {
+		if ( ! preg_match_all( '#<style\b[^>]*>(.*?)</style\s*>#is', $html, $blocks ) ) {
+			return array();
+		}
+
+		$found  = array();
+		$budget = self::STYLE_RULE_BUDGET;
+		foreach ( $blocks[1] as $css ) {
+			if ( $budget <= 0 ) {
+				break;
+			}
+			$css = self::strip_at_rule_blocks( $css );
+			if ( false === stripos( $css, 'url(' ) ) {
+				continue;
+			}
+			// One flat rule at a time: selector list up to '{', body to '}'.
+			if ( ! preg_match_all( '#(?:^|})\s*([^{}]{1,512})\{([^{}]*)\}#s', $css, $rules, PREG_SET_ORDER ) ) {
+				continue;
+			}
+			foreach ( $rules as $rule ) {
+				if ( $budget <= 0 ) {
+					break 2;
+				}
+				if ( false === stripos( $rule[2], 'url(' ) ) {
+					continue;
+				}
+				$src = self::background_url( $rule[2] );
+				if ( '' === $src ) {
+					continue;
+				}
+				--$budget;
+				// First selector of the list, rightmost compound of it.
+				$selector = trim( (string) strtok( $rule[1], ',' ) );
+				$parts    = preg_split( '#[\s>+~]+#', $selector );
+				$last     = (string) end( $parts );
+				// The last class or id token of that compound. Pseudo-classes
+				// (:hover, ::before) mean the background is not the initial
+				// paint, so they disqualify the rule.
+				if ( false !== strpos( $last, ':' ) ) {
+					continue;
+				}
+				if ( ! preg_match( '#([.\#])([-\w]+)$#', $last, $tok ) ) {
+					continue;
+				}
+				$el = '.' === $tok[1]
+					? self::first_element_with_class( $html, $tok[2], $skip_ranges )
+					: self::first_element_with_id( $html, $tok[2], $skip_ranges );
+				if ( null === $el ) {
+					continue;
+				}
+				[ $tag, $offset ] = $el;
+				foreach ( $exclusions as $needle ) {
+					if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
+						continue 2;
+					}
+				}
+				if ( self::looks_too_small( $tag ) ) {
+					continue;
+				}
+				$area = self::style_area( self::attr( $tag, 'style' ) );
+				if ( 0 === $area ) {
+					$area = self::UNKNOWN_SIZE_SCORE;
+				}
+				$found[] = array(
+					'tag'        => $tag,
+					'src'        => $src,
+					'srcset'     => '',
+					'sizes'      => '',
+					'score'      => (float) $area,
+					// Offset past the inline-style backgrounds: a rule-matched
+					// background is one inference step less certain, so it must
+					// never tie ahead of one read straight off the element.
+					'order'      => 200000 + $offset,
+					'background' => true,
+				);
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * CSS with every at-rule BLOCK (@media, @supports, @container, …) removed,
+	 * by brace depth — a regex cannot pair nested braces. Flat at-rules
+	 * (@import, @charset) have no block and pass through harmlessly.
+	 */
+	private static function strip_at_rule_blocks( string $css ): string {
+		$out = '';
+		$len = strlen( $css );
+		$i   = 0;
+		while ( $i < $len ) {
+			$at = strpos( $css, '@', $i );
+			if ( false === $at ) {
+				return $out . substr( $css, $i );
+			}
+			$brace = strpos( $css, '{', $at );
+			$semi  = strpos( $css, ';', $at );
+			$out  .= substr( $css, $i, $at - $i );
+			if ( false === $brace || ( false !== $semi && $semi < $brace ) ) {
+				// Flat at-rule — skip to its semicolon (or end).
+				$i = false === $semi ? $len : $semi + 1;
+				continue;
+			}
+			// Block at-rule — skip to its matching close brace.
+			$depth = 1;
+			$i     = $brace + 1;
+			while ( $i < $len && $depth > 0 ) {
+				$c = $css[ $i ];
+				if ( '{' === $c ) {
+					++$depth;
+				} elseif ( '}' === $c ) {
+					--$depth;
+				}
+				++$i;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * The first element in the BODY carrying $class (outside chrome ranges),
+	 * as [tag, offset], or null. Body-only, so a head <meta> can never match
+	 * and a hit's offset is comparable with the chrome ranges.
+	 *
+	 * @return array{0:string,1:int}|null
+	 */
+	private static function first_element_with_class( string $html, string $class, array $skip_ranges ): ?array {
+		$body = stripos( $html, '<body' );
+		$from = false === $body ? 0 : $body;
+		if ( ! preg_match_all( '#<[a-z][^>]*\bclass\s*=\s*(["\'])[^"\']*(?<![-\w])' . preg_quote( $class, '#' ) . '(?![-\w])[^"\']*\1[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE, $from ) ) {
+			return null;
+		}
+		foreach ( $m[0] as $match ) {
+			if ( ! self::offset_in_ranges( $match[1], $skip_ranges ) ) {
+				return array( $match[0], $match[1] );
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The first element carrying id="$id" (outside chrome ranges), as
+	 * [tag, offset], or null.
+	 *
+	 * @return array{0:string,1:int}|null
+	 */
+	private static function first_element_with_id( string $html, string $id, array $skip_ranges ): ?array {
+		$body = stripos( $html, '<body' );
+		$from = false === $body ? 0 : $body;
+		if ( ! preg_match( '#<[a-z][^>]*\bid\s*=\s*(["\'])' . preg_quote( $id, '#' ) . '\1[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE, $from ) ) {
+			return null;
+		}
+		if ( self::offset_in_ranges( $m[0][1], $skip_ranges ) ) {
+			return null;
+		}
+		return array( $m[0][0], $m[0][1] );
 	}
 
 	/**

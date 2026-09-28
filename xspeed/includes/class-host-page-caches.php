@@ -48,19 +48,18 @@ defined( 'ABSPATH' ) || exit;
  * path string: a renamed plugin folder must not silently turn the integration
  * off. Same rule as Render_Caches.
  *
- * Deliberately purge-ALL only. Nginx Helper's per-URL entry point is a method
- * call on its purger object rather than an action, and `Cache::purge_url()`
- * has no action to hook yet; forwarding single URLs is a separate change once
- * that seam lands.
+ * **This class is the mechanism, not the policy.** It knows how to detect the
+ * server cache and how to ask Nginx Helper to clear it. WHEN to ask is decided
+ * one level up, by `Server_Caches::forward()`, from the `intent` and `scope`
+ * on the purge-event contract — which is also where the reasoning for standing
+ * down on a content purge is written. Nothing here listens to a hook.
  *
- * **Converges with `Server_Caches` later.** PR #348 introduces that class for
- * the same idea — forwarding a purge to a cache in front of PHP — with
- * LiteSpeed as its first adapter and `xspeed_purge_server_caches` as its
- * public seam. Nothing this class does overlaps with it today (different
- * server cache, different plugin, and the purge sets are disjoint), so the two
- * can land independently. Once #348 is merged, the right shape for this is an
- * adapter registered on that filter rather than its own listener; keeping it
- * separate now is what avoids editing a branch that is out for re-test.
+ * Purge-ALL only. Nginx Helper's per-URL entry point is
+ * `$GLOBALS['nginx_purger']->purge_url()`, a method on its purger object
+ * rather than an action, and it calls `is_page()`/`is_single()` internally —
+ * which emits `_doing_it_wrong` outside a main query, so WP-CLI, cron and REST
+ * purges would warn. The contract already carries the exact `urls`, so
+ * per-URL forwarding is a follow-up rather than a redesign.
  *
  * **Multisite:** nginx keys one cache zone per *install*, not per subsite, so
  * a purge here clears every site on the network at the nginx layer. That is
@@ -85,57 +84,31 @@ final class Host_Page_Caches {
 	private const NH_FASTCGI = 'enable_fastcgi';
 
 	/**
-	 * Re-entrancy latch. See purge_nginx_helper().
-	 *
-	 * @var bool
-	 */
-	private static bool $purging = false;
-
-	/**
-	 * Register the listener.
-	 *
-	 * Registration is unconditional and the gate lives in the callback: this
-	 * runs from `Plugin::init()` on `plugins_loaded`, and Nginx Helper builds
-	 * `$GLOBALS['nginx_purger']` from its own `plugins_loaded` callback, so
-	 * load order decides whether a check made here would see it. The callback
-	 * runs during a purge, long after both plugins are up, where the answer
-	 * is stable.
-	 */
-	public static function boot(): void {
-		add_action( 'xspeed_after_purge_all', array( __CLASS__, 'purge_nginx_helper' ), 10, 1 );
-	}
-
-	/**
 	 * Forward a full purge to the server-level cache, when there is one.
 	 *
-	 * @param string $cause Who asked. Threaded through for symmetry with the
-	 *                      other `xspeed_after_purge_all` listeners; Nginx
-	 *                      Helper's action takes no arguments.
+	 * No gate on the purge's reason here — `Server_Caches::forward()` has
+	 * already decided this purge should reach the server layer. Detection is
+	 * still checked, because it is a fact about the environment rather than
+	 * about the purge, and it is only stable at purge time: Nginx Helper
+	 * builds `$GLOBALS['nginx_purger']` from its own `plugins_loaded`
+	 * callback, so anything asked earlier races its load order.
+	 *
+	 * Re-entrancy is handled upstream. A third-party listener on
+	 * `rt_nginx_helper_purge_all` that calls back into `Cache::purge_all()`
+	 * used to recurse here until PHP ran out of stack, which is what the
+	 * latch this method once carried was for. The inner purge now re-enters
+	 * `Cache::dispatch_purge_event()`, whose `$purge_events_in_flight` guard
+	 * is still held by the outer one and returns before any adapter runs.
+	 * Pinned by a test that recurses through `Cache::purge_all()` itself
+	 * rather than through this method.
+	 *
 	 * @return bool Whether the purge was forwarded.
 	 */
-	public static function purge_nginx_helper( $cause = 'manual' ): bool {
-		unset( $cause );
-
-		/*
-		 * Nginx Helper's purge is a directory sweep, but it is not OUR code:
-		 * it runs third-party listeners on `rt_nginx_helper_purge_all`, and a
-		 * site can easily have one that calls back into a WordPress purge —
-		 * a "keep every cache in sync" mu-plugin is the common shape. Without
-		 * this latch that lands back in Cache::purge_all(), which fires
-		 * `xspeed_after_purge_all` again, and the two purges recurse until PHP
-		 * runs out of stack. One forward per request is all this integration
-		 * can usefully do anyway, since the second sweep would find an empty
-		 * directory.
-		 */
-		if ( self::$purging ) {
-			return false;
-		}
-
+	public static function purge_nginx_helper(): bool {
 		if ( ! self::nginx_helper_is_fastcgi() ) {
 			return false;
 		}
 
-		self::$purging = true;
 		try {
 			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Nginx Helper's own public integration hook; an xspeed_-prefixed name would reach nothing.
 			do_action( 'rt_nginx_helper_purge_all' );
@@ -147,12 +120,12 @@ final class Host_Page_Caches {
 			 * admin presses Purge All, another plugin's mu-plugin fatals, and
 			 * the failure reads as xSpeed's. The local sweep has already
 			 * happened by the time we run, so swallowing this costs the
-			 * server layer and nothing else. `Server_Caches::forward()` on
-			 * #348 catches at the same boundary for the same reason.
+			 * server layer and nothing else. `Server_Caches::forward()`
+			 * catches around this call for the same reason and logs it under
+			 * WP_DEBUG; this inner catch is what turns a throw into an honest
+			 * "not forwarded" return rather than a reported purge.
 			 */
 			return false;
-		} finally {
-			self::$purging = false;
 		}
 
 		return true;
@@ -200,7 +173,8 @@ final class Host_Page_Caches {
 	 * when I press Purge All". Reading it as the latter would leave an
 	 * explicit, operator-initiated purge silently short of the layer actually
 	 * serving the page, which is the exact failure this integration exists to
-	 * fix.
+	 * fix. `nginx_helper_purges_changes()` does read it, only to decide
+	 * whether a content purge can be left to Nginx Helper.
 	 */
 	public static function nginx_helper_is_fastcgi(): bool {
 		return null !== self::nginx_helper_cache_path();
@@ -229,6 +203,21 @@ final class Host_Page_Caches {
 			return null;
 		}
 		return $path;
+	}
+
+	/**
+	 * Whether Nginx Helper purges changed pages by itself.
+	 *
+	 * Its `enable_purge` option is the one switch in front of all of its
+	 * automatic purging: the post, comment and term hooks each return early
+	 * without it. It defaults to off, so an install where the host never
+	 * turned it on purges nothing when a post is published. Not part of the
+	 * detection gate above; `Server_Caches` asks it only to decide whether a
+	 * content purge can be left to Nginx Helper.
+	 */
+	public static function nginx_helper_purges_changes(): bool {
+		$options = get_site_option( self::NH_OPTION );
+		return is_array( $options ) && ! empty( $options['enable_purge'] );
 	}
 
 	/**

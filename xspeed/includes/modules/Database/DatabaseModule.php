@@ -56,6 +56,79 @@ final class DatabaseModule extends Module {
 				'label'       => __( 'Auto-Cleanup Types', 'xspeed' ),
 				'description' => __( 'Which cleanup categories run on the schedule above. Leave empty to keep auto-cleanup disabled even if a schedule is set.', 'xspeed' ),
 			),
+			'limit_revisions' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Limit Post Revisions', 'xspeed' ),
+				'description' => __( 'Cap how many revisions WordPress keeps for each post. Cleanup removes revisions that already exist; this stops them piling up again.', 'xspeed' ),
+			),
+			'revisions_to_keep' => array(
+				'type'        => 'int',
+				'default'     => 5,
+				'min'         => 0,
+				'max'         => 500,
+				'label'       => __( 'Revisions to Keep', 'xspeed' ),
+				'description' => __( 'Used when Limit Post Revisions is on. 0 turns revisions off completely. Older revisions are trimmed the next time each post is saved; to remove the backlog now, clean Post Revisions above.', 'xspeed' ),
+			),
+		);
+	}
+
+	/**
+	 * WP_POST_REVISIONS as wp-config.php (or an earlier plugin) set it, or
+	 * null when nobody did. Read in boot(), on plugins_loaded: after that,
+	 * core defines it as `true` itself, so defined() stops telling the two
+	 * cases apart.
+	 *
+	 * Not the schema's `constants` pinning (#398): that tests defined() at
+	 * request time, when core's own default makes it always true.
+	 *
+	 * @var bool|int|null
+	 */
+	private static $configured_revisions = null;
+
+	/**
+	 * @param int      $num  Revisions WordPress would keep; -1 means all.
+	 * @param \WP_Post $post
+	 * @return int
+	 */
+	public static function filter_revisions_to_keep( $num, $post ) {
+		// A wp-config.php value is the site owner's decision; leave it alone.
+		if ( null !== self::$configured_revisions ) {
+			return $num;
+		}
+		// Core already answered 0 for post types without revision support.
+		if ( ! $post instanceof \WP_Post || ! post_type_supports( $post->post_type, 'revisions' ) ) {
+			return $num;
+		}
+		$opts = Settings_Manager::get( self::SLUG );
+		if ( empty( $opts['limit_revisions'] ) ) {
+			return $num;
+		}
+		return max( 0, (int) ( $opts['revisions_to_keep'] ?? 5 ) );
+	}
+
+	public function ui_notices(): array {
+		if ( null === self::$configured_revisions ) {
+			return array();
+		}
+		$value = self::$configured_revisions;
+		if ( true === $value ) {
+			$shown = 'true';
+		} elseif ( false === $value ) {
+			$shown = 'false';
+		} else {
+			$shown = (string) (int) $value;
+		}
+		return array(
+			array(
+				'tone'  => 'info',
+				'title' => __( 'The revision limit is set outside xSpeed', 'xspeed' ),
+				'body'  => sprintf(
+					/* translators: %s: value of WP_POST_REVISIONS, e.g. 5 or false. */
+					__( 'WP_POST_REVISIONS is set to %s, usually in wp-config.php, so Limit Post Revisions below has no effect. Remove that definition to manage the limit here.', 'xspeed' ),
+					$shown
+				),
+			),
 		);
 	}
 
@@ -109,6 +182,8 @@ final class DatabaseModule extends Module {
 	}
 
 	public function boot(): void {
+		self::$configured_revisions = defined( 'WP_POST_REVISIONS' ) ? constant( 'WP_POST_REVISIONS' ) : null;
+		add_filter( 'wp_revisions_to_keep', array( __CLASS__, 'filter_revisions_to_keep' ), 10, 2 );
 		add_action( Database_Cleaner::CRON_HOOK, array( Database_Cleaner::class, 'cron_tick' ) );
 		add_action( 'update_option_xspeed_module_database', array( $this, 'on_settings_change' ), 10, 2 );
 		add_action( 'add_option_xspeed_module_database', array( $this, 'on_settings_added' ), 10, 2 );
@@ -119,6 +194,14 @@ final class DatabaseModule extends Module {
 	}
 
 	public function on_settings_change( $old, $new ): void {
+		// A revision-limit save must not reschedule cleanup: apply_schedule()
+		// restarts the timer, which pulled a weekly run forward on every save.
+		$old = is_array( $old ) ? $old : array();
+		if ( is_array( $new )
+			&& ( $old['schedule'] ?? null ) === ( $new['schedule'] ?? null )
+			&& ( $old['included_types'] ?? null ) === ( $new['included_types'] ?? null ) ) {
+			return;
+		}
 		$schedule = is_array( $new ) ? (string) ( $new['schedule'] ?? 'manual' ) : 'manual';
 		$types    = is_array( $new ) && isset( $new['included_types'] ) && is_array( $new['included_types'] ) ? $new['included_types'] : array();
 		Database_Cleaner::apply_schedule( $schedule, $types );

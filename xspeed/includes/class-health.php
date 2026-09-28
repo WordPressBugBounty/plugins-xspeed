@@ -184,6 +184,12 @@ final class Health {
 			// right place to pay for the probe when we DO run it (the admin
 			// bootstrap reads cache-only so it never blocks); the 5-minute
 			// transient still throttles repeat runs. (FBS-82142)
+			// LiteSpeed never pays for the probe, even with the Static Fast
+			// Path opt-in on (#509): OLS can't stamp the HIT header, so the
+			// probe can't distinguish "static-served" from "PHP-served"
+			// there and no LiteSpeed card below consumes its verdict — the
+			// card reports the installed state instead. A probe nothing
+			// reads is just a needless loopback self-request per paint.
 			$probe     = ( Server::LITESPEED === $server_type )
 				? array( 'active' => false )
 				: Cache::probe_static_rewrite( true );
@@ -270,20 +276,64 @@ final class Health {
 					'snippet' => Cache::full_nginx_server_block(),
 				);
 			} elseif ( Server::LITESPEED === $server_type ) {
-				// LiteSpeed intentionally does NOT use the .htaccess static
-				// rewrite: OpenLiteSpeed's .htaccess engine ignores
-				// mod_headers (so we can't stamp X-XSpeed-Cache: HIT) and has
-				// no per-rule access_log (so a static hit can't be counted).
-				// We route LiteSpeed hits through the PHP drop-in instead, so
-				// every hit is both visible (X-XSpeed-Cache: HIT) and counted
-				// in the hit-ratio — see Cache::static_rewrite_allowed(). This
-				// is the healthy, expected state on LiteSpeed, not a fallback.
-				$out[] = array(
-					'id'     => 'static_rewrite_litespeed',
-					'tone'   => self::OK,
-					'label'  => 'Cache serving (LiteSpeed)',
-					'detail' => 'Cache hits are served by xSpeed\'s drop-in and tagged X-XSpeed-Cache: HIT — so every hit is visible and counted in your hit-ratio. (LiteSpeed\'s .htaccess can\'t add that header or log static hits, so xSpeed serves them itself for accurate reporting.)',
-				);
+				// LiteSpeed defaults to the PHP drop-in — its .htaccess engine
+				// ignores mod_headers (no X-XSpeed-Cache stamp) and has no
+				// per-rule access_log, so a static hit would be invisible. The
+				// LiteSpeed Static Fast Path setting (#509) lets the user opt
+				// into web-server serving anyway; each state gets its own card
+				// so the trade the user made (or can make) is always stated.
+				if ( 'litespeed_dropin' === $block_reason ) {
+					// The intended default — healthy, not a fallback.
+					$out[] = array(
+						'id'     => 'static_rewrite_litespeed',
+						'tone'   => self::OK,
+						'label'  => 'Cache serving (LiteSpeed)',
+						'detail' => 'Cache hits are served by xSpeed\'s drop-in and tagged X-XSpeed-Cache: HIT — so every hit is visible and counted in your hit-ratio. (LiteSpeed\'s .htaccess can\'t add that header or log static hits, so xSpeed serves them itself for accurate reporting.) Prefer raw speed over hit accounting? Turn on LiteSpeed Static Fast Path in Cache settings to serve hits straight from the web server with no PHP — how much that saves depends on how quickly PHP answers on this host.',
+					);
+				} elseif ( 'mobile_separate' === $block_reason ) {
+					$out[] = array(
+						'id'     => 'static_rewrite_litespeed',
+						'tone'   => self::WARN,
+						'label'  => 'Static-file rewrite (LiteSpeed)',
+						'detail' => 'LiteSpeed Static Fast Path is on, but the static rewrite is disabled because Separate Mobile Cache is on.' . $mobile_block,
+					);
+				} elseif ( 'skipped_nonce' === $block_reason ) {
+					$out[] = array(
+						'id'     => 'static_rewrite_litespeed',
+						'tone'   => self::WARN,
+						'label'  => 'Static-file rewrite (LiteSpeed)',
+						'detail' => self::nonce_skip_detail( $skip ),
+					);
+				} elseif ( ! Cache::rewrite_installed() ) {
+					// Say WHY it is missing when we can tell. "Re-save to
+					// reinstall" on a read-only .htaccess is advice that
+					// cannot work — the same write that failed just fails
+					// again — and meanwhile the save itself succeeded
+					// silently, so this card is the only surface that can
+					// explain the state. (QA on #513)
+					$htaccess = ABSPATH . '.htaccess';
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- Read-only diagnostic; mirrors install_rewrite()'s own pre-flight.
+					$writable = file_exists( $htaccess ) ? is_writable( $htaccess ) : is_writable( ABSPATH );
+					$out[]    = array(
+						'id'     => 'static_rewrite_litespeed',
+						'tone'   => self::WARN,
+						'label'  => 'Static-file rewrite (LiteSpeed)',
+						'detail' => $writable
+							? 'LiteSpeed Static Fast Path is on, but the block is missing from .htaccess. Re-save any Cache setting to reinstall it.'
+							: 'LiteSpeed Static Fast Path is on, but the block could not be written because .htaccess is not writable. Hits are still served (and counted) by the PHP drop-in. Make .htaccess writable and re-save any Cache setting, or turn the fast path off.',
+					);
+				} else {
+					// Opt-in on and the block is installed. The probe can't
+					// confirm "active" the way it does elsewhere (LiteSpeed
+					// serves the probe file but stamps no header), so report
+					// the installed state and restate the accounting trade.
+					$out[] = array(
+						'id'     => 'static_rewrite_litespeed',
+						'tone'   => self::OK,
+						'label'  => 'Static-file rewrite (LiteSpeed)',
+						'detail' => 'LiteSpeed Static Fast Path is on: the .htaccess block is installed and cache hits are served by the web server with no PHP. These responses carry no X-XSpeed-Cache header and are not counted in the hit ratio — that is the trade this setting makes. Turn it off in Cache settings to return every hit to the visible, counted PHP path.',
+					);
+				}
 			} elseif ( Server::APACHE === $server_type ) {
 				$installed = Cache::rewrite_installed();
 				if ( $is_active ) {
@@ -353,8 +403,8 @@ final class Health {
 		$host_cache_path = Host_Page_Caches::nginx_helper_cache_path();
 		if ( null !== $host_cache_path ) {
 			$detail = $cache_enabled
-				? 'Your server is running its own full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed — so this site has TWO full-page caches stacked in front of it. xSpeed forwards every Purge All to the server layer, but the two expire on their own schedules (the server side is typically an hour), so a page can still be served from nginx after xSpeed has regenerated it. If edits keep looking stale, purge from your host\'s dashboard too, or turn xSpeed\'s page cache off and let the server layer do the work — it is the faster of the two, because it answers before PHP starts.'
-				: 'Your server is running a full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed. xSpeed\'s own page cache is off, so this is the only full-page cache in front of the site — and it is the fastest kind, answering before PHP starts. Purge All in xSpeed still clears it.';
+				? 'Your server is running its own full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed — so this site has TWO full-page caches stacked in front of it. xSpeed clears the server layer too on a Purge All, and on the changes that affect every page — settings, updates, themes, plugins, menus. It leaves the routine purge after a post or comment edit to Nginx Helper, which clears just the pages that changed, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too. The two caches expire on their own schedules (the server side is typically an hour), so a page can still be served from nginx after xSpeed has regenerated it. If edits keep looking stale, purge from your host\'s dashboard too, or turn xSpeed\'s page cache off and let the server layer do the work — it is the faster of the two, because it answers before PHP starts.'
+				: 'Your server is running a full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed. xSpeed\'s own page cache is off, so this is the only full-page cache in front of the site — and it is the fastest kind, answering before PHP starts. Purge All in xSpeed still clears it, as do settings changes and plugin, theme or core updates. The routine purge after editing a post or approving a comment is left to Nginx Helper, which clears just the pages that changed rather than all of them, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too.';
 
 			// Path prefix as a fingerprint for the WORDING only — never as a
 			// gate. Nginx Helper is not xCloud-only; other hosts and manual

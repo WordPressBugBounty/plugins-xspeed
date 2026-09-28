@@ -114,6 +114,12 @@ final class TurboRenderModule extends Module {
 				'label'       => __( 'Section classes', 'xspeed' ),
 				'description' => __( 'Tells xSpeed which parts of your page count as sections. The defaults cover Elementor, Divi, Bricks, Oxygen, and Beaver Builder — and when none of them match, xSpeed falls back to your page\'s own top-level sections automatically. Add a class here only if you want to target something specific.', 'xspeed' ),
 			),
+			'excluded_classes' => array(
+				'type'        => 'list',
+				'default'     => array(),
+				'label'       => __( 'Excluded classes', 'xspeed' ),
+				'description' => __( 'Sections with any of these classes always render right away. Use this when a design overlaps its neighbours — a card that hangs over the section below it gets cut off at the boundary when either section is deferred.', 'xspeed' ),
+			),
 		);
 	}
 
@@ -199,6 +205,8 @@ final class TurboRenderModule extends Module {
 			$offsets = self::main_children( $masked, $skip );
 		}
 
+		$excluded = $this->excluded_pattern();
+
 		$seen  = 0;
 		$edits = array();
 		foreach ( $offsets as $offset ) {
@@ -210,7 +218,20 @@ final class TurboRenderModule extends Module {
 			if ( null === $end ) {
 				continue; // Unterminated tag at EOF — never stamp it.
 			}
-			if ( false !== stripos( substr( $html, $offset, $end - $offset ), 'data-xspeed-turbo' ) ) {
+			$open_tag = substr( $html, $offset, $end - $offset );
+			if ( false !== stripos( $open_tag, 'data-xspeed-turbo' ) ) {
+				continue;
+			}
+			if ( '' !== $excluded && preg_match( $excluded, $open_tag ) ) {
+				continue; // Opted out — an overlap design the stamp would clip.
+			}
+			// `content-visibility` implies paint containment: it clips
+			// content that overhangs the section, and skipped iframes can
+			// blank or reload when the section re-renders. An embed holder
+			// (map, video) is never worth deferring — skip it. (Found live:
+			// a Kadence maps container painted over the card overlapping it.)
+			$span_end = self::element_end( $masked, $offset );
+			if ( null !== $span_end && false !== stripos( substr( $masked, $offset, $span_end - $offset ), '<iframe' ) ) {
 				continue;
 			}
 			$edits[] = $offset;
@@ -251,11 +272,47 @@ final class TurboRenderModule extends Module {
 		 *
 		 * @param string[] $classes
 		 */
-		$classes = (array) apply_filters( 'xspeed_turbo_render_classes', $classes );
+		return self::sanitize_classes( (array) apply_filters( 'xspeed_turbo_render_classes', $classes ) );
+	}
 
-		// Class names end up inside a regex alternation; anything that is
-		// not a plausible CSS class token is dropped rather than escaped
-		// into something surprising.
+	/** @return string[] */
+	private function excluded_classes(): array {
+		$classes = $this->get_setting( 'excluded_classes', array() );
+		$classes = is_array( $classes ) ? $classes : array();
+
+		/**
+		 * Filter the class names whose sections are never stamped.
+		 *
+		 * @param string[] $classes
+		 */
+		return self::sanitize_classes( (array) apply_filters( 'xspeed_turbo_render_excluded_classes', $classes ) );
+	}
+
+	/**
+	 * The exclusion regex for an open tag, or '' when nothing is excluded.
+	 * Token-bounded, unlike the section scan: an exclusion is a user-typed
+	 * remedy, and "card" silently matching "cardigan-grid" would make it
+	 * look like the setting does nothing.
+	 */
+	private function excluded_pattern(): string {
+		$classes = $this->excluded_classes();
+		if ( empty( $classes ) ) {
+			return '';
+		}
+		return '#\bclass\s*=\s*(["\'])[^"\']*(?<![A-Za-z0-9_-])(?:'
+			. implode( '|', array_map( 'preg_quote', $classes ) )
+			. ')(?![A-Za-z0-9_-])[^"\']*\1#i';
+	}
+
+	/**
+	 * Class names end up inside a regex alternation; anything that is not a
+	 * plausible CSS class token is dropped rather than escaped into
+	 * something surprising.
+	 *
+	 * @param string[] $classes
+	 * @return string[]
+	 */
+	private static function sanitize_classes( array $classes ): array {
 		return array_values(
 			array_filter(
 				array_map( 'strval', $classes ),
@@ -393,6 +450,59 @@ final class TurboRenderModule extends Module {
 	}
 
 	/**
+	 * The offset just past an element's close tag — the same tag walk as
+	 * element_children(), seeded with the element's own tag, so implicitly
+	 * closed tags don't desync it. Null when the element never closes (or
+	 * the markup is too broken to tell), in which case the caller keeps
+	 * the old behavior rather than guessing at a span.
+	 *
+	 * @param string $masked Markup with script/textarea/noscript/comments nulled.
+	 * @param int    $offset Byte offset of the element's `<`.
+	 * @return int|null
+	 */
+	private static function element_end( string $masked, int $offset ): ?int {
+		static $void     = array( 'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr' );
+		static $implicit = array( 'p', 'li', 'dt', 'dd', 'td', 'th', 'tr', 'option', 'optgroup' );
+
+		if ( ! preg_match( '#\G<([a-zA-Z][a-zA-Z0-9-]*)#', $masked, $open, 0, $offset ) ) {
+			return null;
+		}
+		$cursor = self::tag_end( $masked, $offset );
+		if ( null === $cursor ) {
+			return null;
+		}
+		$stack = array( strtolower( (string) $open[1] ) );
+		while ( preg_match( '#<(/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|\'[^\']*\'|[^>"\'])*)>#', $masked, $t, PREG_OFFSET_CAPTURE, $cursor ) ) {
+			$cursor  = (int) $t[0][1] + strlen( (string) $t[0][0] );
+			$closing = '' !== $t[1][0];
+			$tag     = strtolower( (string) $t[2][0] );
+			if ( in_array( $tag, $void, true ) ) {
+				continue;
+			}
+			if ( ! $closing ) {
+				if ( in_array( $tag, $implicit, true ) && end( $stack ) === $tag ) {
+					array_pop( $stack );
+				}
+				$stack[] = $tag;
+				continue;
+			}
+			if ( ! in_array( $tag, $stack, true ) ) {
+				if ( in_array( $tag, $implicit, true ) ) {
+					continue; // Stray </p>-style close: harmless, skip it.
+				}
+				return null; // A close for an ancestor: the element never closed.
+			}
+			while ( ! empty( $stack ) && array_pop( $stack ) !== $tag ) {
+				continue;
+			}
+			if ( empty( $stack ) ) {
+				return $cursor;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * The offset just past an open tag's `>`, quote-aware — a raw strpos
 	 * would stop at a `>` inside an attribute value.
 	 *
@@ -439,5 +549,7 @@ final class TurboRenderModule extends Module {
 		\WP_CLI::log( 'Turbo Render:       ' . ( $enabled ? 'enabled' : 'disabled' ) );
 		\WP_CLI::log( 'Immediate sections: first ' . (int) $this->get_setting( 'skip_first', self::DEFAULT_SKIP_FIRST ) . ' sections' );
 		\WP_CLI::log( 'Section classes:    ' . implode( ', ', $this->section_classes() ) );
+		$excluded = $this->excluded_classes();
+		\WP_CLI::log( 'Excluded classes:   ' . ( empty( $excluded ) ? '(none)' : implode( ', ', $excluded ) ) );
 	}
 }

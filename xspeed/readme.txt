@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.5
+Stable tag: 1.3.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -306,6 +306,43 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.3.6] – 2026-09-28 =
+
+**Smart Delay postpones the scripts other delay modes had to leave running, LCP background images and video posters are preloaded, LiteSpeed servers get the same static fast path nginx and Apache already had, lightbox videos open with their player instead of a blank window, and Turbo Render no longer clips designs that overlap their neighbours. Emojis can be switched off, post revisions capped, and inline background images held back until they scroll into view.**
+
+Media:
+- New: Background images set in an element's inline style can be lazy-loaded. Each one loads just before its element scrolls into view, the first ones on the page load straight away (the Eager-load First N Images count), and with JavaScript off every background loads as before. Off by default.
+- Fixed: A video embed inside a lightbox's hidden template (Essential Addons, Magnific Popup, Lity) is no longer swapped for the click-to-play facade — the popup opened blank because lightbox styling only sizes an iframe. The template's iframe stays lazy, so it still loads nothing until the popup opens, and the list of template classes can be extended with the xspeed_video_facade_popup_classes filter.
+
+Optimization:
+- New: Bloat Control has a Disable Emojis toggle. It removes the WordPress emoji script and styles from pages, feeds, emails, embeds and wp-admin. Off by default.
+- New: Turbo Render has an Excluded classes setting. A deferred section clips content that hangs over its boundary — a card overlapping the section below it, for example — so a section listed here always renders right away.
+- Fixed: Turbo Render leaves any section holding an iframe alone. Deferring a map or video holder gained nothing and could paint it over content that overlaps it by design.
+- New: Smart Delay. Delaying every script used to quietly skip any script that inline code depends on — on builder pages that was most of them. Smart Delay postpones those scripts anyway and parks their inline snippets with them, replaying everything in page order on the first interaction. Off by default; the exclusion list and consent-banner protection still win.
+- Improved: Delayed scripts now replay the way a real page loads — in page order, with the document's readyState moving through its normal stages, and with each script's DOMContentLoaded and load handlers firing when its turn comes.
+- Improved: A delayed inline loader now waits for the scripts it injects, a throwing inline module no longer stalls the replay behind it, and the replay works on pages with a hash-based Content-Security-Policy.
+- Fixed: The replay no longer touches scripts and handlers the page ran normally — their writes, listeners and onreadystatechange calls behave exactly as before Delay JS was switched on.
+- Fixed: A consent banner is only delayed by an entry that names it; a second protected token on the same tag now needs naming too.
+- Fixed: A script whose author opted out of optimization late in the page no longer loses the defer attribute a stamper had already given it.
+
+Resource Hints:
+- New: LCP background images declared in <style> rules and video poster images are now detected and preloaded, so hero sections painted from CSS backgrounds get the same head start as <img> heroes.
+
+Caching:
+- New: LiteSpeed servers can opt into the static-rewrite fast path, serving cached pages before PHP starts — the same shortcut nginx and Apache sites already had.
+- Fixed: Publishing a post on an nginx host no longer purges the server's entire cache — only the pages the post touches. Nginx Helper's own off switch is respected, and a content import ends with one server purge instead of one per post.
+- Fixed: The admin-bar purge button answers immediately and runs the purge in the background, instead of holding the request open until some hosts cut it off.
+
+Database:
+- New: Limit Post Revisions keeps only as many revisions per post as you choose, and 0 turns revisions off. A WP_POST_REVISIONS value in wp-config.php still wins, and the panel shows it.
+
+Migration:
+- Fixed: Importing LiteSpeed Cache settings no longer turns oEmbed off when the site had emoji removal on. That setting now maps to Disable Emojis.
+- New: WP Rocket's emoji, embeds and CSS background lazy-load settings are imported.
+
+Dashboard & Admin UX:
+- Fixed: The Cloudflare upsell no longer advertises an edge cache TTL the APO module does not set.
 
 = [1.3.5] – 2026-09-22 =
 

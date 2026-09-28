@@ -230,6 +230,12 @@ final class Video_Facade {
 	 */
 	public static function facade_style(): string {
 		return '.wp-has-aspect-ratio .xspeed-video-facade{position:absolute!important;top:0;right:0;bottom:0;left:0;'
+			. 'width:100%!important;height:100%!important;aspect-ratio:auto!important}'
+			// Magnific Popup's iframe scaler positions only `iframe` children;
+			// a facade that reaches a popup at runtime (a template class the
+			// server pass doesn't know) would otherwise collapse to nothing
+			// and the modal opens blank. Same absolute-fill treatment.
+			. '.mfp-iframe-scaler .xspeed-video-facade{position:absolute!important;top:0;right:0;bottom:0;left:0;'
 			. 'width:100%!important;height:100%!important;aspect-ratio:auto!important}';
 	}
 

@@ -35,6 +35,16 @@ final class Lazy_Loader {
 	private static $image_counter = 0;
 
 	/**
+	 * Eager budget for inline-style backgrounds. Separate from images: a
+	 * hero is either an <img> or a background, and the passes run one after
+	 * the other, so one shared counter would hand the budget to whichever
+	 * pass runs first rather than to what sits first on the page.
+	 *
+	 * @var int
+	 */
+	private static $background_counter = 0;
+
+	/**
 	 * Settings cache (one read per request).
 	 *
 	 * @var array|null
@@ -98,6 +108,11 @@ final class Lazy_Loader {
 		if ( ! empty( $opts['lazy_iframes'] ) ) {
 			$work = self::apply_pass( $work, $tag_re( 'iframe' ), array( __CLASS__, 'rewrite_iframe' ) );
 		}
+		// Every opening tag is a candidate, so skip the pass on content with
+		// no url( at all, which is most of it.
+		if ( ! empty( $opts['lazy_background_images'] ) && false !== stripos( $work, 'url(' ) ) {
+			$work = self::apply_pass( $work, '#<[a-z][a-z0-9-]*\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i', array( __CLASS__, 'rewrite_background' ) );
+		}
 		// Facade runs AFTER the lazy pass, deliberately. The facade keeps the
 		// original tag inside <noscript> as the JS-less fallback, and that
 		// fallback should carry loading="lazy" too — running this first would
@@ -114,7 +129,7 @@ final class Lazy_Loader {
 		// closing tag and eat everything in between; an iframe with no
 		// closing tag simply doesn't match and passes through untouched.
 		if ( ! empty( $opts['video_facade'] ) ) {
-			$work = self::apply_pass(
+			$work = self::apply_facade_pass(
 				$work,
 				'#(<iframe\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>)((?:(?!</?iframe\b).)*)</iframe\s*>#is',
 				array( __CLASS__, 'rewrite_iframe_facade' )
@@ -134,7 +149,7 @@ final class Lazy_Loader {
 		// preload="none" too. Same whole-element, tempered match so an
 		// unclosed <video> passes through rather than eating siblings.
 		if ( ! empty( $opts['video_facade'] ) ) {
-			$work = self::apply_pass(
+			$work = self::apply_facade_pass(
 				$work,
 				'#(<video\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>)((?:(?!</?video\b).)*)</video\s*>#is',
 				array( __CLASS__, 'rewrite_video_facade' )
@@ -142,6 +157,129 @@ final class Lazy_Loader {
 		}
 
 		return self::restore_safe_blocks( $work, $stubs );
+	}
+
+	/**
+	 * Hidden popup/lightbox templates a facade must never replace into.
+	 *
+	 * A lightbox plugin ships its player iframe in a hidden template div
+	 * and moves that markup into the popup when clicked. Facading the
+	 * template swaps its iframe for the play button, and the popup then
+	 * opens around a button its own CSS only sizes for an iframe — a blank
+	 * modal (found live: EmbedPress's "See it in action", an Essential
+	 * Addons lightbox whose Magnific popup opened empty). The template
+	 * iframe already carries loading="lazy" from the pass above, and a
+	 * hidden lazy iframe never loads until shown — so skipping the facade
+	 * here costs nothing on page load.
+	 */
+	private const POPUP_TEMPLATE_CLASSES = array(
+		'eael-lightbox-popup-window', // Essential Addons lightbox template.
+		'mfp-hide',                   // Magnific Popup inline template.
+		'lity-hide',                  // Lity inline template.
+	);
+
+	/**
+	 * A facade pass that leaves popup-template containers alone.
+	 *
+	 * Same PCRE-bail contract as apply_pass(). Ranges are byte spans in
+	 * $html; PREG_OFFSET_CAPTURE offsets refer to the original subject, so
+	 * earlier replacements never shift the comparison.
+	 *
+	 * @param callable $callback Rewrite callback taking plain string matches.
+	 */
+	private static function apply_facade_pass( string $html, string $pattern, callable $callback ): string {
+		$ranges = self::popup_template_ranges( $html );
+		if ( empty( $ranges ) ) {
+			return self::apply_pass( $html, $pattern, $callback );
+		}
+
+		$result = preg_replace_callback(
+			$pattern,
+			static function ( array $m ) use ( $callback, $ranges ): string {
+				$offset = (int) $m[0][1];
+				foreach ( $ranges as $range ) {
+					if ( $offset >= $range[0] && $offset < $range[1] ) {
+						return (string) $m[0][0]; // Inside a template: untouched.
+					}
+				}
+				return (string) call_user_func(
+					$callback,
+					array_map( static fn( $group ): string => (string) $group[0], $m )
+				);
+			},
+			$html,
+			-1,
+			$count,
+			PREG_OFFSET_CAPTURE
+		);
+
+		return is_string( $result ) ? $result : $html;
+	}
+
+	/**
+	 * Byte spans of every popup-template container in $html.
+	 *
+	 * The span is found by counting the container's own tag name to its
+	 * balancing close — templates are plain nested divs, so a same-tag
+	 * depth count is enough; a container whose close is never found is
+	 * dropped rather than guessed at (its iframes stay facade-eligible,
+	 * the pre-fix behavior).
+	 *
+	 * @return array<int, array{0:int, 1:int}>
+	 */
+	private static function popup_template_ranges( string $html ): array {
+		/**
+		 * Filter the class names marking a hidden popup/lightbox template
+		 * whose contents the video facade must leave alone.
+		 *
+		 * @param string[] $classes
+		 */
+		$classes = (array) apply_filters( 'xspeed_video_facade_popup_classes', self::POPUP_TEMPLATE_CLASSES );
+		$classes = array_values(
+			array_filter(
+				array_map( 'strval', $classes ),
+				static fn( string $c ): bool => (bool) preg_match( '/^[A-Za-z0-9_-]+$/', $c )
+			)
+		);
+		if ( empty( $classes ) ) {
+			return array();
+		}
+
+		$pattern = '#<(div|section|span|aside)\b[^>]*\bclass\s*=\s*(["\'])[^"\']*(?<![A-Za-z0-9_-])(?:'
+			. implode( '|', array_map( 'preg_quote', $classes ) )
+			. ')(?![A-Za-z0-9_-])[^"\']*\2[^>]*>#i';
+		if ( ! preg_match_all( $pattern, $html, $m, PREG_OFFSET_CAPTURE ) ) {
+			return array();
+		}
+
+		$ranges = array();
+		foreach ( $m[0] as $i => $hit ) {
+			$start = (int) $hit[1];
+			$end   = self::same_tag_end( $html, $start, strtolower( (string) $m[1][ $i ][0] ) );
+			if ( null !== $end ) {
+				$ranges[] = array( $start, $end );
+			}
+		}
+		return $ranges;
+	}
+
+	/**
+	 * The offset just past the close tag balancing the open tag at $offset,
+	 * counting only $tag's own opens and closes. Null when it never closes.
+	 */
+	private static function same_tag_end( string $html, int $offset, string $tag ): ?int {
+		$depth  = 0;
+		$cursor = $offset;
+		$re     = '#<(/?)' . preg_quote( $tag, '#' ) . '\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i';
+		while ( preg_match( $re, $html, $t, PREG_OFFSET_CAPTURE, $cursor ) ) {
+			$cursor = (int) $t[0][1] + strlen( (string) $t[0][0] );
+			if ( '' === $t[1][0] ) {
+				++$depth;
+			} elseif ( --$depth <= 0 ) {
+				return $cursor;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -217,6 +355,101 @@ final class Lazy_Loader {
 		}
 
 		return $tag;
+	}
+
+	/** Class that holds an element's background back until it nears the viewport. */
+	public const LAZY_BG_CLASS = 'xspeed-lazy-bg';
+
+	private static function rewrite_background( array $m ): string {
+		$tag = $m[0];
+		if ( false === stripos( $tag, 'url(' ) ) {
+			return $tag;
+		}
+		if ( ! preg_match( '#\sstyle\s*=\s*(?:"([^"]*)"|\'([^\']*)\')#i', $tag, $sm ) ) {
+			return $tag;
+		}
+		$style = html_entity_decode( isset( $sm[2] ) && '' !== $sm[2] ? $sm[2] : $sm[1], ENT_QUOTES );
+		if ( ! self::has_deferrable_background( $style ) ) {
+			return $tag;
+		}
+		$opts = self::opts();
+		if ( false !== stripos( $tag, 'data-skip-lazy' )
+			|| false !== stripos( $tag, 'data-no-lazy' )
+			|| self::is_excluded( $tag, $opts ) ) {
+			return $tag;
+		}
+		self::$background_counter++;
+		if ( self::$background_counter <= max( 0, (int) ( $opts['eager_first_n'] ?? 1 ) ) ) {
+			return $tag;
+		}
+		return self::add_class( $tag, self::LAZY_BG_CLASS );
+	}
+
+	/**
+	 * Whether an inline style sets a background image we can hold back.
+	 *
+	 * The hold is a stylesheet rule with !important, which beats a normal
+	 * inline declaration but loses to an inline !important one; those are
+	 * left alone. data: URIs cost no request, so there is nothing to save.
+	 */
+	public static function has_deferrable_background( string $style ): bool {
+		$found = false;
+		foreach ( explode( ';', $style ) as $decl ) {
+			if ( ! preg_match( '#^\s*background(?:-image)?\s*:(.*)$#is', $decl, $dm ) ) {
+				continue;
+			}
+			$value = $dm[1];
+			if ( false !== stripos( $value, '!important' ) ) {
+				return false;
+			}
+			if ( preg_match( '#url\(\s*[\'"]?(?!data:)[^)\s\'"]#i', $value ) ) {
+				$found = true;
+			}
+		}
+		return $found;
+	}
+
+	private static function add_class( string $tag, string $class ): string {
+		if ( preg_match( '#\sclass\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>=`]+))#i', $tag, $cm, PREG_OFFSET_CAPTURE ) ) {
+			// An unquoted value (class=hero) is rewritten as a quoted one.
+			// Adding a second class attribute would lose it: browsers keep
+			// the first of two duplicates.
+			if ( isset( $cm[3] ) && -1 !== $cm[3][1] ) {
+				$group = $cm[3];
+				return substr( $tag, 0, $group[1] ) . '"' . $group[0] . ' ' . $class . '"' . substr( $tag, $group[1] + strlen( $group[0] ) );
+			}
+			$group = isset( $cm[2] ) && -1 !== $cm[2][1] ? $cm[2] : $cm[1];
+			$value = trim( $group[0] . ' ' . $class );
+			return substr( $tag, 0, $group[1] ) . $value . substr( $tag, $group[1] + strlen( $group[0] ) );
+		}
+		return (string) preg_replace( '#^<([a-z][a-z0-9-]*)#i', '<$1 class="' . $class . '"', $tag, 1 );
+	}
+
+	/**
+	 * Scoped to a class the script puts on <html>, so without JavaScript the
+	 * rule never matches and every background loads normally.
+	 */
+	public static function background_style(): string {
+		return '.xspeed-lazy-bg-js .' . self::LAZY_BG_CLASS . '{background-image:none!important}';
+	}
+
+	/**
+	 * The MutationObserver is what keeps a background from staying blank:
+	 * carousel clones, infinite scroll and builder re-renders insert
+	 * elements carrying the class after DOMContentLoaded, and a one-time
+	 * scan never saw them.
+	 */
+	public static function background_script(): string {
+		return <<<'JS'
+(function(d,w){var h=d.documentElement,C='xspeed-lazy-bg';h.className+=' xspeed-lazy-bg-js';
+function show(el){el.classList.remove(C);}
+var io='IntersectionObserver' in w?new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){show(e.target);io.unobserve(e.target);}});},{rootMargin:'300px 0px'}):null;
+function watch(el){if(io)io.observe(el);else show(el);}
+function scan(r){if(r.classList&&r.classList.contains(C))watch(r);if(r.querySelectorAll){var l=r.querySelectorAll('.'+C);for(var i=0;i<l.length;i++)watch(l[i]);}}
+if('MutationObserver' in w)new MutationObserver(function(ms){for(var j=0;j<ms.length;j++){var a=ms[j].addedNodes;for(var i=0;i<a.length;i++)if(a[i].nodeType===1)scan(a[i]);}}).observe(h,{childList:true,subtree:true});
+function run(){scan(d);}
+if(d.readyState==='loading')d.addEventListener('DOMContentLoaded',run);else run();})(document,window);
+JS;
 	}
 
 	private static function rewrite_iframe( array $m ): string {
@@ -1390,6 +1623,7 @@ JS;
 	public static function reset_state(): void {
 		self::$opts           = null;
 		self::$image_counter  = 0;
+		self::$background_counter = 0;
 		self::$src_dims_cache = null;
 		self::$facade_used    = false;
 		self::$warming        = false;

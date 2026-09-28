@@ -146,7 +146,7 @@ final class CacheModule extends Module {
 	}
 
 	public function settings_schema(): array {
-		return array(
+		$schema = array(
 			'cache_expiry'  => array(
 				'type'        => 'int',
 				// Matches the wizard's Balanced preset, which is what a fresh
@@ -277,6 +277,25 @@ final class CacheModule extends Module {
 				'info'        => __( 'These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and "X-Accel-Expires: 0" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused.', 'xspeed' )
 			),
 		);
+
+		// LiteSpeed-only opt-in (#509): meaningless on any other server, so
+		// the field only exists in the schema where it can act — elsewhere the
+		// stored value survives via preserved_keys(). Inserted right after
+		// mobile_separate, its sibling static-fast-path trade-off.
+		if ( \XSpeed\Server::LITESPEED === \XSpeed\Server::type() ) {
+			$litespeed = array(
+				'litespeed_static_rewrite' => array(
+					'type'        => 'bool',
+					'default'     => false,
+					'label'       => __( 'LiteSpeed Static Fast Path', 'xspeed' ),
+					'description' => __( 'Serve cache hits straight from the web server via .htaccess instead of the PHP drop-in. No PHP runs on a hit, so the saving depends on how quickly PHP answers on this host — a few milliseconds on a fast server, far more where PHP is the bottleneck. The trade: LiteSpeed cannot add the X-XSpeed-Cache header to statically served pages, and those hits are not counted in the dashboard hit ratio. Leave off to keep every hit visibly tagged and counted.', 'xspeed' ),
+				),
+			);
+			$pos    = (int) array_search( 'mobile_separate', array_keys( $schema ), true ) + 1;
+			$schema = array_slice( $schema, 0, $pos, true ) + $litespeed + array_slice( $schema, $pos, null, true );
+		}
+
+		return $schema;
 	}
 
 	/**
@@ -291,7 +310,16 @@ final class CacheModule extends Module {
 	 * @return string[]
 	 */
 	public function preserved_keys(): array {
-		return array( 'mobile_separate_review' );
+		$keys = array( 'mobile_separate_review' );
+		// On non-LiteSpeed servers the litespeed_static_rewrite field is not
+		// in the schema (see settings_schema()), so a schema-driven save
+		// would silently drop a value chosen while the site ran LiteSpeed.
+		// Preserve it so moving LiteSpeed → other → LiteSpeed keeps the
+		// user's choice. On LiteSpeed itself the schema owns the key.
+		if ( \XSpeed\Server::LITESPEED !== \XSpeed\Server::type() ) {
+			$keys[] = 'litespeed_static_rewrite';
+		}
+		return $keys;
 	}
 
 	/**

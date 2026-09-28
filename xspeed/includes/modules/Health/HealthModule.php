@@ -148,7 +148,14 @@ final class HealthModule extends Module {
 			// the same condition suppresses the write and auto_heal() strips
 			// the block again on the next admin load. Explain the real cause.
 			$block_reason = \XSpeed\Cache::static_rewrite_block_reason();
-			if ( 'no_mod_headers' === $block_reason ) {
+			if ( 'litespeed_dropin' === $block_reason ) {
+				// The intended LiteSpeed default (#509) — 'good', not a nag:
+				// hits are visible and counted, and the faster path is a
+				// deliberate opt-in, not a missing config.
+				$result['label']       = __( 'xSpeed is serving cache hits through PHP (LiteSpeed)', 'xspeed' );
+				$result['status']      = 'good';
+				$result['description'] = '<p>' . esc_html__( 'Caching is working — hits are served by the xSpeed drop-in and tagged X-XSpeed-Cache: HIT (php), so every hit is visible and counted. LiteSpeed\'s .htaccess engine cannot tag or log statically served files, so this is the default. To serve hits straight from the web server with no PHP (at the cost of that tagging and counting), turn on LiteSpeed Static Fast Path in xSpeed\'s Cache settings.', 'xspeed' ) . '</p>';
+			} elseif ( 'no_mod_headers' === $block_reason ) {
 				$result['label']       = __( 'xSpeed is serving cache hits through PHP', 'xspeed' );
 				$result['status']      = 'recommended';
 				$result['description'] = '<p>' . esc_html__( 'Caching is working — hits are served by the xSpeed drop-in and tagged X-XSpeed-Cache: HIT (php). The faster .htaccess fast path is off because Apache\'s mod_headers module is not loaded, without which a static hit could not be tagged or counted. Enable mod_headers (a2enmod headers on Debian/Ubuntu, then restart Apache) to shave roughly 20-30ms off each cache hit.', 'xspeed' ) . '</p>';
@@ -156,7 +163,9 @@ final class HealthModule extends Module {
 				$result['label']       = __( 'xSpeed static rewrite is off (Separate Mobile Cache)', 'xspeed' );
 				$result['status']      = 'recommended';
 				$result['description'] = '<p>' . esc_html__( 'Separate Mobile Cache is on, so cache hits are served by the PHP drop-in to keep per-device HTML correct. Turn Separate Mobile Cache off if your site serves the same HTML to every device to regain the faster static path.', 'xspeed' ) . '</p>';
-			} elseif ( \XSpeed\Server::APACHE === $server_type && ! \XSpeed\Cache::rewrite_installed() ) {
+			} elseif ( '' === $block_reason && ! \XSpeed\Cache::rewrite_installed() ) {
+				// Apache, or LiteSpeed with the Static Fast Path opt-in on
+				// (#509) — either way the block SHOULD be there and is not.
 				$result['label']       = __( 'xSpeed .htaccess rewrite block is missing', 'xspeed' );
 				$result['status']      = 'recommended';
 				$result['description'] = '<p>' . esc_html__( 'Without the static-rewrite block, cache hits go through the PHP drop-in (~85ms TTFB) instead of the web server (~5-15ms). Toggle Enable Cache off and on in xSpeed to reinstall the block.', 'xspeed' ) . '</p>';
