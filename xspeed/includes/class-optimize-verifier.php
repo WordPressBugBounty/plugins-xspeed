@@ -82,7 +82,7 @@ final class Optimize_Verifier {
 				'timeout'     => 20,
 				'redirection' => 3,
 				'sslverify'   => false,
-				'headers'     => array( 'Cache-Control' => 'no-cache' ),
+				'headers'     => Self_Traffic::headers( array( 'Cache-Control' => 'no-cache' ) ),
 				// A real browser UA: some hosts and firewalls serve a
 				// challenge page to unknown agents, which would read as the
 				// site being broken.

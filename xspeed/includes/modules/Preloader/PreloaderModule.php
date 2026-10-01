@@ -32,7 +32,8 @@ final class PreloaderModule extends Module {
 			'label'        => __( 'Preloader', 'xspeed' ),
 			'tab_label'    => __( 'Crawl Now', 'xspeed' ), // its own tab on the Preloader page
 			'icon'         => 'Wand2',
-			'description'  => __( 'Crawl the sitemap to warm cache so visitors never hit a cold MISS.', 'xspeed' ),
+			'description'  => __( 'Visits your pages ahead of time so visitors get fast cached pages.', 'xspeed' ),
+			'group'        => 'cache',
 			// Custom panel wraps the schema-driven settings with a
 			// Start/Stop control surface + a live status readout
 			// (queue depth, last URL, recent errors).
@@ -74,8 +75,8 @@ final class PreloaderModule extends Module {
 			'enabled'     => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Enable Preloader', 'xspeed' ),
-				'description' => __( 'When on, xSpeed crawls the sitemap on the schedule below and warms the page cache.', 'xspeed' ),
+				'label'       => __( 'Enable preloader', 'xspeed' ),
+				'description' => __( 'xSpeed visits every page in your sitemap on the schedule below, so each page is cached before a visitor asks for it.', 'xspeed' ),
 			),
 			'schedule'    => array(
 				'type'          => 'enum',
@@ -88,7 +89,7 @@ final class PreloaderModule extends Module {
 					'weekly' => 'Weekly',
 				),
 				'label'         => __( 'Schedule', 'xspeed' ),
-				'description'   => __( 'How often to start a fresh crawl. Manual means you trigger it from the dashboard.', 'xspeed' ),
+				'description'   => __( 'How often to visit all pages again. Manual means you start it from the dashboard.', 'xspeed' ),
 				'dependsOn'     => array( 'field' => 'enabled' ),
 			),
 			'batch_size'  => array(
@@ -96,29 +97,30 @@ final class PreloaderModule extends Module {
 				'default'     => 5,
 				'min'         => 1,
 				'max'         => 50,
-				'label'       => __( 'Batch Size', 'xspeed' ),
-				'description' => __( 'URLs warmed per cron tick. Higher = faster crawl, more load on the origin.', 'xspeed' ),
+				'label'       => __( 'Pages per run', 'xspeed' ),
+				'description' => __( 'How many pages are cached on each run. A higher number finishes sooner but puts more load on your server.', 'xspeed' ),
+				'advanced'    => true,
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'sitemap_url' => array(
 				'type'        => 'string',
 				'default'     => '',
 				'label'       => __( 'Sitemap URL (optional)', 'xspeed' ),
-				'description' => __( 'Override the auto-detected WordPress core sitemap (/wp-sitemap.xml). Leave blank for default.', 'xspeed' ),
+				'description' => __( 'Use a different sitemap than the WordPress one (/wp-sitemap.xml). Leave blank for the default.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'warm_on_publish' => array(
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Warm new content immediately', 'xspeed' ),
-				'description' => __( 'When a post or page is published, fetch it once so the first visitor sees a cache HIT, not a cold MISS.', 'xspeed' ),
+				'description' => __( 'Cache a post or page as soon as you publish it, so the first visitor gets the fast cached page.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'warm_on_comment' => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Re-warm after comments', 'xspeed' ),
-				'description' => __( 'Re-warm a page after a comment is posted (Cache purges the page on comment; this fetches it back into cache).', 'xspeed' ),
+				'description' => __( 'A new comment clears the page from the cache. This caches the page again right away.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);

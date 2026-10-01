@@ -64,6 +64,10 @@ final class SettingsModule extends Module {
 		return array();
 	}
 
+	public function ui_metadata(): array {
+		return array_merge( parent::ui_metadata(), array( 'group' => 'settings' ) );
+	}
+
 	/**
 	 * `wp xspeed settings <list|get|update>` — the command whose absence
 	 * dropped get_settings/update_settings from the MCP catalog (#149/#153).

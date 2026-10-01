@@ -48,7 +48,8 @@ final class AIPrivacyModule extends Module {
 		return array(
 			'label'       => __( 'AI Privacy', 'xspeed' ),
 			'icon'        => 'Shield',
-			'description' => __( 'Decide whether AI features may use your visitors\' data, and what the consent banner says. Applies even before you install Pro.', 'xspeed' ),
+			'description' => __( 'Choose whether AI features may use visitor data, with or without Pro.', 'xspeed' ),
+			'group'       => 'ai-agents',
 		);
 	}
 
@@ -67,14 +68,14 @@ final class AIPrivacyModule extends Module {
 			'gdpr_consent_required' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Require consent before AI data collection', 'xspeed' ),
-				'description' => __( 'When ON, AI-powered features only record data after a visitor accepts the consent banner. When OFF, they collect from every visitor — only legal in regions without GDPR-style consent rules. The setting applies even if Pro is not installed (so a later Pro upgrade respects whichever choice you made): privacy is a fundamental right, not a paid feature.', 'xspeed' ),
+				'label'       => __( 'Ask visitors for consent', 'xspeed' ),
+				'description' => __( 'When on, AI features only record a visitor\'s data after they accept the consent banner. Turn it off only where the law does not require consent, as GDPR does.', 'xspeed' ),
 			),
 			'consent_banner_text'   => array(
 				'type'        => 'string',
 				'default'     => 'We collect anonymized navigation and performance data to make this site faster. Accept to help us optimize your experience.',
 				'label'       => __( 'Consent banner text', 'xspeed' ),
-				'description' => __( 'Shown in the cookie consent banner. Keep it factual — what you collect (page navigation, performance metrics) and why.', 'xspeed' ),
+				'description' => __( 'The text of the consent banner. Say plainly what you collect, such as page visits and speed data, and why.', 'xspeed' ),
 			),
 		);
 	}

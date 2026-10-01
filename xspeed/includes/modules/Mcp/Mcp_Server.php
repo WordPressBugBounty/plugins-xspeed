@@ -68,6 +68,12 @@ final class Mcp_Server {
 		Mcp_Rate_Limiter::clear();
 
 		$raw = $request->get_body();
+		// Second line behind McpModule::cap_request_body(), which is the one
+		// that runs before WordPress decodes. Kept because the pretty
+		// front-door path reaches here without WP_REST_Server::dispatch().
+		if ( strlen( $raw ) > Mcp_Tools::MAX_TOOL_BODY_BYTES ) {
+			return self::error_response( null, self::INVALID_REQUEST, 'Request body is too large.', 413 );
+		}
 		$msg = json_decode( $raw, true );
 
 		if ( null === $msg && JSON_ERROR_NONE !== json_last_error() ) {
@@ -128,8 +134,9 @@ final class Mcp_Server {
 							'tools' => array( 'listChanged' => false ),
 						),
 						'serverInfo'      => array(
-							'name'    => 'xspeed',
-							'version' => defined( 'XSPEED_VERSION' ) ? XSPEED_VERSION : '1.0.0',
+							'name'       => 'xspeed',
+							'version'    => defined( 'XSPEED_VERSION' ) ? XSPEED_VERSION : '1.0.0',
+							'xspeedAuth' => self::$auth_kind,
 						),
 					)
 				);
@@ -217,7 +224,18 @@ final class Mcp_Server {
 	 * @param \WP_REST_Request $request Incoming request.
 	 * @return bool
 	 */
+	/**
+	 * Which credential authorized this request: 'site' (the pairing token)
+	 * or 'oauth'. Reported in `initialize` so xSpeed Hub stores only the
+	 * pairing token when a site syncs it. An OAuth token can be read-only
+	 * and expires within the hour; storing one would break the Hub.
+	 *
+	 * @var string
+	 */
+	private static $auth_kind = '';
+
 	private static function authorize( \WP_REST_Request $request ): bool {
+		self::$auth_kind = '';
 		$presented = self::extract_token( $request );
 		if ( '' === $presented ) {
 			return false;
@@ -232,6 +250,7 @@ final class Mcp_Server {
 		if ( '' !== $stored && hash_equals( $stored, $presented ) ) {
 			Mcp_Tools::set_read_only_override( null );
 			Mcp_Tools::set_configure_override( null );
+			self::$auth_kind = 'site';
 			return true;
 		}
 
@@ -243,6 +262,7 @@ final class Mcp_Server {
 		if ( null !== $grant ) {
 			Mcp_Tools::set_read_only_override( Mcp_OAuth::scope_is_read_only( $grant['scope'] ) );
 			Mcp_Tools::set_configure_override( Mcp_OAuth::scope_allows_configure( $grant['scope'] ) );
+			self::$auth_kind = 'oauth';
 			return true;
 		}
 

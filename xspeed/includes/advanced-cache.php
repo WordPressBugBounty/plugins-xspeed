@@ -1,7 +1,7 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 9
+ * XSPEED_DROPIN_VERSION: 10
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
  * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes so
@@ -29,6 +29,13 @@
  *     brotli stream renders as a blank page. THIS FILE IS A COPY made when
  *     caching was enabled, so without the bump an updated site keeps the old
  *     serve logic and never receives the fix (#286).
+ * v9: carry the baked edge-header answer, so a hold set for a page reaches
+ *     the paths that run without PHP.
+ * v10: keep bots, scanners, cached 404s and xSpeed's own requests (by UA
+ *     or the X-XSpeed-Self header) out of hits.log. Without
+ *     the bump an existing install keeps writing every crawler HIT into the
+ *     ratio while its misses are excluded, which reads MORE optimistic than
+ *     having no exclusion at all.
  *
  * IMPORTANT: This file is included by wp-settings.php BEFORE
  * wp-includes/formatting.php and wp-includes/load.php are loaded, so NO
@@ -373,8 +380,31 @@ if ( file_exists( $xspeed_cache_file ) ) {
 		if ( '@@' === substr( $xspeed_hits_log, 0, 2 ) ) {
 			$xspeed_hits_log = WP_CONTENT_DIR . '/uploads/xspeed/hits.log';
 		}
-		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- pre-WP drop-in; WP_Filesystem isn't loaded. One short line, append + lock; failures are non-fatal (the ratio just under-counts).
-		@file_put_contents( $xspeed_hits_log, "hit\n", FILE_APPEND | LOCK_EX );
+		// Don't count a bot, a scanner, a 404 or one of xSpeed's own
+		// requests as a visitor hit. It has to be decided HERE: the log line
+		// is just "hit" with no user agent, so Hit_Counter batch-counts these
+		// lines blind and nothing downstream can reclassify one. The UA
+		// pattern is baked in at install time from
+		// Hit_Counter::excluded_ua_regex() (the drop-in runs before
+		// WordPress, so it cannot ask). xSpeed's own requests also carry the
+		// X-XSpeed-Self header (Self_Traffic::HEADER), which is what catches
+		// a warmer renamed to a real browser's UA without dropping real
+		// visitors on that browser. An empty UA counts as automated, like
+		// is_bot_ua(''). A cached 404 is excluded on the PHP path too.
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- pre-WP drop-in; only matched against a baked pattern, never echoed or stored.
+		$xspeed_hit_ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
+		$xspeed_hit_ex = '@@XSPEED_HIT_EXCLUDE_RE@@';
+		$xspeed_self   = '' === $xspeed_hit_ua
+			|| ! empty( $_SERVER['HTTP_X_XSPEED_SELF'] )
+			|| ( isset( $xspeed_meta['status'] ) && 404 === (int) $xspeed_meta['status'] );
+		if ( ! $xspeed_self && '@@' !== substr( $xspeed_hit_ex, 0, 2 ) && '' !== $xspeed_hit_ex ) {
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a pattern this file did not compose is not worth a warning on every hit.
+			$xspeed_self = 1 === @preg_match( '#(' . $xspeed_hit_ex . ')#i', $xspeed_hit_ua );
+		}
+		if ( ! $xspeed_self ) {
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- pre-WP drop-in; WP_Filesystem isn't loaded. One short line, append + lock; failures are non-fatal (the ratio just under-counts).
+			@file_put_contents( $xspeed_hits_log, "hit\n", FILE_APPEND | LOCK_EX );
+		}
 
 		// Replay the cached response's status + content-type from .meta, so a
 		// cached 404 serves 404 (not a soft-404 200) and a cached feed serves

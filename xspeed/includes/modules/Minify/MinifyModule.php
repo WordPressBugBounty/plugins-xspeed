@@ -35,7 +35,8 @@ final class MinifyModule extends Module {
 			'label'        => __( 'CSS & JavaScript', 'xspeed' ),
 			'tab_label'    => __( 'Minify', 'xspeed' ), // its own tab on the CSS & JavaScript page
 			'icon'         => 'Wand2',
-			'description'  => __( 'Strip whitespace and rewrite enqueued CSS / JS.', 'xspeed' ),
+			'description'  => __( 'Makes HTML, CSS and JavaScript files smaller and loads scripts later.', 'xspeed' ),
+			'group'        => 'performance',
 			// Host page: Minify (this module) / Critical CSS (Pro) / Unused
 			// CSS (Pro) as tabs — the three CSS/JS optimizations live on one
 			// page instead of three sidebar rows (FBS-83633).
@@ -53,50 +54,51 @@ final class MinifyModule extends Module {
 				// request that WRITES a cache entry, and should_cache() refuses
 				// logged-in requests — so "view source while logged in" shows
 				// un-minified HTML and reads as the feature being broken. (#2)
-				'description' => __( 'Strip whitespace and comments from HTML output, including inline <style> and <script> blocks. Safe on most themes. Applies to cached (logged-out) responses — view the page in a private window to see the result.', 'xspeed' ),
+				'description' => __( 'Removes spaces and comments from your pages. Safe on most themes. Only logged-out visitors see it, so check in a private window.', 'xspeed' ),
 			),
 			'minify_css'  => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Minify CSS', 'xspeed' ),
-				'description' => __( 'Compress and rewrite enqueued local stylesheets. External CSS is left untouched.', 'xspeed' ),
+				'description' => __( 'Makes your site\'s own CSS files smaller. CSS from other domains is left alone.', 'xspeed' ),
 			),
 			'minify_js'   => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Minify JavaScript', 'xspeed' ),
-				'description' => __( 'Compress enqueued local scripts. Disable if you hit script-loading conflicts on the frontend.', 'xspeed' ),
+				'description' => __( 'Makes your site\'s own JavaScript files smaller. Turn off if a script on your site stops working.', 'xspeed' ),
 			),
 			'defer_js' => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Defer JavaScript', 'xspeed' ),
-				'description' => __( 'Add defer="defer" to enqueued script tags so they execute after HTML parsing. jQuery + its hard dependencies are skipped automatically.', 'xspeed' ),
+				'description' => __( 'Runs scripts after the page has loaded, so content shows sooner. jQuery and scripts that need it are skipped.', 'xspeed' ),
 			),
 			'delay_js' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Delay JavaScript Until Interaction', 'xspeed' ),
-				'description' => __( 'Postpone script loading until the visitor scrolls, moves the mouse, taps, or presses a key. Drastically improves first paint on script-heavy pages; can break above-the-fold scripted UI — test before leaving on. Cookie-consent banners (CookieYes, Complianz, Cookiebot, NotificationX, Cookie Notice, Borlabs, Real Cookie Banner and others) are not delayed, so the visitor is still asked before anything else runs. To delay one on purpose, name it in Delay Only These Scripts.', 'xspeed' ),
+				'label'       => __( 'Delay JavaScript', 'xspeed' ),
+				'description' => __( 'Scripts load only when the visitor scrolls, taps or types. Pages show much sooner, but test menus and sliders. Cookie consent banners still load first.', 'xspeed' ),
 			),
 			'async_css' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Load CSS Asynchronously', 'xspeed' ),
-				'description' => __( 'Rewrite stylesheet link tags to load non-blocking via the print-then-all pattern. Pairs well with critical-CSS workflows; can cause a flash of unstyled content if the theme has no critical CSS.', 'xspeed' ),
+				'label'       => __( 'Load CSS without blocking', 'xspeed' ),
+				'description' => __( 'On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump.', 'xspeed' ),
 			),
 			'remove_query_strings' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Remove Asset Query Strings', 'xspeed' ),
-				'description' => __( 'Strip ?ver=X.Y from enqueued CSS / JS URLs. Some CDN caches and proxies cache better when query strings are absent. Files under wp-content/uploads keep their version — page builders and consent plugins rewrite generated CSS there in place, and ?ver is what tells browsers to refetch it. Plugin, theme and core assets are still stripped: with Browser Cache on, an update reaches returning visitors only when their browser cache expires.', 'xspeed' ),
+				'label'       => __( 'Remove version from file URLs', 'xspeed' ),
+				'description' => __( 'Removes ?ver= from CSS and JS links, which some CDNs cache better. After a plugin update, returning visitors may keep old files until their browser cache expires.', 'xspeed' ),
+				'advanced'    => true,
 			),
 			'defer_js_excluded' => array(
 				'type'        => 'list',
 				'default'     => array( 'jquery-core', 'jquery-migrate' ),
 				'item_type'   => 'string',
-				'label'       => __( 'Defer / Delay Exclusions', 'xspeed' ),
-				'description' => __( 'Script handles OR URL substrings that skip defer + delay. Defaults exclude jQuery (most themes depend on it being available synchronously). Cookie-consent banners are skipped without being listed here. An entry here also wins over the same script in Delay Only These Scripts. One per line.', 'xspeed' ),
+				'label'       => __( 'Scripts to never defer or delay', 'xspeed' ),
+				'description' => __( 'Script handles or parts of script URLs, one per line. jQuery is listed because most themes need it early; cookie consent banners are skipped on their own.', 'xspeed' ),
 				// Only relevant once defer OR delay is on — the exclusion list
 				// governs both. Uses the `any` (OR) dependency form. (FBS-82227)
 				'dependsOn'   => array(
@@ -110,12 +112,12 @@ final class MinifyModule extends Module {
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Delay Only These Scripts', 'xspeed' ),
-				'description' => __( 'Script handles OR URL substrings. When non-empty, matching scripts are delayed, plus the known third-party tags xSpeed recognises on its own (analytics, tag managers, chat widgets, review embeds, error trackers) — so a heavy vendor script is postponed even when it is not listed here. Leave empty to delay all scripts (minus the exclusions above). Handles are the more reliable selector — a URL substring has to match the script\'s original URL, and minification rewrites that to a hashed cache path. Cookie-consent banners are only delayed when an entry names one, for example notificationx or cookiebot. A broad entry such as /plugins/ does not delay them. One per line.', 'xspeed' ),
+				'label'       => __( 'Delay only these scripts', 'xspeed' ),
+				'description' => __( 'Script handles or parts of script URLs, one per line. Leave empty to delay all scripts; otherwise only these, plus known trackers and chat widgets, are delayed.', 'xspeed' ),
 				'info_title'  => __( 'Consent banners and Delay JS', 'xspeed' ),
 				'info'        => sprintf(
 					/* translators: %s: comma-separated list of consent plugins, each followed by the word to type in parentheses. */
-					__( 'These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Defer / Delay Exclusions always wins.', 'xspeed' ),
+					__( 'These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Scripts to never defer or delay always wins.', 'xspeed' ),
 					implode( ', ', Minify_Filters::consent_manager_labels() )
 				),
 				'dependsOn'   => array( 'field' => 'delay_js' ),
@@ -123,8 +125,8 @@ final class MinifyModule extends Module {
 			'delay_js_smart' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Smart Delay (Carry Inline Snippets)', 'xspeed' ),
-				'description' => __( 'Normally a script is left running at load when inline code on the page depends on it — on builder pages that keeps most scripts eager even with Delay JavaScript on. Smart Delay postpones those scripts anyway and parks their inline snippets with them; everything replays in page order on the first interaction. The most aggressive setting on this page: test menus, sliders, and toggles before leaving it on. Exclusions above still win, and consent banners still run first.', 'xspeed' ),
+				'label'       => __( 'Smart delay', 'xspeed' ),
+				'description' => __( 'Also delays scripts that code on the page depends on, which helps page builder sites most. The riskiest setting here, so test menus and sliders.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'delay_js' ),
 			),
 			'delay_js_timeout' => array(
@@ -132,22 +134,25 @@ final class MinifyModule extends Module {
 				'default'     => 8000,
 				'min'         => 0,
 				'max'         => 60000,
-				'label'       => __( 'Delay Failsafe Timeout (ms)', 'xspeed' ),
+				'label'       => __( 'Delay timeout (ms)', 'xspeed' ),
 				'unit'        => 'ms',
-				'description' => __( 'Load delayed scripts automatically after this many milliseconds when the visitor never interacts. Set to 0 for interaction-only, with no timer: a timer that fires inside a lab tool\'s measurement window loads the "delayed" scripts anyway and inflates the reported TTI. Keep a non-zero value if a delayed script must eventually run for visitors who never scroll, tap, or type.', 'xspeed' ),
+				'description' => __( 'Load delayed scripts after this long if the visitor does nothing. Set 0 to wait for a scroll, tap or key press only.', 'xspeed' ),
+				'advanced'    => true,
 				'dependsOn'   => array( 'field' => 'delay_js' ),
 			),
 			'combine_css' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Combine CSS Files', 'xspeed' ),
-				'description' => __( 'Concatenate enqueued local stylesheets into a single file (with @import and url(…) paths resolved). External CSS is left alone. Pairs poorly with HTTP/2 push — only enable on HTTP/1.1 hosts.', 'xspeed' ),
+				'label'       => __( 'Combine CSS files', 'xspeed' ),
+				'description' => __( 'Joins your site\'s own CSS files into one. This helps only on old HTTP/1.1 servers, so leave it off on most hosts.', 'xspeed' ),
+				'advanced'    => true,
 			),
 			'combine_js' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Combine JavaScript Files', 'xspeed' ),
-				'description' => __( 'Concatenate enqueued local scripts into a single file. External scripts + scripts marked async / deferred are left alone. Disable if you hit dependency-order issues; the combiner respects WordPress enqueue order but inline scripts attached via wp_add_inline_script can shift behavior.', 'xspeed' ),
+				'label'       => __( 'Combine JavaScript files', 'xspeed' ),
+				'description' => __( 'Joins your site\'s own scripts into one file. Turn off if a script stops working after you enable it.', 'xspeed' ),
+				'advanced'    => true,
 			),
 		);
 	}

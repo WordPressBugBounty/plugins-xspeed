@@ -377,7 +377,7 @@ final class Object_Cache {
 		if ( '' === $prefix || ! self::salt_has_glob_metachars( $prefix ) ) {
 			return $message;
 		}
-		return $message . ' Note: the Cache Key Prefix contains one of * ? [ ] \\.'
+		return $message . ' Note: the Cache key prefix contains one of * ? [ ] \\.'
 			. ' Purges stay scoped to this site, but these are wildcard characters'
 			. ' in Redis — check the prefix matches your host\'s key exactly.';
 	}
@@ -569,7 +569,7 @@ final class Object_Cache {
 		$has_prefix = '' !== self::str( $opts, 'key_prefix', '' );
 		$hint       = $has_prefix
 			? 'The Redis user may lack write permission for this key prefix (NOPERM).'
-			: 'On ACL/namespaced Redis (e.g. xCloud), set Cache Key Prefix to the host\'s "Redis Object Cache Key" so writes land in the permitted namespace.';
+			: 'On ACL/namespaced Redis (e.g. xCloud), set Cache key prefix to the host\'s "Redis Object Cache Key" so writes land in the permitted namespace.';
 		return "Connected to Redis at {$host}:{$port}, but the cache could not store data. {$hint}";
 	}
 

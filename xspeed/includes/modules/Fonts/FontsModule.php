@@ -34,7 +34,8 @@ final class FontsModule extends Module {
 		return array(
 			'label'       => __( 'Fonts', 'xspeed' ),
 			'icon'        => 'Type',
-			'description' => __( 'Stop web fonts from blocking text. Adds display=swap to Google Fonts and preloads the fonts you mark critical.', 'xspeed' ),
+			'description' => __( 'Shows text right away while web fonts load, and preloads key fonts.', 'xspeed' ),
+			'group'       => 'performance',
 		);
 	}
 
@@ -43,15 +44,15 @@ final class FontsModule extends Module {
 			'font_display_swap' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Add font-display: swap', 'xspeed' ),
-				'description' => __( 'Append display=swap to Google Fonts URLs so text renders immediately in a fallback face while the web font loads. Blocking values already on the URL (auto, block) are rewritten to swap; a deliberate non-blocking choice (fallback, optional) is left alone.', 'xspeed' ),
+				'label'       => __( 'Show text while fonts load', 'xspeed' ),
+				'description' => __( 'Google Fonts text shows at once in a standard font, then switches when the web font arrives.', 'xspeed' ),
 			),
 			'preload_fonts'     => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'url',
-				'label'       => __( 'Preload Font URLs', 'xspeed' ),
-				'description' => __( 'One absolute font URL per line (woff2/woff/ttf/otf). Each becomes a <link rel="preload" as="font" crossorigin> in the head so the browser starts downloading before the CSS parses. Use only for fonts that render above the fold.', 'xspeed' ),
+				'label'       => __( 'Fonts to preload', 'xspeed' ),
+				'description' => __( 'One full font file URL per line (woff2, woff, ttf or otf). The browser fetches these first, so list only fonts used at the top of the page.', 'xspeed' ),
 			),
 		);
 	}

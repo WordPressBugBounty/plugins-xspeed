@@ -29,8 +29,9 @@ final class MigrationModule extends Module {
 		return array(
 			'label'        => __( 'Migration', 'xspeed' ),
 			'icon'         => 'Import',
-			'description'  => __( 'Import settings from WP Rocket, W3 Total Cache, or WP Super Cache.', 'xspeed' ),
+			'description'  => __( 'Import settings from WP Rocket, W3 Total Cache, WP Super Cache or LiteSpeed Cache.', 'xspeed' ),
 			'custom_panel' => 'MigrationPanel',
+			'group'        => 'tools',
 		);
 	}
 

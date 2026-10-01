@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.6
+Stable tag: 1.3.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -273,6 +273,13 @@ xSpeed Cache contacts your own site (the gzip probe below); when usage analytics
 * **Where the request goes:** Your own site (`home_url()`). This request goes only to your own server.
 * **What is sent:** No personal data, no site identifiers, no payload — just a standard HTTP `GET` from your server back to your server.
 
+= xSpeed Hub (app.xspeedcache.com) =
+
+* **What it does:** Lets you manage this site, with other sites, from one xSpeed Hub account and one AI connection.
+* **When it runs:** Only after an administrator connects the site to xSpeed Hub from xSpeed Cache → AI & agents. A site that was never connected makes no Hub requests.
+* **What is sent:** The site URL and this site's MCP token, which the Hub uses to call the site's own MCP endpoint. The token is sent when the site is connected, when the connection status is checked, when the token changes (Rotate, or Connect after Disconnect), when you disconnect, and with speed-test requests you start.
+* **Where the request goes:** app.xspeedcache.com, operated by WPDeveloper.
+
 == Third-party libraries ==
 
 This plugin bundles the following GPL-compatible third-party libraries:
@@ -306,6 +313,42 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.3.7] – 2026-10-01 =
+
+**Pages with a background-video hero now paint the hero text first, Load CSS Asynchronously no longer makes pages flash unstyled, sites in a multisite network stop sharing cached REST responses, and a site whose token changed can reconnect to xSpeed Hub.**
+
+Media:
+- Fixed: A hero's background video (autoplay, muted, looping, no controls or poster) now starts on the visitor's first scroll, tap, key press or mouse move, so the hero text paints first instead of waiting for the video's first frame.
+- Fixed: Only one image per page gets high fetch priority, instead of every image counted by Eager-load First N Images.
+
+Optimization:
+- Fixed: Load CSS Asynchronously leaves stylesheets render-blocking unless the page has critical CSS, so pages no longer paint unstyled and then shift. Google Fonts, Bunny and Typekit stylesheets still load without blocking.
+- Fixed: A page builder's row, column and section stylesheets stay render-blocking, so a builder hero no longer snaps into its grid after the first paint.
+- Fixed: Under Delay JS, a script's inline data now waits with the script, so the script never runs without its data.
+- Fixed: Combine CSS recognises another plugin's non-blocking stylesheet however its onload handler is written, instead of merging it into a print-only file.
+- Fixed: Strip jQuery Migrate works when another plugin, such as Elementor Pro, loads the script registry before Bloat Control.
+
+Resource Hints:
+- Fixed: When a background video opens the page, images below it are no longer preloaded as the LCP image.
+
+Caching:
+- Improved: More click and campaign IDs are ignored in the cache key, on saved lists too.
+- Fixed: Each site in a multisite network gets its own cached REST responses. Two sites requesting the same route could be served each other's data.
+- Fixed: Installing a new plugin no longer empties the page cache as if live code had been replaced.
+- Fixed: A request that measures a page's CSS is never answered from cache, whatever Ignored Query Parameters say.
+- Fixed: xSpeed's own warming, benchmark and verifier requests, and bot hits, no longer count in the hit ratio or in site analytics.
+
+AI / MCP:
+- New: Extensions can add hidden MCP tools, and oversized MCP request bodies are refused.
+- Improved: The generate_critical_css tool builds Critical CSS for any page, not only the home page.
+- Improved: get_cache_status reports the Site Icon.
+- Fixed: A site whose MCP token changed can reconnect to xSpeed Hub. The Hub gets the new token, and a new credential clears its lockout.
+- Fixed: The attach route no longer returns the admin's user ID.
+
+Dashboard & Admin UX:
+- Improved: Settings labels and hints are rewritten in plain language and sentence case.
+- Fixed: Leaving onboarding from the last step lands on the dashboard instead of a broken #[object Object] page.
 
 = [1.3.6] – 2026-09-28 =
 

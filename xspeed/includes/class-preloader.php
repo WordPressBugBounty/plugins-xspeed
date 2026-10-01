@@ -391,6 +391,7 @@ final class Preloader {
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
 				'user-agent' => self::user_agent(),
+				'headers'    => Self_Traffic::headers(),
 				'blocking'   => true,
 			)
 		);
@@ -432,8 +433,10 @@ final class Preloader {
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
 				'user-agent' => self::user_agent(),
-				'headers'    => array(
-					'Accept' => 'text/html,application/xhtml+xml',
+				'headers'    => Self_Traffic::headers(
+					array(
+						'Accept' => 'text/html,application/xhtml+xml',
+					)
 				),
 				'blocking'   => true,
 			)
@@ -727,6 +730,7 @@ final class Preloader {
 				'timeout'    => self::REQUEST_TIMEOUT,
 				'sslverify'  => false,
 				'user-agent' => self::user_agent(),
+				'headers'    => Self_Traffic::headers(),
 			)
 		);
 		if ( is_wp_error( $res ) ) {

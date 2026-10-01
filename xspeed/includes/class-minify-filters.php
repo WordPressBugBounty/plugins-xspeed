@@ -1058,9 +1058,11 @@ final class Minify_Filters {
 			return $html;
 		}
 
+		$handle_delayed = self::handle_delay_outcomes( $html );
+
 		$out = preg_replace_callback(
 			'#<script\b([^>]*)>(.*?)</script>#is',
-			static function ( array $m ): string {
+			static function ( array $m ) use ( $handle_delayed ): string {
 				list( $whole, $attrs, $body ) = $m;
 
 				if ( '' === trim( $body ) ) {
@@ -1110,6 +1112,36 @@ final class Minify_Filters {
 					return $whole;
 				}
 
+				// A handle's own inline blocks follow the handle, not only their
+				// body text. The body rule below decided them alone, so a
+				// `-js-extra` whose data named a target was parked while its
+				// script, kept eager by a URL exclusion, ran first and read an
+				// undefined global. (#549)
+				//
+				// Ahead of the exclusion list on purpose. The handle's own tag
+				// was already weighed against it by handle and URL; a body
+				// match here would keep the after-code of a delayed script
+				// eager, running it before the script it calls.
+				if ( preg_match( '#(?<![-\w])id\s*=\s*(["\'])(.+?)-js-(extra|before|after)\1#i', $attrs, $own ) ) {
+					$part = strtolower( $own[3] );
+					// wp_localize_script data. Early is always safe: it only
+					// assigns, and its script cannot run before it.
+					if ( 'extra' === $part ) {
+						return $whole;
+					}
+					if ( isset( $handle_delayed[ $own[2] ] ) ) {
+						if ( $handle_delayed[ $own[2] ] ) {
+							return '<script' . self::park_type_attrs( $attrs ) . '>' . $body . '</script>';
+						}
+						// The script runs at load, so its `before` code must too.
+						// Its `after` code still runs after it if parked, so that
+						// one is left to the body rule, like any vendor loader.
+						if ( 'before' === $part ) {
+							return $whole;
+						}
+					}
+				}
+
 				// The body stands in for the URL in the lists the src passes
 				// consult — but NOT via is_delay_target(), whose empty-list
 				// default is "delay everything". That default is right for a
@@ -1124,6 +1156,7 @@ final class Minify_Filters {
 				if ( self::is_excluded_script( '', $body, true ) ) {
 					return $whole;
 				}
+
 				if ( ! self::matches_known_third_party( $body ) && ! self::matches_user_targets( $body ) ) {
 					return $whole;
 				}
@@ -1141,6 +1174,31 @@ final class Minify_Filters {
 		// null — and casting that to '' would serve AND cache a blank page.
 		// The unrewritten original is always the safe fallback.
 		return null === $out ? $html : $out;
+	}
+
+	/**
+	 * Whether each enqueued handle's external tag ended up delayed.
+	 *
+	 * Read from the finished HTML rather than recorded as tags are filtered:
+	 * this runs after every pass that can delay a tag (script_loader_tag, the
+	 * late opt-out revert, the raw-tag sweep), so the page itself is the only
+	 * complete answer.
+	 *
+	 * @param string $html Complete page HTML.
+	 * @return array<string,bool> Handle => delayed.
+	 */
+	private static function handle_delay_outcomes( string $html ): array {
+		if ( ! preg_match_all( '#<script\b((?:"[^"]*"|\'[^\']*\'|[^>"\'])*)>#i', $html, $m ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $m[1] as $attrs ) {
+			if ( ! preg_match( '#(?<![-\w])id\s*=\s*(["\'])(.+?)-js\1#i', $attrs, $id ) ) {
+				continue;
+			}
+			$out[ $id[2] ] = false !== stripos( $attrs, 'data-xs-delay' ) || false !== stripos( $attrs, 'data-xs-src' );
+		}
+		return $out;
 	}
 
 	/**
@@ -1225,6 +1283,19 @@ final class Minify_Filters {
 		// we can swap. Skip anything custom (preload, etc.) — we don't
 		// want to fight with explicit author intent.
 		if ( false === stripos( $tag, 'rel=\'stylesheet\'' ) && false === stripos( $tag, 'rel="stylesheet"' ) ) {
+			return $tag;
+		}
+		// No critical CSS for this page: every stylesheet stays blocking.
+		//
+		// Deferring a stylesheet only helps when something already styles the
+		// first screen. Without that, the page paints unstyled and then jumps
+		// when the sheets arrive. Measured on the Templately Astoria pages
+		// (Elementor and a block theme): CLS 0.43-1.27 and 15-43 points lower
+		// on 7 of 8 pages than the same settings without async CSS. The guards
+		// below narrow the damage; this one removes it. WP Rocket, LiteSpeed,
+		// Jetpack Boost and FlyingPress likewise never defer CSS without
+		// critical CSS. (#588)
+		if ( ! self::page_has_critical_css() ) {
 			return $tag;
 		}
 		// The stylesheets that lay the page out stay render-blocking.
@@ -1535,10 +1606,17 @@ final class Minify_Filters {
 	 *  - WordPress' own BLOCK and layout sheets (`wp-block-library`,
 	 *    `global-styles`, `classic-theme-styles`). These style block
 	 *    content on the front end and are as structural as the theme's.
+	 *  - A page builder's GRID sheets: the rows, columns, sections and
+	 *    containers everything else sits in (`kadence-blocks-rowlayout`,
+	 *    `kadence-blocks-column`, `elementor-frontend`, `elementor-post-N`).
+	 *    On a builder page these lay out the hero, not the theme. Deferred,
+	 *    the hero painted as one stacked column and then snapped into its
+	 *    grid: CLS 0.665 on desktop, from one row.
 	 *
-	 * Everything else — plugin sheets, icon fonts, widget and page-builder
-	 * add-ons, the long tail that makes async CSS worth having — is still
-	 * deferred, so the optimization keeps most of its benefit.
+	 * Everything else — plugin sheets, icon fonts, buttons, forms, the
+	 * builder's per-widget sheets, the long tail that makes async CSS worth
+	 * having — is still deferred, so the optimization keeps most of its
+	 * benefit.
 	 *
 	 * A site WITH critical CSS can defer these too; that is what the
 	 * `xspeed_async_css_layout_critical` filter is for.
@@ -1557,17 +1635,19 @@ final class Minify_Filters {
 			'global-styles',
 			'classic-theme-styles',
 		);
-		$critical = in_array( $handle, $core, true );
+		$critical = in_array( $handle, $core, true ) || self::is_builder_grid_style( $handle );
 
 		// The active theme's own sheets.
 		//
 		// Matched on the theme stem, but NOT as a bare prefix: a plugin from
 		// the same vendor shares it (the Kadence theme is `kadence`, while
-		// `kadence-blocks-rowlayout` and `kadence-fonts-gfonts` come from the
-		// Kadence Blocks PLUGIN and a webfont loader). Treating those as
-		// layout-critical would leave almost nothing deferred and quietly
-		// undo the feature. So the stem must be followed by a recognised
-		// theme-area segment, which is how themes name their split sheets.
+		// `kadence-blocks-image` and `kadence-fonts-gfonts` come from the
+		// Kadence Blocks PLUGIN and a webfont loader). Treating every such
+		// sheet as layout-critical would leave almost nothing deferred and
+		// quietly undo the feature; the builder's grid sheets are caught
+		// above by what they do, not whose they are. So the stem must be
+		// followed by a recognised theme-area segment, which is how themes
+		// name their split sheets.
 		if ( ! $critical && function_exists( 'get_template' ) ) {
 			$areas = array(
 				'style',
@@ -1611,6 +1691,26 @@ final class Minify_Filters {
 		 * @param string $handle   The stylesheet handle.
 		 */
 		return (bool) apply_filters( 'xspeed_async_css_layout_critical', $critical, $handle );
+	}
+
+	/**
+	 * Whether a handle is a page builder's grid sheet.
+	 *
+	 * Matched on the last segment of the handle, so a builder that names its
+	 * row sheet `acme-blocks-row-layout` is covered without being listed. The
+	 * segments are the ones that only ever carry structure; a button, image
+	 * or form sheet styles an element inside the grid, and the grid holds its
+	 * place while that sheet loads.
+	 *
+	 * @param string $handle Lowercase stylesheet handle.
+	 */
+	private static function is_builder_grid_style( string $handle ): bool {
+		if ( preg_match( '#(?:^|-)(?:rowlayout|row-layout|column|columns|container|section|grid)$#', $handle ) ) {
+			return true;
+		}
+		// Builders whose grid lives in a sheet named after the builder or the
+		// post, not after a structural element.
+		return (bool) preg_match( '#^(?:elementor-frontend|elementor-post-\d+|fl-builder-layout(?:-\d+)?|generateblocks)$#', $handle );
 	}
 
 	/**
@@ -2368,6 +2468,7 @@ final class Minify_Filters {
 		self::$uploads_base            = null;
 		self::$delay_bootstrap_printed = false;
 		self::$js_measured_layout      = null;
+		self::$has_critical_css        = null;
 		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
 		self::$pristine_tag            = array();
@@ -2525,6 +2626,39 @@ final class Minify_Filters {
 	 * @var bool|null
 	 */
 	private static $js_measured_layout = null;
+
+	/**
+	 * Per-request memo for page_has_critical_css(). Null = not resolved.
+	 *
+	 * @var bool|null
+	 */
+	private static $has_critical_css = null;
+
+	/**
+	 * Does something inline critical CSS for the page being served?
+	 *
+	 * Free generates none, so the answer comes from the filter: an extension
+	 * that inlines critical CSS for this page returns true, and a site whose
+	 * theme ships its own can too. Resolved once per request, because every
+	 * stylesheet tag asks.
+	 */
+	public static function page_has_critical_css(): bool {
+		if ( null === self::$has_critical_css ) {
+			/**
+			 * Whether the page being served has critical CSS inlined in its head.
+			 *
+			 * Async CSS defers stylesheets only when this is true; without
+			 * critical CSS it leaves them render-blocking, because deferring
+			 * them makes the page paint unstyled and shift. Return true when
+			 * something inlines critical CSS for this page, or to keep deferring
+			 * without it.
+			 *
+			 * @param bool $has_critical_css Default false.
+			 */
+			self::$has_critical_css = (bool) apply_filters( 'xspeed_async_css_page_has_critical_css', false );
+		}
+		return self::$has_critical_css;
+	}
 
 	/**
 	 * Scripts that lay out the page by measuring the DOM.

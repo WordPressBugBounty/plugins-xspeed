@@ -35,6 +35,36 @@ final class Lazy_Loader {
 	private static $image_counter = 0;
 
 	/**
+	 * Whether an image on this page already holds fetchpriority="high".
+	 *
+	 * One per page. Every eager image used to get it, so with eager_first_n
+	 * at 3 an accordion's hidden images fetched at High alongside the
+	 * render-blocking CSS and the real LCP image. (#558)
+	 *
+	 * @var bool
+	 */
+	private static $priority_claimed = false;
+
+	/**
+	 * Byte spans of markup that is hidden on arrival in the chunk the image
+	 * pass is walking, and whether the current tag sits in one.
+	 *
+	 * @var array<int, array{0:int, 1:int}>
+	 */
+	private static $hidden_ranges = array();
+
+	/** @var bool */
+	private static $in_hidden = false;
+
+	/**
+	 * Whether a visible excluded image is still to come, so the eager budget
+	 * must not take the high slot first.
+	 *
+	 * @var bool
+	 */
+	private static $priority_reserved = false;
+
+	/**
 	 * Eager budget for inline-style backgrounds. Separate from images: a
 	 * hero is either an <img> or a background, and the passes run one after
 	 * the other, so one shared counter would hand the budget to whichever
@@ -103,7 +133,7 @@ final class Lazy_Loader {
 		};
 
 		if ( ! empty( $opts['lazy_images'] ) || ! empty( $opts['add_missing_dimensions'] ) ) {
-			$work = self::apply_pass( $work, $tag_re( 'img' ), array( __CLASS__, 'rewrite_img' ) );
+			$work = self::apply_img_pass( $work, $tag_re( 'img' ), $opts );
 		}
 		if ( ! empty( $opts['lazy_iframes'] ) ) {
 			$work = self::apply_pass( $work, $tag_re( 'iframe' ), array( __CLASS__, 'rewrite_iframe' ) );
@@ -283,6 +313,147 @@ final class Lazy_Loader {
 	}
 
 	/**
+	 * The <img> pass, which also knows which tags sit in hidden markup.
+	 *
+	 * Hidden spans are only worked out while eager slots remain: past the
+	 * budget every image is lazy anyway, and the scan costs a pass per
+	 * hidden container.
+	 *
+	 * @param array<string,mixed> $opts Lazy settings.
+	 */
+	private static function apply_img_pass( string $html, string $pattern, array $opts ): string {
+		// Core picks one content image for fetchpriority="high" at priority
+		// 12, before this pass. That pick is the page's, so ours stands down.
+		if ( ! self::$priority_claimed && preg_match( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*?(?<![-\w])fetchpriority\s*=\s*["\']?high\b#i', $html ) ) {
+			self::$priority_claimed = true;
+		}
+
+		$budget = max( 0, (int) ( $opts['eager_first_n'] ?? 1 ) );
+		self::$hidden_ranges = ( ! empty( $opts['lazy_images'] ) && ( self::$image_counter < $budget || ! empty( $opts['excluded_images'] ) ) )
+			? self::hidden_ranges( $html )
+			: array();
+
+		// An image the user named in the exclusions is the hero they chose.
+		// When the chunk holds a visible one, the eager budget leaves the high
+		// slot to it rather than to an icon printed ahead of it.
+		if ( ! self::$priority_claimed && ! self::$priority_reserved && ! empty( $opts['lazy_images'] ) && ! empty( $opts['excluded_images'] )
+			&& preg_match_all( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i', $html, $imgs, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $imgs[0] as $img ) {
+				if ( ! self::is_excluded( (string) $img[0], $opts ) || self::tag_is_hidden( (string) $img[0], 'img' ) || self::offset_hidden( (int) $img[1] ) ) {
+					continue;
+				}
+				self::$priority_reserved = true;
+				break;
+			}
+		}
+
+		if ( empty( self::$hidden_ranges ) ) {
+			return self::apply_pass( $html, $pattern, array( __CLASS__, 'rewrite_img' ) );
+		}
+
+		$ranges = self::$hidden_ranges;
+		$result = preg_replace_callback(
+			$pattern,
+			static function ( array $m ) use ( $ranges ): string {
+				$offset          = (int) $m[0][1];
+				self::$in_hidden = false;
+				foreach ( $ranges as $range ) {
+					if ( $offset >= $range[0] && $offset < $range[1] ) {
+						self::$in_hidden = true;
+						break;
+					}
+				}
+				$out             = self::rewrite_img( array( (string) $m[0][0] ) );
+				self::$in_hidden = false;
+				return $out;
+			},
+			$html,
+			-1,
+			$count,
+			PREG_OFFSET_CAPTURE
+		);
+		self::$hidden_ranges = array();
+
+		return is_string( $result ) ? $result : $html;
+	}
+
+	/** Whether a byte offset in the chunk being walked sits in hidden markup. */
+	private static function offset_hidden( int $offset ): bool {
+		foreach ( self::$hidden_ranges as $range ) {
+			if ( $offset >= $range[0] && $offset < $range[1] ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Byte spans of elements the markup itself hides: a closed <details>,
+	 * the `hidden` attribute, or an inline `display:none`.
+	 *
+	 * Only what the tag says. Panels a stylesheet or script hides (most
+	 * accordion and tab blocks) look visible from here.
+	 *
+	 * Pure. Resource_Hints_Processor runs it over the whole page, so an
+	 * image the lazy pass kept out of the high slot doesn't get it back
+	 * from the page-wide pass.
+	 *
+	 * @return array<int, array{0:int, 1:int}>
+	 */
+	public static function hidden_ranges( string $html ): array {
+		if ( false === stripos( $html, '<details' ) && false === stripos( $html, 'hidden' ) && ! preg_match( '#display\s*:\s*none#i', $html ) ) {
+			return array();
+		}
+		if ( ! preg_match_all( '#<([a-z][a-z0-9-]*)\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
+			return array();
+		}
+
+		$ranges = array();
+		$until  = -1;
+		foreach ( $m[0] as $i => $hit ) {
+			$start = (int) $hit[1];
+			if ( $start < $until ) {
+				continue; // Inside a span already found.
+			}
+			$tag  = (string) $hit[0];
+			$name = strtolower( (string) $m[1][ $i ][0] );
+			if ( 'img' === $name || ! self::tag_is_hidden( $tag, $name ) ) {
+				continue;
+			}
+			$end = self::same_tag_end( $html, $start, $name );
+			if ( null === $end ) {
+				continue;
+			}
+			$until = $end;
+			// A closed <details> still shows its own <summary>, the child
+			// that opens it. A nested <details>' summary further in is not it.
+			if ( 'details' === $name ) {
+				$inner = $start + strlen( $tag );
+				if ( preg_match( '#^\s*<summary\b.*?</summary\s*>#is', substr( $html, $inner, $end - $inner ), $sm ) ) {
+					$start = $inner + strlen( (string) $sm[0] );
+				}
+			}
+			$ranges[] = array( $start, $end );
+		}
+		return $ranges;
+	}
+
+	/** Pure: whether one opening tag hides its contents. */
+	public static function tag_is_hidden( string $tag, string $name ): bool {
+		// Attribute names only. Blanking the quoted values first keeps
+		// class="is-hidden" and aria-hidden="true" from reading as `hidden`.
+		$names = (string) preg_replace( '#=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)#', '', $tag );
+		if ( 'details' === $name ) {
+			return ! preg_match( '#(?<![-\w])open(?![-\w])#i', $names );
+		}
+		if ( preg_match( '#\shidden(?![-\w])#i', $names ) ) {
+			return true;
+		}
+		return preg_match( '#(?<![-\w])style\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', $tag, $style )
+			&& preg_match( '#(?<![-\w])display\s*:\s*none#i', $style[1] );
+	}
+
+	/**
 	 * Run one rewrite pass, keeping the input if PCRE bails.
 	 *
 	 * preg_replace_callback() returns null when it hits the backtrack or
@@ -324,6 +495,8 @@ final class Lazy_Loader {
 			|| self::has_high_fetchpriority( $tag )
 			|| self::is_excluded( $tag, $opts );
 
+		$self_hidden = self::tag_is_hidden( $tag, 'img' );
+
 		if ( $skip_lazy && ! empty( $opts['lazy_images'] ) ) {
 			// An EXCLUDED image is one the user marked as above-the-fold (a
 			// hero/logo) — the opposite of lazy. WordPress core adds
@@ -332,21 +505,43 @@ final class Lazy_Loader {
 			// the LCP hero and tank LCP. Actively make it eager +
 			// high-priority so an excluded hero loads immediately.
 			$tag = self::set_attr( $tag, 'loading', 'eager' );
-			$tag = self::set_attr( $tag, 'fetchpriority', 'high', true );
+			// Still one high image per page: every excluded logo and
+			// data-skip-lazy icon used to get it too. A data-skip-lazy icon
+			// printed ahead of a reserved excluded hero leaves the slot to
+			// the hero, as the eager budget does. (#558)
+			$may_take = ! self::$priority_reserved || self::is_excluded( $tag, $opts );
+			if ( ! self::$priority_claimed && ! self::$in_hidden && ! $self_hidden && $may_take ) {
+				$tag = self::set_attr( $tag, 'fetchpriority', 'high', true );
+			}
+			if ( self::has_high_fetchpriority( $tag ) ) {
+				self::$priority_claimed = true;
+			}
+			$tag = self::set_attr( $tag, 'decoding', 'async', true );
+		} elseif ( ! empty( $opts['lazy_images'] ) && $self_hidden ) {
+			// A display:none image (a tracking pixel, most often) is not above
+			// the fold, so it must not take the hero's eager slot. Its loading
+			// is left alone: a lazy display:none image never loads, and the
+			// pixel would stop counting. (#558)
 			$tag = self::set_attr( $tag, 'decoding', 'async', true );
 		} elseif ( ! empty( $opts['lazy_images'] ) ) {
 			// Above-the-fold skip: first N images get loading="eager"
 			// instead of "lazy" so the LCP image isn't deferred. Only
-			// non-excluded images consume the budget.
-			self::$image_counter++;
-			$is_above_fold = self::$image_counter <= max( 0, (int) ( $opts['eager_first_n'] ?? 1 ) );
-			$tag           = self::set_attr( $tag, 'loading', $is_above_fold ? 'eager' : 'lazy' );
-			$tag           = self::set_attr( $tag, 'decoding', 'async', true );
-			// The eager hero should also drop any core `loading="lazy"`; the
-			// set_attr above already overrode it. Give the first eager image
-			// high fetch priority so it wins the LCP race.
-			if ( $is_above_fold ) {
-				$tag = self::set_attr( $tag, 'fetchpriority', 'high', true );
+			// non-excluded images consume the budget, and an image in
+			// markup that is hidden on arrival is not above the fold. (#558)
+			$is_above_fold = false;
+			if ( ! self::$in_hidden ) {
+				self::$image_counter++;
+				$is_above_fold = self::$image_counter <= max( 0, (int) ( $opts['eager_first_n'] ?? 1 ) );
+			}
+			$tag = self::set_attr( $tag, 'loading', $is_above_fold ? 'eager' : 'lazy' );
+			$tag = self::set_attr( $tag, 'decoding', 'async', true );
+			// Only the first eager image gets high priority. The rest of the
+			// eager budget skips lazy loading and no more: more than one
+			// High image competes with the render-blocking CSS, and the LCP
+			// is rarely the third image in the document. (#558)
+			if ( $is_above_fold && ! self::$priority_claimed && ! self::$priority_reserved ) {
+				$tag                    = self::set_attr( $tag, 'fetchpriority', 'high', true );
+				self::$priority_claimed = true;
 			}
 		}
 
@@ -647,6 +842,27 @@ JS;
 			return $tag;
 		}
 
+		// A background video waits for the visitor's first interaction, not
+		// just the viewport. It is decoration, and on a hero it is in the
+		// viewport at once, so the viewport rule loaded it immediately and its
+		// first frame became the LCP. Held back, the hero text is the LCP and
+		// the video starts on the first scroll, tap, key or mouse move.
+		// Checked before autoplay is renamed below.
+		if ( self::is_background_video_without_poster( $tag ) ) {
+			/**
+			 * Whether a background video waits for the first interaction.
+			 *
+			 * Return false to load it when it reaches the viewport instead,
+			 * like any other autoplay video.
+			 *
+			 * @param bool   $wait Whether the video waits. Default true.
+			 * @param string $tag  The <video> opening tag.
+			 */
+			if ( (bool) apply_filters( 'xspeed_lazy_background_video_waits_for_interaction', true, $tag ) ) {
+				$tag = self::set_attr( $tag, 'data-xspeed-wait', 'interaction' );
+			}
+		}
+
 		$deferred = false;
 
 		// The element's own src, when it has one.
@@ -680,6 +896,35 @@ JS;
 		self::$deferred_autoplay = true;
 
 		return $tag;
+	}
+
+	/**
+	 * Whether a <video> opening tag is a decorative background with no poster.
+	 *
+	 * Autoplay, muted, looping and without controls is how every builder
+	 * marks a background video: nobody watches it, it sits behind the hero
+	 * text. With no poster, nothing paints in its box until the first frame
+	 * decodes, so on a hero the video's first frame becomes the page's LCP.
+	 * On the measured site that was a 5 MB MP4 and a 3.5–3.9 s mobile LCP,
+	 * against 2.3 s with the video out of the way.
+	 *
+	 * Reads autoplay in both spellings: the author's `autoplay`, and the
+	 * `data-xspeed-autoplay` the lazy pass leaves when it defers the source.
+	 * Resource Hints sees the tag after that pass has run.
+	 *
+	 * @param string $tag A <video> opening tag.
+	 */
+	public static function is_background_video_without_poster( string $tag ): bool {
+		$has = static function ( string $name ) use ( $tag ): bool {
+			return (bool) preg_match( '#\s' . $name . '(?=[\s/>=])#i', $tag );
+		};
+		if ( ! $has( 'autoplay' ) && ! $has( 'data-xspeed-autoplay' ) ) {
+			return false;
+		}
+		if ( ! $has( 'muted' ) || ! $has( 'loop' ) || $has( 'controls' ) ) {
+			return false;
+		}
+		return ! preg_match( '#\sposter\s*=\s*(?:["\']\s*)?[^"\'\s>]#i', $tag );
 	}
 
 	/**
@@ -847,13 +1092,25 @@ v.setAttribute('preload','none');
 if(v.load)v.load();
 }
 }
+// A background video (data-xspeed-wait) that reaches the viewport is parked
+// here until the visitor first scrolls, taps, types or moves the mouse, then
+// every parked one starts together. See defer_autoplay_source().
+var I=false,P=[],E=['pointerdown','pointermove','touchstart','keydown','wheel','scroll'];
+function interacted(){
+if(I)return;I=true;
+for(var i=0;i<E.length;i++)removeEventListener(E[i],interacted,true);
+for(var j=0;j<P.length;j++)go(P[j]);
+P=[];
+}
+for(var k=0;k<E.length;k++)addEventListener(E[k],interacted,{capture:true,passive:true});
+function reach(v){if(!I&&v.getAttribute('data-xspeed-wait'))P.push(v);else go(v);}
 function scan(){
 strip();
 adopt();
 var v=document.querySelectorAll(S);
-if(!('IntersectionObserver'in window)){for(var i=0;i<v.length;i++)go(v[i]);return;}
+if(!('IntersectionObserver'in window)){for(var i=0;i<v.length;i++)reach(v[i]);return;}
 var o=new IntersectionObserver(function(es){
-for(var i=0;i<es.length;i++){if(es[i].isIntersecting){go(es[i].target);o.unobserve(es[i].target);}}
+for(var i=0;i<es.length;i++){if(es[i].isIntersecting){reach(es[i].target);o.unobserve(es[i].target);}}
 },{rootMargin:'200px'});
 for(var j=0;j<v.length;j++)o.observe(v[j]);
 }
@@ -1623,6 +1880,10 @@ JS;
 	public static function reset_state(): void {
 		self::$opts           = null;
 		self::$image_counter  = 0;
+		self::$priority_claimed = false;
+		self::$hidden_ranges    = array();
+		self::$in_hidden        = false;
+		self::$priority_reserved = false;
 		self::$background_counter = 0;
 		self::$src_dims_cache = null;
 		self::$facade_used    = false;

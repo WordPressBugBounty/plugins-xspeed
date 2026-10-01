@@ -39,6 +39,11 @@ use XSpeed\Database_Cleaner;
 defined( 'ABSPATH' ) || exit;
 
 final class Mcp_Tools {
+	/** Pro extension contract supported by this Free build. */
+	public const EXTENSION_API = 1;
+
+	/** Raw broker tool envelope cap, enforced before JSON decoding. */
+	public const MAX_TOOL_BODY_BYTES = 2 * 1024 * 1024;
 
 	/** Valid cache purge types. */
 	public const PURGE_TYPES = array( 'all', 'page', 'assets', 'object', 'rest', 'cloudflare', 'cdn' );
@@ -369,8 +374,16 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'run_pagespeed' ),
 			),
 			'generate_critical_css' => array(
-				'description' => 'Generate above-the-fold Critical CSS for the site (Pro). Calls the external generator and stores the result.',
-				'inputSchema' => self::object_schema( array(), array() ),
+				'description' => 'Generate above-the-fold Critical CSS for one page (Pro). Calls the external generator and stores the result for that page\'s template. Defaults to the site home page; pass url to build it for another page or template.',
+				'inputSchema' => self::object_schema(
+					array(
+						'url' => array(
+							'type'        => 'string',
+							'description' => 'Page on this site to generate Critical CSS for, as a full URL or a path such as /pricing/. Defaults to the site home page.',
+						),
+					),
+					array()
+				),
 				'write'       => true,
 				'handler'     => array( self::class, 'generate_critical_css' ),
 			),
@@ -671,6 +684,47 @@ final class Mcp_Tools {
 			}
 		}
 
+		/**
+		 * Add private tools owned by an installed extension.
+		 *
+		 * Extensions receive an EMPTY map and may only add new names. Core tool
+		 * definitions cannot be replaced through this seam. A `hidden` tool is
+		 * callable through the authenticated per-site proxy but omitted from
+		 * tools/list. This is for broker-run workflows whose public tool must not
+		 * be advertised until the broker-side worker exists.
+		 *
+		 * `hidden` is not a permission: the proxy takes the same pairing token
+		 * the public channel does. It withholds a tool from discovery and from
+		 * an OAuth grant, nothing more. See the gate in invoke().
+		 *
+		 * `hidden` must be a real bool when present. It decides whether a tool
+		 * is reachable from the public channel at all, so a truthy string is
+		 * the kind of near-miss that should be rejected rather than guessed at.
+		 * Specs that fail any check here are skipped, not repaired.
+		 *
+		 * @param array<string,array<string,mixed>> $tools Extension tool specs.
+		 */
+		$extensions = apply_filters( 'xspeed_mcp_extension_tools', array() );
+		if ( is_array( $extensions ) ) {
+			foreach ( $extensions as $name => $spec ) {
+				if (
+					! is_string( $name )
+					|| 1 !== preg_match( '/^[a-z][a-z0-9_]{0,63}$/', $name )
+					|| isset( $catalog[ $name ] )
+					|| ! is_array( $spec )
+					|| ! isset( $spec['description'], $spec['inputSchema'], $spec['handler'], $spec['write'] )
+					|| ! is_string( $spec['description'] )
+					|| ! is_array( $spec['inputSchema'] )
+					|| ! is_callable( $spec['handler'] )
+					|| ! is_bool( $spec['write'] )
+					|| ( isset( $spec['hidden'] ) && ! is_bool( $spec['hidden'] ) )
+				) {
+					continue;
+				}
+				$catalog[ $name ] = $spec;
+			}
+		}
+
 		return $catalog;
 	}
 
@@ -905,6 +959,9 @@ final class Mcp_Tools {
 	public static function list(): array {
 		$out = array();
 		foreach ( self::catalog() as $name => $spec ) {
+			if ( ! empty( $spec['hidden'] ) ) {
+				continue;
+			}
 			$out[] = array(
 				'name'        => $name,
 				'description' => $spec['description'],
@@ -940,6 +997,37 @@ final class Mcp_Tools {
 			// shows what was ATTEMPTED and one that only shows what
 			// succeeded. Scope is unknowable here, so log the conservative
 			// one rather than implying the attempt was read-only.
+			Mcp_Activity_Log::record( $name, $args, false, $error->get_error_message(), 'write', self::$channel );
+
+			return $error;
+		}
+
+		// Hidden tools are private broker stages, not undiscoverable public MCP
+		// tools. Omitting one from tools/list is only presentation, so this
+		// closes the JSON-RPC channel to them as well, returning the same 404 a
+		// nonexistent name returns. Both entry paths set the channel before
+		// every invoke, so a previous broker call cannot widen a later one.
+		//
+		// What this is NOT: a permission boundary. The broker REST route
+		// authenticates with the SAME pairing token as the JSON-RPC route
+		// (Mcp_Auth::permission and Mcp_Server::authorize both compare against
+		// Mcp_Pairing::site_token()), so anyone holding that token — every
+		// client the dashboard's connection recipes are written for — can call
+		// a hidden tool by name on the broker route, and tell it from a
+		// nonexistent one by the status. `hidden` keeps a tool off the
+		// advertised surface and out of an OAuth grant's reach; it does not
+		// make it safe for a pairing-token holder to run. Anything gated only
+		// by `hidden` must be something that holder may already do.
+		if ( ! empty( $catalog[ $name ]['hidden'] ) && 'broker' !== self::$channel ) {
+			$error = new \WP_Error(
+				'xspeed_mcp_unknown_tool',
+				sprintf(
+					/* translators: %s: tool name. */
+					__( 'Unknown tool: %s', 'xspeed' ),
+					$name
+				),
+				array( 'status' => 404 )
+			);
 			Mcp_Activity_Log::record( $name, $args, false, $error->get_error_message(), 'write', self::$channel );
 
 			return $error;
@@ -1067,6 +1155,11 @@ final class Mcp_Tools {
 	/**
 	 * Cache status, stats, and detected server.
 	 *
+	 * `site_icon` is the Site Icon set under Appearance, or '' when none is
+	 * set. The Hub shows it beside the site's name. Asking the site for
+	 * /favicon.ico instead failed on nginx hosts, which answer .ico
+	 * requests as static files and never reach WordPress.
+	 *
 	 * @param array $args Unused.
 	 * @return array
 	 */
@@ -1077,6 +1170,7 @@ final class Mcp_Tools {
 			'cache_enabled' => (bool) ( $opts['cache_enabled'] ?? false ),
 			'stats'         => Cache::get_stats(),
 			'server'        => Server::type(),
+			'site_icon'     => (string) get_site_icon_url( 64 ),
 		);
 	}
 
@@ -2369,12 +2463,39 @@ final class Mcp_Tools {
 	/**
 	 * Generate Critical CSS (Pro).
 	 *
-	 * @param array $args Unused.
+	 * The tool took no arguments, so it could only build the home page's
+	 * blob, while `wp xspeed ccss generate --page-url` could target any page.
+	 * Passed as `page-url`: `url` is a WP-CLI global the command never sees
+	 * from a real command line. (#559)
+	 *
+	 * @param array $args { url?:string } Full URL or site path.
 	 * @return array|\WP_Error
 	 */
 	public static function generate_critical_css( array $args ) {
-		unset( $args );
-		return Cli_Bridge::run( 'ccss', array( 'generate' ) );
+		$options = array();
+		if ( ! empty( $args['url'] ) ) {
+			$url = trim( (string) $args['url'] );
+			// A site path is a page on this site, as it is for run_pagespeed.
+			if ( '/' === substr( $url, 0, 1 ) && '//' !== substr( $url, 0, 2 ) ) {
+				$url = home_url( $url );
+			} elseif ( ! preg_match( '#^https?://#i', $url ) ) {
+				$url = ''; // `about/`, `//host/x`: neither a path nor a full URL.
+			}
+			$url = '' === $url ? '' : esc_url_raw( $url, array( 'http', 'https' ) );
+			// Only pages of this site. A render spends the site's quota, and
+			// another host is not a page this site's Critical CSS can serve.
+			$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+			if ( '' !== $url && strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) !== $host ) {
+				$url = '';
+			}
+			// Refused rather than dropped: an empty value would quietly
+			// build the home page and report success for the wrong page.
+			if ( '' === $url ) {
+				return new \WP_Error( 'xspeed_mcp_invalid_url', __( 'The url argument must be a page on this site, as a full http(s) URL or a path starting with /.', 'xspeed' ), array( 'status' => 400 ) );
+			}
+			$options['page-url'] = $url;
+		}
+		return Cli_Bridge::run( 'ccss', array( 'generate' ), $options );
 	}
 
 	/**

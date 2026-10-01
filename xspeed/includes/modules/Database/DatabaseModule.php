@@ -29,8 +29,9 @@ final class DatabaseModule extends Module {
 		return array(
 			'label'        => __( 'Database', 'xspeed' ),
 			'icon'         => 'Trash2',
-			'description'  => __( 'Scan + clean WordPress bloat (revisions, spam, transients, orphan meta) and optimize tables.', 'xspeed' ),
+			'description'  => __( 'Remove old revisions, spam and other leftovers, and optimize database tables.', 'xspeed' ),
 			'custom_panel' => 'DatabaseCleanerPanel',
+			'group'        => 'tools',
 		);
 	}
 
@@ -46,20 +47,27 @@ final class DatabaseModule extends Module {
 					'daily'  => 'Daily',
 					'weekly' => 'Weekly',
 				),
-				'label'         => __( 'Auto-Cleanup Schedule', 'xspeed' ),
-				'description'   => __( 'How often to run cleanup automatically. Manual means cleanup only runs when you press the button.', 'xspeed' ),
+				'label'         => __( 'Automatic cleanup', 'xspeed' ),
+				'description'   => __( 'How often xSpeed cleans the database on its own. Manual means it only cleans when you press the button.', 'xspeed' ),
 			),
 			'included_types' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Auto-Cleanup Types', 'xspeed' ),
-				'description' => __( 'Which cleanup categories run on the schedule above. Leave empty to keep auto-cleanup disabled even if a schedule is set.', 'xspeed' ),
+				'label'       => __( 'What to clean automatically', 'xspeed' ),
+				'description' => __( 'The items the scheduled cleanup removes. If you leave this empty, nothing is cleaned, even with a schedule set.', 'xspeed' ),
+				'dependsOn'   => array(
+					'any' => array(
+						array( 'field' => 'schedule', 'value' => 'hourly' ),
+						array( 'field' => 'schedule', 'value' => 'daily' ),
+						array( 'field' => 'schedule', 'value' => 'weekly' ),
+					),
+				),
 			),
 			'limit_revisions' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Limit Post Revisions', 'xspeed' ),
+				'label'       => __( 'Limit post revisions', 'xspeed' ),
 				'description' => __( 'Cap how many revisions WordPress keeps for each post. Cleanup removes revisions that already exist; this stops them piling up again.', 'xspeed' ),
 			),
 			'revisions_to_keep' => array(
@@ -67,8 +75,9 @@ final class DatabaseModule extends Module {
 				'default'     => 5,
 				'min'         => 0,
 				'max'         => 500,
-				'label'       => __( 'Revisions to Keep', 'xspeed' ),
-				'description' => __( 'Used when Limit Post Revisions is on. 0 turns revisions off completely. Older revisions are trimmed the next time each post is saved; to remove the backlog now, clean Post Revisions above.', 'xspeed' ),
+				'label'       => __( 'Revisions to keep', 'xspeed' ),
+				'description' => __( '0 turns revisions off completely. Older revisions are trimmed the next time each post is saved; to remove the backlog now, clean Post Revisions above.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'limit_revisions' ),
 			),
 		);
 	}

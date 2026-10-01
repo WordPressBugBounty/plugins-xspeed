@@ -35,7 +35,8 @@ final class GzipModule extends Module {
 			'label'        => __( 'Compression', 'xspeed' ),
 			'tab_label'    => __( 'GZIP', 'xspeed' ), // its own tab on the Compression page
 			'icon'         => 'Layers',
-			'description'  => __( 'Compress responses to reduce transfer size.', 'xspeed' ),
+			'description'  => __( 'Compresses pages and files so they download faster.', 'xspeed' ),
+			'group'        => 'performance',
 			// Host panel merges GZIP (this module) + Brotli (Pro) into one
 			// page — they are one decision with a fallback chain, not two
 			// sidebar rows (FBS-83633). The panel renders this module's own
@@ -49,7 +50,7 @@ final class GzipModule extends Module {
 			'gzip_enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Enable GZIP Compression', 'xspeed' ),
+				'label'       => __( 'Enable Gzip compression', 'xspeed' ),
 				// Server-conditional. The old copy said "On nginx the snippet
 				// below must be added to your server config" — unconditionally,
 				// and there is no snippet below: the Compression page is a tab
@@ -71,12 +72,12 @@ final class GzipModule extends Module {
 	 */
 	private static function gzip_description(): string {
 		if ( class_exists( '\\XSpeed\\Server' ) && Server::supports_htaccess() ) {
-			return __( 'Compress responses before sending them. We write the .htaccess rules automatically on this server.', 'xspeed' );
+			return __( 'Compresses pages and files before sending them. xSpeed adds the .htaccess rules for you on this server.', 'xspeed' );
 		}
 		if ( class_exists( '\\XSpeed\\Server' ) && Server::NGINX === Server::type() ) {
-			return __( 'Compress responses before sending them. nginx cannot be configured from WordPress, so the directives ship in the unified server-block snippet — see the notice below.', 'xspeed' );
+			return __( 'Compresses pages and files before sending them. On nginx you add the rules to your server config yourself. See the notice below.', 'xspeed' );
 		}
-		return __( 'Compress responses before sending them. On this server the directives have to be added to your server config by hand — see the notice below.', 'xspeed' );
+		return __( 'Compresses pages and files before sending them. On this server you add the rules to your server config yourself. See the notice below.', 'xspeed' );
 	}
 
 	/**

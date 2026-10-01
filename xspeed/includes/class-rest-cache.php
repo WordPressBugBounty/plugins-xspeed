@@ -16,7 +16,10 @@
  * the storage; the add-on owns policy (which routes, how long).
  *
  * Storage: one JSON file per entry under XSPEED_CACHE_DIR/rest/, keyed
- * by md5(route + sorted query params). Purged by Cache::purge_all().
+ * by md5(blog bucket + route + sorted query params). The blog namespace is
+ * part of the filename so same-route requests cannot collide on multisite.
+ * Purged by Cache::purge_local() — the whole bucket at once, every blog
+ * with it, since the namespace is inside the md5 and not globbable.
  *
  * @package XSpeed
  */
@@ -218,7 +221,7 @@ class Rest_Cache {
 	}
 
 	/**
-	 * Cache file for a request — md5(route + sorted query params), so
+	 * Cache file for a request — md5(blog bucket + route + sorted query params), so
 	 * /wp/v2/posts?per_page=5 and ?per_page=10 are distinct but param
 	 * order doesn't matter. POST body is irrelevant (GET-only).
 	 *
@@ -243,13 +246,15 @@ class Rest_Cache {
 			ksort( $parsed );
 			$qs = wp_json_encode( $parsed );
 		}
-		$key = md5( (string) $request->get_route() . '?' . $qs );
+		$key = md5( Cache::current_host_dir() . '|' . (string) $request->get_route() . '?' . $qs );
 		return self::dir() . '/' . $key . '.json';
 	}
 
 	/**
-	 * Delete every REST cache entry. Called by Cache::purge_all(). Returns
-	 * the count removed.
+	 * Delete every REST cache entry — the entire bucket, all blogs, because
+	 * the blog namespace lives inside the md5 rather than in a path segment.
+	 * Called by Cache::purge_local() and by purge_type( 'rest' ). Returns the
+	 * count removed.
 	 */
 	public static function purge(): int {
 		$dir = self::dir();

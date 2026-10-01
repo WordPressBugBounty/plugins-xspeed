@@ -455,8 +455,25 @@ final class Css_Combine_Buffer {
 		// becomes something else on load. Any plugin using the standard
 		// print/swap idiom is read correctly rather than merged into a
 		// print-only bundle and stripped of its handler (#335 review, issue 3).
-		if ( preg_match( '#\bonload\s*=\s*(["\'])\s*this\.media\s*=\s*(["\'])([^"\']*)\2#i', $tag, $m ) ) {
-			return $m[3];
+		//
+		// The assignment can sit anywhere in the handler. loadCSS spells it
+		// `this.onload=null;this.media='all'`, and matching only a handler
+		// that STARTS with `this.media` filed two such sheets as real print
+		// sheets: merged into a `media="print"` bundle with no onload, they
+		// never applied on screen. (#560)
+		//
+		// The attribute is decoded first: a tag built with esc_attr() carries
+		// `this.media=&#039;all&#039;`. An assignment whose value is not a
+		// literal (`this.media=this.dataset.media`) is still a swap; it
+		// restores to the screen, so it is read as `all`.
+		if ( preg_match( '#(?<![-\w])onload\s*=\s*(?:"([^"]*)"|\'([^\']*)\')#i', $tag, $h ) ) {
+			$handler = html_entity_decode( '' !== $h[1] ? $h[1] : ( $h[2] ?? '' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+			if ( preg_match( '#\bthis\.media\s*=\s*(["\'])([^"\']*)\1#i', $handler, $m ) ) {
+				return $m[2];
+			}
+			if ( preg_match( '#\bthis\.media\s*=(?!=)#i', $handler ) ) {
+				return 'all';
+			}
 		}
 
 		return '';

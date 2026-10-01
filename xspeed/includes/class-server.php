@@ -445,13 +445,15 @@ class Server {
 				'timeout'     => 3,
 				'sslverify'   => ! $is_local,
 				'redirection' => 0,
-				'headers'     => array(
-					// `br` ONLY. Offering gzip as well would let a server that
-					// prefers gzip answer with it and look like a brotli
-					// failure, which is exactly the false negative this method
-					// exists to remove.
-					'Accept-Encoding' => 'br',
-					'Cache-Control'   => 'no-cache',
+				'headers'     => Self_Traffic::headers(
+					array(
+						// `br` ONLY. Offering gzip as well would let a server that
+						// prefers gzip answer with it and look like a brotli
+						// failure, which is exactly the false negative this method
+						// exists to remove.
+						'Accept-Encoding' => 'br',
+						'Cache-Control'   => 'no-cache',
+					)
 				),
 			)
 		);

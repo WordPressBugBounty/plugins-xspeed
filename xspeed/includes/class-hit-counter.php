@@ -89,21 +89,53 @@ final class Hit_Counter {
 	}
 
 	/**
+	 * The bot / crawler / scanner alternation, without delimiters so the
+	 * drop-in can compose it — see excluded_ua_regex().
+	 */
+	public const BOT_UA_PATTERN = 'bot|crawl|spider|slurp|scan|curl|wget|python-requests|python-urllib|libwww|httpclient|go-http|okhttp|axios|node-fetch|headless|phantomjs|masscan|nikto|sqlmap|zgrab|semrush|ahrefs|mj12|dotbot|petalbot|bytespider|facebookexternalhit|preview|monitor|uptime|pingdom|gtmetrix|lighthouse|pagespeed';
+
+	/**
 	 * Whether a User-Agent is a known bot / crawler / vulnerability scanner —
 	 * its cache misses are cache-warming or hostile noise, not a signal of how
 	 * the cache serves real visitors. Deliberately broad: matches the common
 	 * crawler tokens plus the generic markers scanners and libraries carry.
-	 * Pure + unit-tested. (#118)
+	 * Unit-tested; no longer pure — Self_Traffic::is_self() runs the
+	 * xspeed_self_user_agents filter, so the answer can vary per site. (#118)
 	 */
 	public static function is_bot_ua( string $ua ): bool {
 		if ( '' === $ua ) {
 			// No UA at all is overwhelmingly automated traffic, not a browser.
 			return true;
 		}
-		return 1 === preg_match(
-			'~(bot|crawl|spider|slurp|scan|curl|wget|python-requests|python-urllib|libwww|httpclient|go-http|okhttp|axios|node-fetch|headless|phantomjs|masscan|nikto|sqlmap|zgrab|semrush|ahrefs|mj12|dotbot|petalbot|bytespider|facebookexternalhit|preview|monitor|uptime|pingdom|gtmetrix|lighthouse|pagespeed)~i',
-			$ua
-		);
+		// Our own warmer, benchmark and verifier are warming the cache, not
+		// visiting it: `xSpeed-Warmer`, `xSpeed Benchmark`, and the rest.
+		// Callers with a request also check Self_Traffic::request_is_marked().
+		if ( Self_Traffic::is_self( $ua ) ) {
+			return true;
+		}
+		return 1 === preg_match( '~(' . self::BOT_UA_PATTERN . ')~i', $ua );
+	}
+
+	/**
+	 * The "do not count this user agent" alternation: bots and scanners,
+	 * plus the fragments xSpeed's own requests carry. A renamed warmer is
+	 * not in it on purpose; that request is recognised by
+	 * Self_Traffic::HEADER, because its UA may be a real browser's.
+	 *
+	 * Baked into the drop-in at install time (`@@XSPEED_HIT_EXCLUDE_RE@@`).
+	 * The drop-in runs before WordPress, so it cannot ask this class and the
+	 * hits.log line it writes carries no user agent — nothing downstream can
+	 * reclassify the line later, which is why the decision has to travel
+	 * with the file. A hardcoded copy of the fragments drifted instead: it
+	 * excluded the warmer but still counted every crawler HIT, and it could
+	 * not know about an overridden `xspeed_preloader_user_agent`.
+	 */
+	public static function excluded_ua_regex(): string {
+		$parts = array( self::BOT_UA_PATTERN );
+		foreach ( Self_Traffic::agents() as $agent ) {
+			$parts[] = preg_quote( $agent, '#' );
+		}
+		return implode( '|', $parts );
 	}
 
 	public static function record_miss(): void {

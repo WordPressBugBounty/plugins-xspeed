@@ -53,6 +53,13 @@ final class Mcp_Pairing {
 	/** Path segment of the pretty per-site endpoint. */
 	public const SITE_ENDPOINT_PATH = 'xspeed/mcp';
 
+	/**
+	 * Fires after a NEW token replaces the stored one (Rotate, or a Connect
+	 * after Disconnect). Mcp_Hub listens and sends the token to the Hub,
+	 * which holds a copy and would otherwise go on presenting the old one.
+	 */
+	public const TOKEN_CHANGED_ACTION = 'xspeed_mcp_token_changed';
+
 	/** Default scopes granted on connect. */
 	private const DEFAULT_SCOPES = array( 'read', 'write' );
 
@@ -220,6 +227,14 @@ final class Mcp_Pairing {
 		}
 		$out = array();
 		foreach ( Mcp_Tools::catalog() as $name => $spec ) {
+			// A hidden tool is a private broker stage. This summary is the
+			// dashboard's answer to "what can an agent do here", so listing one
+			// would advertise it in the one place a user reads — the second
+			// enumerator of the same catalog, and the one tools/list's own
+			// filter does not cover.
+			if ( ! empty( $spec['hidden'] ) ) {
+				continue;
+			}
 			$out[] = array(
 				'name'        => (string) $name,
 				'description' => isset( $spec['description'] ) ? (string) $spec['description'] : '',
@@ -398,6 +413,11 @@ final class Mcp_Pairing {
 			false
 		);
 
+		if ( ! $existing ) {
+			/** This action is documented in Mcp_Pairing::TOKEN_CHANGED_ACTION. */
+			do_action( self::TOKEN_CHANGED_ACTION, $token );
+		}
+
 		return self::public_status();
 	}
 
@@ -429,6 +449,9 @@ final class Mcp_Pairing {
 			),
 			false
 		);
+
+		/** This action is documented in Mcp_Pairing::TOKEN_CHANGED_ACTION. */
+		do_action( self::TOKEN_CHANGED_ACTION, $token );
 
 		return self::public_status();
 	}

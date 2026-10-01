@@ -258,7 +258,24 @@ class Cache {
 		// This filter fires only when the upgrader removed an existing copy,
 		// which is exactly the difference. Registered as a filter listener
 		// that returns its input untouched. (#303)
-		add_filter( 'upgrader_clear_destination', array( __CLASS__, 'note_cleared_destination' ), 10, 1 );
+		add_filter( 'upgrader_clear_destination', array( __CLASS__, 'note_cleared_destination' ), 10, 4 );
+		// …but `upgrader_clear_destination` fires whenever the upgrader was
+		// ASKED to clear, not only when it removed something:
+		// WP_Upgrader::clear_destination() returns true early when the
+		// destination does not exist. Looked at before the delete, while the
+		// old copy is still on disk. (#303)
+		//
+		// PHP_INT_MAX, because the folder name is only final once every other
+		// listener has had its turn. Update libraries that normalise
+		// `plugin-1.2.3/` to `plugin/` (Plugin Update Checker, EDD Software
+		// Licensing, GitHub-sourced zips) rename the extracted directory on
+		// this same filter at priority 10 or later, and core derives the real
+		// destination from the FILTERED source. Measured at 10, a genuine
+		// replacement read as "nothing was there" and the stale cache stayed.
+		// note_cleared_destination() cross-checks the folder core actually
+		// cleared against the one measured here, for a renamer that runs
+		// later still. (#407 QA)
+		add_filter( 'upgrader_source_selection', array( __CLASS__, 'note_destination_state' ), PHP_INT_MAX, 4 );
 		// Unattended auto-updates are the case that matters most here: they
 		// land overnight with nobody around to purge by hand, which is the
 		// exact scenario the stale cache goes undiagnosed in. WordPress fires
@@ -1210,7 +1227,17 @@ class Cache {
 		$file = self::cache_file_for( $key );
 
 		if ( file_exists( $file ) && ! self::is_expired( $file ) ) {
-			Hit_Counter::record_hit();
+			// Symmetric with the miss branch below: a bot, scanner or one of
+			// xSpeed's own warm/benchmark requests that lands a HIT must not
+			// inflate the ratio either — excluding only their misses would
+			// shrink the denominator while their hits kept feeding the
+			// numerator, making the displayed ratio MORE optimistic than
+			// before the exclusion existed.
+			if ( self::miss_is_excluded() ) {
+				Hit_Counter::record_excluded();
+			} else {
+				Hit_Counter::record_hit();
+			}
 			// Emit the HIT marker on THIS path too. The drop-in
 			// (advanced-cache.php) sends "HIT (php)" and the nginx static
 			// rewrite sends "HIT (nginx)", but this template_redirect
@@ -1825,8 +1852,24 @@ class Cache {
 	 * unknown now bypasses the cache, which is the safe direction.
 	 */
 	private static function query_key_is_ignored( string $key, array $ignored ): bool {
+		if ( in_array( $key, self::NEVER_IGNORED_QUERY_PARAMS, true ) ) {
+			return false;
+		}
 		return Glob_Matcher::any_match_name( $ignored, $key );
 	}
+
+	/**
+	 * Query params no ignored-params entry can match, glob or regex.
+	 *
+	 * A measuring request asks for the page as it is before optimisation
+	 * (`xspeed_css=off`), with a one-time value (`xspeed_nc`) so no cache
+	 * has a copy of it. The answer must be rendered for that request. A
+	 * list entry such as `xspeed_*` or `*` would make both params
+	 * decoration: the drop-in would serve the canonical, already-optimised
+	 * entry before any plugin loads, and the measurement would describe
+	 * the optimised page instead of the source.
+	 */
+	public const NEVER_IGNORED_QUERY_PARAMS = array( 'xspeed_css', 'xspeed_nc' );
 
 	public static function cache_key() {
 		$host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : 'default';
@@ -4680,6 +4723,11 @@ class Cache {
 	 * alternative — scoping the signal per upgrader — is not knowable from
 	 * `upgrader_clear_destination`.
 	 *
+	 * The observed-destination signal is dropped here too. The two are read
+	 * together and have to expire together: leaving "the directory was not
+	 * there" behind would let a first install answer for whatever ran next
+	 * in the same request, and that one's mistake is a cache left stale.
+	 *
 	 * @return void
 	 */
 	public static function forget_cleared_destination(): void {
@@ -4689,7 +4737,79 @@ class Cache {
 
 		if ( 0 === self::$upgrade_dispatch_depth ) {
 			self::$upgrade_cleared_destination = false;
+			self::$upgrade_destination_existed = null;
+			self::$upgrade_destination_folder  = '';
 		}
+	}
+
+	/**
+	 * Whether the destination this run installs into was already there.
+	 *
+	 * Null while unknown — an upgrader whose target we cannot work out keeps
+	 * the old behaviour rather than being guessed at.
+	 *
+	 * @var bool|null
+	 */
+	private static $upgrade_destination_existed = null;
+
+	/**
+	 * The folder name that answer was measured against, so the destination
+	 * WordPress reports on `upgrader_clear_destination` can be checked
+	 * against it. Empty when nothing was measured.
+	 *
+	 * @var string
+	 */
+	private static $upgrade_destination_folder = '';
+
+	/**
+	 * Note whether the package's destination exists, before it is cleared.
+	 *
+	 * `upgrader_source_selection` is the last hook that fires while the old
+	 * copy is still on disk, and the extracted source folder name is the
+	 * directory the package will install into. A pass-through listener: the
+	 * source is returned untouched.
+	 *
+	 * @param mixed $source     Extracted package directory.
+	 * @param mixed $remote_src Unused; the package's remote source.
+	 * @param mixed $upgrader   The upgrader instance, if one was supplied.
+	 * @param mixed $hook_extra Context supplied by the upgrader.
+	 * @return mixed The source, unchanged.
+	 */
+	public static function note_destination_state( $source, $remote_src = '', $upgrader = null, $hook_extra = array() ) {
+		self::$upgrade_destination_existed = null;
+		self::$upgrade_destination_folder  = '';
+
+		$root = self::upgrade_destination_root( $upgrader, is_array( $hook_extra ) ? $hook_extra : array() );
+		if ( null !== $root && is_string( $source ) && '' !== $source ) {
+			$folder = basename( rtrim( $source, '/\\' ) );
+			if ( '' !== $folder ) {
+				self::$upgrade_destination_existed = is_dir( rtrim( $root, '/\\' ) . '/' . $folder );
+				self::$upgrade_destination_folder  = $folder;
+			}
+		}
+
+		return $source;
+	}
+
+	/**
+	 * Where a package of this kind installs to, or null if we cannot tell.
+	 *
+	 * @param mixed $upgrader   The upgrader instance, if one was supplied.
+	 * @param array $hook_extra Context supplied by the upgrader.
+	 * @return string|null
+	 */
+	private static function upgrade_destination_root( $upgrader, array $hook_extra ): ?string {
+		$type = isset( $hook_extra['type'] ) ? (string) $hook_extra['type'] : '';
+
+		if ( 'plugin' === $type || $upgrader instanceof \Plugin_Upgrader ) {
+			return defined( 'WP_PLUGIN_DIR' ) ? WP_PLUGIN_DIR : null;
+		}
+
+		if ( 'theme' === $type || $upgrader instanceof \Theme_Upgrader ) {
+			return function_exists( 'get_theme_root' ) ? (string) get_theme_root() : null;
+		}
+
+		return null;
 	}
 
 	/**
@@ -4703,9 +4823,24 @@ class Cache {
 	 * @param true|\WP_Error $removed Whether the destination was cleared.
 	 * @return true|\WP_Error
 	 */
-	public static function note_cleared_destination( $removed ) {
+	public static function note_cleared_destination( $removed, $local_destination = '', $remote_destination = '', $hook_extra = array() ) {
 		if ( ! is_wp_error( $removed ) ) {
 			self::$upgrade_cleared_destination = true;
+		}
+
+		// $remote_destination is the directory WordPress actually cleared,
+		// derived from the source AFTER every `upgrader_source_selection`
+		// listener ran. If its folder is not the one note_destination_state()
+		// measured, a listener that ran after ours renamed the package, and
+		// the "was it there?" answer is about a directory that was never going
+		// to be written. Unknown is the answer that purges, so that is what it
+		// becomes. Only the last segment is compared: over FTP the remote
+		// path sits under the server's own root, not WP_PLUGIN_DIR. (#407 QA)
+		if ( is_string( $remote_destination ) && '' !== $remote_destination ) {
+			$cleared_folder = basename( rtrim( $remote_destination, '/\\' ) );
+			if ( '' !== $cleared_folder && $cleared_folder !== self::$upgrade_destination_folder ) {
+				self::$upgrade_destination_existed = null;
+			}
 		}
 
 		return $removed;
@@ -4820,6 +4955,16 @@ class Cache {
 		// WP_Upgrader only fires `upgrader_clear_destination` when it removed
 		// something that was already there. Installing beside nothing does not.
 		if ( 'install' === $action && ! $cleared ) {
+			return false;
+		}
+
+		// A cleared destination is only evidence of a replacement if there was
+		// something in it. Core returns success from clear_destination() for a
+		// destination that never existed, so a first-time install arrived here
+		// looking exactly like an upload-and-replace and bought a cold cache
+		// for a plugin that is not even active yet. Only acted on when we
+		// positively know the directory was absent.
+		if ( 'install' === $action && false === self::$upgrade_destination_existed ) {
 			return false;
 		}
 
@@ -5649,6 +5794,11 @@ class Cache {
 		if ( function_exists( 'is_404' ) && is_404() ) {
 			return true;
 		}
+		// A marked request is ours whatever its UA says: a renamed warmer,
+		// or a probe that has to send a browser's UA.
+		if ( Self_Traffic::request_is_marked() ) {
+			return true;
+		}
 		$ua = isset( $_SERVER['HTTP_USER_AGENT'] )
 			? sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_USER_AGENT'] ) )
 			: '';
@@ -6421,7 +6571,7 @@ class Cache {
 		$opts    = self::stored_cache_opts();
 		$ignored = is_array( $opts['ignored_query_params'] ?? null )
 			? $opts['ignored_query_params']
-			: \XSpeed\Modules\Cache\CacheModule::DEFAULT_IGNORED_QUERY_PARAMS;
+			: \XSpeed\Modules\Cache\CacheModule::default_ignored_query_params();
 
 		$parts = array();
 		foreach ( $ignored as $pattern ) {
@@ -6457,7 +6607,10 @@ class Cache {
 			return;
 		}
 
-		$payload = '(?:' . implode( '|', array_unique( $parts ) ) . ')';
+		// The drop-in anchors this as `^…$`, so the lookahead refuses the
+		// never-ignored names whole, whatever entry would have matched them.
+		$never   = implode( '|', array_map( static fn ( $p ) => preg_quote( $p, '#' ), self::NEVER_IGNORED_QUERY_PARAMS ) );
+		$payload = '(?!(?:' . $never . ')$)(?:' . implode( '|', array_unique( $parts ) ) . ')';
 
 		// Only write when the value actually changed. This runs from
 		// reconcile_mobile_separate() on CacheModule::boot(), so an
@@ -6973,7 +7126,9 @@ class Cache {
 					// Bust any per-device cache so we compare freshly-rendered
 					// HTML, and pass the device UA the site would branch on.
 					'user-agent'  => $ua,
-					'headers'     => array( 'Cache-Control' => 'no-cache' ),
+					// A real device UA by design, so only the header marks
+					// this as ours to analytics and the hit ratio.
+					'headers'     => Self_Traffic::headers( array( 'Cache-Control' => 'no-cache' ) ),
 				)
 			);
 			if ( is_wp_error( $resp ) || 200 !== (int) wp_remote_retrieve_response_code( $resp ) ) {
@@ -7795,7 +7950,7 @@ class Cache {
 				'timeout'     => 3,
 				'sslverify'   => ! $is_local,
 				'redirection' => 0,
-				'headers'     => array( 'Cache-Control' => 'no-cache' ),
+				'headers'     => Self_Traffic::headers( array( 'Cache-Control' => 'no-cache' ) ),
 			)
 		);
 
@@ -8517,6 +8672,14 @@ class Cache {
 		$source_contents = str_replace(
 			'@@XSPEED_UA_RE@@',
 			str_replace( "'", "\\'", $ua_rule['regex'] ),
+			$source_contents
+		);
+		// Which user agents must not count toward the hit ratio. Built here
+		// because `xspeed_self_user_agents` is a filter the drop-in cannot
+		// call. A renamed warmer is caught by Self_Traffic::HEADER instead.
+		$source_contents = str_replace(
+			'@@XSPEED_HIT_EXCLUDE_RE@@',
+			str_replace( "'", "\\'", Hit_Counter::excluded_ua_regex() ),
 			$source_contents
 		);
 

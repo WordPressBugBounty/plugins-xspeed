@@ -666,6 +666,13 @@ class Admin {
 				'label'        => $meta['label'] ?? ucfirst( $slug ),
 				'icon'         => $meta['icon'] ?? 'Square',
 				'description'  => $meta['description'] ?? '',
+				// The dashboard group the module belongs to (cache, performance,
+				// network, insights, tools, ai-agents, settings), declared by the
+				// module itself. The Hub kept its own copy of this map, so every
+				// new module landed in its "Other" bucket until the Hub shipped.
+				// Must agree with src/components/sidebarGroups.ts; a unit test
+				// holds the two together.
+				'group'        => $meta['group'] ?? null,
 				// Short label for the module's own tab when it hosts a tabbed
 				// page (FBS-83633). Only set on host modules.
 				'tab_label'    => $meta['tab_label'] ?? null,

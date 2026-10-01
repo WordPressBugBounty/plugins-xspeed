@@ -35,7 +35,8 @@ final class CacheCoverageModule extends Module {
 		return array(
 			'label'        => __( 'Advanced Cache', 'xspeed' ),
 			'icon'         => 'Layers',
-			'description'  => __( 'Cache 404s, search, feeds, and the REST API, plus custom rules and maintenance bypass.', 'xspeed' ),
+			'description'  => __( 'Caches more page types: 404s, search, feeds and the REST API.', 'xspeed' ),
+			'group'        => 'cache',
 			'custom_panel' => 'CacheCoveragePanel',
 		);
 	}

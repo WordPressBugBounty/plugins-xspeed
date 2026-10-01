@@ -329,6 +329,12 @@ final class Pro_Audit {
 			return array();
 		}
 		if ( ! is_array( $raw ) ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// Usually a contributor that forgot to return the list. It
+				// costs every contribution, so it should not be silent either.
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( '[xspeed] xspeed_pro_audit_suggestions returned ' . gettype( $raw ) . ', not an array; contributions dropped' );
+			}
 			return array();
 		}
 

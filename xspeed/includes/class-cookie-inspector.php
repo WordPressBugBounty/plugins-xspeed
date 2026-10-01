@@ -260,7 +260,7 @@ final class Cookie_Inspector {
 			home_url( '/' ),
 			array(
 				'timeout'   => 5,
-				'headers'   => array( 'User-Agent' => 'xSpeed Health Probe/1.0' ),
+				'headers'   => Self_Traffic::headers( array( 'User-Agent' => 'xSpeed Health Probe/1.0' ) ),
 				'cookies'   => array(), // anonymous — a logged-in probe would false-positive on auth cookies.
 				// Verify TLS in production; relax only for local/dev hosts,
 				// which routinely use self-signed certs. Blanket-disabling

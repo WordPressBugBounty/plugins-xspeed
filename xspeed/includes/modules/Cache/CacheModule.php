@@ -108,6 +108,45 @@ final class CacheModule extends Module {
 		'~utm_[a-zA-Z0-9_-]+',
 	);
 
+	/**
+	 * Click and campaign IDs added to the defaults in 1.3.6.
+	 *
+	 * Each is unique per click and never changes the page, yet each one
+	 * bypassed the page cache and, with xSpeed Pro, was a new CSS entry to
+	 * build: Google Merchant's `srsltid` and Ads' `gad_*`/`gbraid`/`wbraid`,
+	 * GA4's cross-domain `_gl`, TikTok, X, Instagram, Yandex, HubSpot email
+	 * and LinkedIn IDs. Kept as their own list so the upgrade can add exactly
+	 * these to a saved list without re-adding anything a site removed.
+	 *
+	 * @var string[]
+	 */
+	public const TRACKING_PARAMS_1_3_6 = array(
+		'_gl',
+		'_hsenc',
+		'_hsmi',
+		'gad_campaignid',
+		'gad_source',
+		'gbraid',
+		'igshid',
+		'li_fat_id',
+		'srsltid',
+		'ttclid',
+		'twclid',
+		'wbraid',
+		'yclid',
+	);
+
+
+	/**
+	 * The shipped default list: the base list plus later additions, sorted.
+	 *
+	 * @return string[]
+	 */
+	public static function default_ignored_query_params(): array {
+		$all = array_values( array_unique( array_merge( self::DEFAULT_IGNORED_QUERY_PARAMS, self::TRACKING_PARAMS_1_3_6 ) ) );
+		sort( $all );
+		return $all;
+	}
 
 	public const SLUG    = 'cache';
 	public const TIER    = self::TIER_FREE;
@@ -129,7 +168,8 @@ final class CacheModule extends Module {
 		return array(
 			'label'       => __( 'Page Cache', 'xspeed' ),
 			'icon'        => 'Database',
-			'description' => __( 'Page caching for non-logged-in visitors.', 'xspeed' ),
+			'description' => __( 'Saves each page as a file and serves it to logged-out visitors.', 'xspeed' ),
+			'group'       => 'cache',
 		);
 	}
 
@@ -155,9 +195,9 @@ final class CacheModule extends Module {
 				'default'     => self::DEFAULT_EXPIRY_HOURS,
 				'min'         => 1,
 				'max'         => 720,
-				'label'       => __( 'Cache Expiry (hours)', 'xspeed' ),
+				'label'       => __( 'Cache expiry (hours)', 'xspeed' ),
 				'unit'        => 'hours',
-				'description' => __( 'How long cached pages live before regenerating. 1 to 720 hours (30 days).', 'xspeed' ),
+				'description' => __( 'How long a cached page is kept before xSpeed builds it again. 1 to 720 hours (30 days).', 'xspeed' ),
 			),
 			'excluded_urls' => array(
 				'type'        => 'list',
@@ -188,7 +228,7 @@ final class CacheModule extends Module {
 				),
 				'item_type'   => 'string',
 				'label'       => __( 'Excluded URLs', 'xspeed' ),
-				'description' => __( 'One pattern per line. Plain text matches anywhere in the URL (e.g. /cart). Use glob for anchored matches (/cart/* matches /cart/items but not /foo/cart/bar; *.pdf matches PDFs). Prefix with ~ for a raw regex (e.g. ~wp-.*\.php).', 'xspeed' ),
+				'description' => __( 'Pages whose URL matches a line here are never cached. Plain text matches anywhere (/cart). A pattern with * matches from the start of the path: /cart/* matches /cart/items but not /shop/cart/items. ~ starts a regex.', 'xspeed' ),
 			),
 			'excluded_cookies' => array(
 				'type'        => 'list',
@@ -197,15 +237,15 @@ final class CacheModule extends Module {
 				// `~` prefix = raw regex (e.g. ~wordpress_[a-f0-9]+). (FBS-82181)
 				'default'     => self::DEFAULT_EXCLUDED_COOKIES,
 				'item_type'   => 'string',
-				'label'       => __( 'Excluded Cookies', 'xspeed' ),
-				'description' => __( 'Skip cache for any visitor whose request carries a cookie whose NAME matches one of these patterns. Plain text = "contains"; glob (woocommerce_*) and ~regex (~wordpress_[a-f0-9]+) supported. One per line.', 'xspeed' ),
+				'label'       => __( 'Excluded cookies', 'xspeed' ),
+				'description' => __( 'Visitors with a cookie whose name matches a line here always get a fresh page. One per line; * and ~regex work.', 'xspeed' ),
 			),
 			'bypass_user_agents' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Bypass User Agents', 'xspeed' ),
-				'description' => __( 'Substring match against the visitor User-Agent. Matched UAs bypass cache (useful for screenshot bots, internal previews, monitoring). Glob + ~regex supported. One per line.', 'xspeed' ),
+				'label'       => __( 'Excluded browsers and bots', 'xspeed' ),
+				'description' => __( 'Visitors whose user agent contains a line here always get a fresh page. Useful for screenshot bots and uptime monitors.', 'xspeed' ),
 			),
 			'ignored_query_params' => array(
 				'type'        => 'list',
@@ -214,22 +254,23 @@ final class CacheModule extends Module {
 				// share one entry. `~` prefix = raw regex. (FBS-82181)
 				// Matched whole-name, so every entry here means the param
 				// it names and nothing that merely contains it.
-				'default'     => self::DEFAULT_IGNORED_QUERY_PARAMS,
+				'default'     => self::default_ignored_query_params(),
 				'item_type'   => 'string',
-				'label'       => __( 'Ignored Query Parameters', 'xspeed' ),
-				'description' => __( 'Query keys removed from the URL before computing the cache key, so /post?utm_source=x and /post share a cache entry. Defaults cover the common analytics + ad + session params. Each entry matches a whole param name — plain text is an exact name, and glob (utm_*) or ~regex are anchored too, so "ref" does not also match "preference". One per line.', 'xspeed' ),
+				'label'       => __( 'Ignored query parameters', 'xspeed' ),
+				'advanced'    => true,
+				'description' => __( 'URL parameters to ignore, so /post?utm_source=x gets the same cached page as /post. Each line matches a whole parameter name.', 'xspeed' ),
 			),
 			'purge_on_upgrade' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Purge After Updates', 'xspeed' ),
-				'description' => __( 'Clear the page cache when a plugin, theme or WordPress core is updated. Cached HTML is produced by the code being replaced, so leaving it in place serves pre-update markup — and links to minified assets that no longer exist — until the cache expires. Translation updates are ignored, since a language pack changes no markup a cached page depends on. Updates to xSpeed itself always purge, regardless of this setting.', 'xspeed' ),
+				'label'       => __( 'Clear cache after updates', 'xspeed' ),
+				'description' => __( 'Clear the page cache when a plugin, theme or WordPress is updated, so visitors never get old pages with broken asset links.', 'xspeed' ),
 			),
 			'mobile_separate' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Separate Mobile Cache', 'xspeed' ),
-				'description' => __( 'Keep mobile and desktop responses in separate cache buckets. Turn on for AMP, mobile-specific themes (WPtouch / Jetpack mobile theme), or any setup that serves different HTML by device.', 'xspeed' ),
+				'label'       => __( 'Separate mobile cache', 'xspeed' ),
+				'description' => __( 'Keep a separate cached copy for phones. Turn on only if your theme or plugins show different pages on mobile.', 'xspeed' ),
 			),
 			'edge_provider'   => array(
 				'type'          => 'enum',
@@ -261,8 +302,9 @@ final class CacheModule extends Module {
 					'generic'    => 'Something else',
 					'custom'     => 'Custom headers',
 				),
-				'label'         => __( 'Cache In Front Of This Site', 'xspeed' ),
-				'description'   => __( 'Ask a CDN or proxy in front of your site not to store pages xSpeed refused to cache. Leave it on Detect automatically unless you know what is in front of you; the marked providers ignore origin headers until you configure them to respect it.', 'xspeed' ),
+				'label'         => __( 'CDN or proxy in front', 'xspeed' ),
+				'description'   => __( 'Tells your CDN or proxy not to store pages xSpeed does not cache. Leave on Detect automatically unless you know your provider.', 'xspeed' ),
+				'advanced'      => true,
 				'info_title'    => __( 'Cache in front of this site', 'xspeed' ),
 				'info'          => __( 'Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Run "wp xspeed cache edge" to see what was detected and what gets sent.', 'xspeed' )
 			),
@@ -270,9 +312,10 @@ final class CacheModule extends Module {
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Custom Edge Headers', 'xspeed' ),
+				'label'       => __( 'Custom CDN headers', 'xspeed' ),
+				'advanced'    => true,
 				'dependsOn'   => array( 'field' => 'edge_provider', 'value' => 'custom' ),
-				'description' => __( 'One header per line, as Name: value — for example "Surrogate-Control: no-store". Lines starting with # are ignored.', 'xspeed' ),
+				'description' => __( 'One header per line, as Name: value, for example "Surrogate-Control: no-store". Lines starting with # are ignored.', 'xspeed' ),
 				'info_title'  => __( 'Custom edge headers', 'xspeed' ),
 				'info'        => __( 'These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and "X-Accel-Expires: 0" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused.', 'xspeed' )
 			),
@@ -287,8 +330,9 @@ final class CacheModule extends Module {
 				'litespeed_static_rewrite' => array(
 					'type'        => 'bool',
 					'default'     => false,
-					'label'       => __( 'LiteSpeed Static Fast Path', 'xspeed' ),
-					'description' => __( 'Serve cache hits straight from the web server via .htaccess instead of the PHP drop-in. No PHP runs on a hit, so the saving depends on how quickly PHP answers on this host — a few milliseconds on a fast server, far more where PHP is the bottleneck. The trade: LiteSpeed cannot add the X-XSpeed-Cache header to statically served pages, and those hits are not counted in the dashboard hit ratio. Leave off to keep every hit visibly tagged and counted.', 'xspeed' ),
+					'label'       => __( 'LiteSpeed static fast path', 'xspeed' ),
+					'advanced'    => true,
+					'description' => __( 'LiteSpeed serves cached pages without running PHP, which is faster on slow hosts. These visits are not counted in the dashboard hit ratio.', 'xspeed' ),
 				),
 			);
 			$pos    = (int) array_search( 'mobile_separate', array_keys( $schema ), true ) + 1;

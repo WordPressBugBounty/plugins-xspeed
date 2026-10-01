@@ -15,7 +15,7 @@ class Plugin {
 	 * Data-schema version for one-time migrations, independent of the
 	 * plugin version header. Bump when adding a step to maybe_upgrade().
 	 */
-	public const DATA_VERSION = '1.1.6';
+	public const DATA_VERSION = '1.3.6';
 
 	private static $instance = null;
 
@@ -104,6 +104,11 @@ class Plugin {
 		// gate stands down in favour of.
 		Server_Caches::boot();
 
+		// Tell WP Statistics and Slimstat not to count the warmer, the
+		// benchmark and the verifier as visitors. Record-time filters only;
+		// see the class for why the tracking snippet itself is left alone.
+		Self_Traffic::boot();
+
 		// Register Free modules via the same action xspeed-pro uses, so
 		// the bootstrap path is symmetric across tiers.
 		add_action( 'xspeed_register_modules', array( $this, 'register_free_modules' ) );
@@ -130,6 +135,36 @@ class Plugin {
 	}
 
 	/**
+	 * Add the 1.3.6 tracking params to a saved ignored-params list.
+	 *
+	 * Only those names, and only when missing: anything else the site
+	 * removed stays removed. A site with no saved list already reads the new
+	 * defaults.
+	 */
+	public static function add_new_ignored_params(): void {
+		$option = Settings_Manager::OPTION_PREFIX . 'cache';
+		$stored = get_option( $option, array() );
+		if ( ! is_array( $stored ) || ! is_array( $stored['ignored_query_params'] ?? null ) ) {
+			return;
+		}
+		$list = $stored['ignored_query_params'];
+		// An empty list is a choice: every query string bypasses the cache.
+		if ( empty( $list ) ) {
+			return;
+		}
+		$missing = array_values( array_diff( \XSpeed\Modules\Cache\CacheModule::TRACKING_PARAMS_1_3_6, $list ) );
+		if ( empty( $missing ) ) {
+			return;
+		}
+		$stored['ignored_query_params'] = array_merge( $list, $missing );
+		update_option( $option, $stored );
+		// The drop-in keeps its own copy of the list next to the cache.
+		if ( defined( 'XSPEED_CACHE_DIR' ) ) {
+			Cache::sync_query_allowlist();
+		}
+	}
+
+	/**
 	 * Run version-gated data migrations exactly once per upgrade.
 	 *
 	 * Keyed on `xspeed_data_version` rather than the plugin version header
@@ -141,15 +176,23 @@ class Plugin {
 			return;
 		}
 
+		// Each step runs once, for the version that needs it. They used to
+		// run on every bump, which would purge every site's static tree again
+		// for a migration that has nothing to do with it.
+
 		// 1.1.2 — strip credential values recorded by earlier versions'
 		// settings change annotations (they're served by the trend endpoints).
-		Activity_Log::redact_legacy_secrets();
+		if ( version_compare( $current, '1.1.2', '<' ) ) {
+			Activity_Log::redact_legacy_secrets();
+		}
 
 		// 1.1.4 — earlier versions cached a failed loopback as "gzip is not
 		// active" for an hour, which showed up as a bogus server-config
 		// warning. Drop the stale answer so the fixed probe re-runs instead
 		// of the wrong verdict living on past the update (issue #18).
-		delete_transient( 'xspeed_gzip_active' );
+		if ( version_compare( $current, '1.1.4', '<' ) ) {
+			delete_transient( 'xspeed_gzip_active' );
+		}
 
 		// 1.1.6 — a `/?s=<term>` request used to write its results page into
 		// the static tree under the *searched-from* path, which for the usual
@@ -159,7 +202,16 @@ class Plugin {
 		// outlives it: nothing purges on upgrade, and the static serve path
 		// never revalidates. Clear the tree once. The flat cache is keyed
 		// correctly and is deliberately left alone. (issue #191)
-		Cache::purge_static_tree();
+		if ( version_compare( $current, '1.1.6', '<' ) ) {
+			Cache::purge_static_tree();
+		}
+
+		// 1.3.6 — new click and campaign IDs in the default ignored list.
+		// A site that ever saved the Cache panel has its own copy of the list,
+		// which the new defaults never reach, so add them to it.
+		if ( version_compare( $current, '1.3.6', '<' ) ) {
+			self::add_new_ignored_params();
+		}
 
 		update_option( 'xspeed_data_version', self::DATA_VERSION, false );
 	}

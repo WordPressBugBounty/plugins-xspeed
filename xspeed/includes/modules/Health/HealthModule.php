@@ -250,13 +250,14 @@ final class HealthModule extends Module {
 		return array(
 			'label'        => __( 'Health', 'xspeed' ),
 			'icon'         => 'HeartPulse',
-			'description'  => __( 'Diagnostics, hit ratio, and recent cache activity.', 'xspeed' ),
+			'description'  => __( 'Checks for problems and shows how often visitors get cached pages.', 'xspeed' ),
 			// Health is the single host page for all Insights (FBS-83633):
 			// a Recommendations action card + Cache / Visitors / PageSpeed
 			// tabs. HealthPanel renders the Free cache diagnostics (the old
 			// HealthCard) as the Cache tab and hosts the Pro insight panels
 			// as the other tabs via ProSlot.
 			'custom_panel' => 'HealthPanel',
+			'group'        => 'insights',
 		);
 	}
 

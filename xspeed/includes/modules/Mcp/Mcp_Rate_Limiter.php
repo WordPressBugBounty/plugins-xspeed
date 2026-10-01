@@ -14,6 +14,12 @@
  * for the window; a SUCCESSFUL auth clears the counter immediately so a
  * legitimate client that fixed a typo isn't punished.
  *
+ * A new credential starts every client from zero (reset_all()). Failures
+ * earned with the old token say nothing about the new one, and the client
+ * that most needs to get through then is xSpeed Hub: its checks with the
+ * old token are what locked it out, and its check of the new token is what
+ * would clear the lock.
+ *
  * Threshold + window are overridable:
  *   - XSPEED_MCP_MAX_FAILS / XSPEED_MCP_LOCKOUT_SECONDS constants, and
  *   - the `xspeed_mcp_rate_limit` filter ( [ max_fails, lockout_seconds ] ).
@@ -31,6 +37,9 @@ final class Mcp_Rate_Limiter {
 
 	/** Transient key prefix; the client-IP hash is appended. */
 	private const PREFIX = 'xspeed_mcp_rl_';
+
+	/** Option holding the lockout generation; part of every transient key. */
+	private const GENERATION_OPTION = 'xspeed_mcp_rl_gen';
 
 	/** Default: lock out after this many failed attempts. */
 	private const DEFAULT_MAX_FAILS = 10;
@@ -70,6 +79,18 @@ final class Mcp_Rate_Limiter {
 		delete_transient( self::key() );
 	}
 
+	/**
+	 * Clear every client's counter at once. Call when the site hands out a
+	 * credential: a valid attach, or a token sent to the Hub.
+	 *
+	 * The counters are per-IP transients, which cannot be listed, so this
+	 * moves every key to a new generation instead. The old transients expire
+	 * on their own within the window.
+	 */
+	public static function reset_all(): void {
+		update_option( self::GENERATION_OPTION, self::generation() + 1, false );
+	}
+
 	/** Seconds a locked client must wait (approximate; the window length). */
 	public static function retry_after(): int {
 		return self::limits()[1];
@@ -83,9 +104,17 @@ final class Mcp_Rate_Limiter {
 		return is_numeric( $v ) ? (int) $v : 0;
 	}
 
-	/** Transient key bound to the (hashed) client IP. */
+	/** Transient key bound to the (hashed) client IP and the generation. */
 	private static function key(): string {
-		return self::PREFIX . md5( self::client_ip() );
+		$generation = self::generation();
+		$suffix     = md5( self::client_ip() );
+		return self::PREFIX . ( $generation > 0 ? $generation . '_' : '' ) . $suffix;
+	}
+
+	/** Current lockout generation (0 until the first reset_all()). */
+	private static function generation(): int {
+		$v = get_option( self::GENERATION_OPTION, 0 );
+		return is_numeric( $v ) ? (int) $v : 0;
 	}
 
 	/**

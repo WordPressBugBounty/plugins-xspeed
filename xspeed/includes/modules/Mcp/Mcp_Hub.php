@@ -389,6 +389,15 @@ final class Mcp_Hub {
 			Mcp_Pairing::connect( false );
 		}
 
+		/*
+		 * The Hub checks the token it is about to receive by calling this
+		 * site with it. If its earlier checks with an old token locked it out,
+		 * that check gets a 429 and the Hub keeps the old token, so the site
+		 * could never be connected again. An admin started this attach; let
+		 * every client try again.
+		 */
+		Mcp_Rate_Limiter::reset_all();
+
 		return array(
 			'site_url'   => self::site_url_canonical(),
 			'site_token' => Mcp_Pairing::site_token(),
@@ -444,7 +453,12 @@ final class Mcp_Hub {
 		}
 
 		$uid = get_current_user_id();
+		if ( empty( $body['attached'] ) && $uid && ! empty( self::state( $uid )['attached'] ) && self::keep_link_after_resync() ) {
+			return;
+		}
 		if ( ! empty( $body['attached'] ) ) {
+			// Any sync in flight has landed; the next mismatch deserves a new one.
+			delete_transient( self::RESYNC_SENT );
 			// The Hub says attached — mark THIS admin connected if not already.
 			$state = self::state( $uid );
 			if ( empty( $state['attached'] ) ) {
@@ -459,6 +473,91 @@ final class Mcp_Hub {
 				self::refresh_site_attached();
 			}
 		}
+	}
+
+	/**
+	 * When the last token sync was sent (unix time), kept for 30 minutes so
+	 * reconcile sends at most one sync per window.
+	 */
+	private const RESYNC_SENT = 'xspeed_hub_resync_sent';
+
+	/** How long the Hub gets to check a synced token before its silence counts. */
+	private const RESYNC_GRACE = 2 * MINUTE_IN_SECONDS;
+
+	/**
+	 * Send this site's current token to the Hub.
+	 *
+	 * The Hub keeps a copy of the token and presents it on every call. Rotate,
+	 * a Connect after Disconnect, or a reinstall replace the token here but
+	 * not there, and every Hub check then failed with "token invalid" until
+	 * the site was attached again.
+	 *
+	 * The Hub answers straight away (202) and checks the token afterwards by
+	 * calling this site with it. It stores the token only if this site
+	 * accepts it as the pairing token, so waiting here never holds a PHP
+	 * worker the Hub's check needs.
+	 *
+	 * Only for a site that was attached: an unattached site makes no call.
+	 *
+	 * @return int The Hub's HTTP status, or 0 when no call was made or it failed.
+	 */
+	public static function push_token_to_hub(): int {
+		$token = Mcp_Pairing::site_token();
+		if ( '' === $token || ! self::site_attached() ) {
+			return 0;
+		}
+		// The Hub checks this token by calling back with it. Its failures with
+		// the old token must not lock that check out (see verify_attach_nonce()).
+		Mcp_Rate_Limiter::reset_all();
+		$resp = wp_remote_post(
+			self::hub_url() . '/api/site/token',
+			array(
+				'timeout' => 5,
+				'headers' => array(
+					'Content-Type'        => 'application/json',
+					'X-XSpeed-Site-Token' => $token,
+				),
+				'body'    => wp_json_encode( array( 'site_url' => self::site_url_canonical() ) ),
+			)
+		);
+		return is_wp_error( $resp ) ? 0 : (int) wp_remote_retrieve_response_code( $resp );
+	}
+
+	/** Mcp_Pairing::TOKEN_CHANGED_ACTION listener. */
+	public static function on_token_changed(): void {
+		$code = self::push_token_to_hub();
+		if ( $code >= 200 && $code < 300 ) {
+			set_transient( self::RESYNC_SENT, time(), 30 * MINUTE_IN_SECONDS );
+		}
+		delete_transient( 'xspeed_hub_reconcile' );
+	}
+
+	/**
+	 * The Hub no longer recognises this site's token, but this admin's link
+	 * says attached. Decide whether the link stands.
+	 *
+	 * Only a 404 means the Hub has dropped the site. A timeout, a 429 or a
+	 * 5xx says nothing about the link, and clearing it on those is how a
+	 * connected site used to lose its badge. The Hub checks a synced token
+	 * after it answers, so a sync sent in the last RESYNC_GRACE seconds is
+	 * still pending. One sent earlier that has not restored the link ends
+	 * it, so a site the Hub will not accept does not show Connected for ever.
+	 *
+	 * @return bool True to keep the link.
+	 */
+	private static function keep_link_after_resync(): bool {
+		$sent = get_transient( self::RESYNC_SENT );
+		if ( false !== $sent ) {
+			return time() - (int) $sent < self::RESYNC_GRACE;
+		}
+		$code = self::push_token_to_hub();
+		if ( 404 === $code ) {
+			return false;
+		}
+		if ( $code >= 200 && $code < 300 ) {
+			set_transient( self::RESYNC_SENT, time(), 30 * MINUTE_IN_SECONDS );
+		}
+		return true;
 	}
 
 	/**
@@ -550,8 +649,9 @@ final class Mcp_Hub {
 	/**
 	 * Disconnect the CURRENT admin from the hub: clear their per-user link.
 	 * Other admins' connections are untouched. Does NOT rotate the site_token
-	 * (still used by the per-site connection); to fully cut off the hub the
-	 * user rotates the token, which the Hub's stored copy then fails on.
+	 * (still used by the per-site connection). Rotating no longer cuts the
+	 * Hub off either: the new token is sent to the Hub (push_token_to_hub()),
+	 * so removing the site from the Hub is what ends its access.
 	 */
 	public static function disconnect(): array {
 		$user_id = get_current_user_id();

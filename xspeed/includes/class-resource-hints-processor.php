@@ -149,24 +149,35 @@ final class Resource_Hints_Processor {
 	}
 
 	/**
-	 * Strip core `loading="lazy"` and add `fetchpriority="high"` +
-	 * `decoding="async"` on every <img> whose tag matches one of the given
-	 * exclusion substrings. Mirrors what Lazy_Loader does for an excluded image
-	 * inside the_content, but page-wide so heroes outside it are covered too.
-	 * (FBS-83553 H2)
+	 * Strip core `loading="lazy"` and add `decoding="async"` on every <img>
+	 * whose tag matches one of the given exclusion substrings. Mirrors what
+	 * Lazy_Loader does for an excluded image inside the_content, but page-wide
+	 * so heroes outside it are covered too. (FBS-83553 H2)
+	 *
+	 * Only the first visible match outside <footer>/<nav>/<aside> gets
+	 * `fetchpriority="high"`, and only when no image in the page holds it yet.
+	 * Every match used to get it, so a pattern naming the header and footer
+	 * logo, or a hero in a closed accordion, put several images at High. (#558)
 	 *
 	 * @param string   $html       Full page HTML.
 	 * @param string[] $exclusions Substring patterns identifying above-the-fold heroes.
 	 */
 	private static function promote_excluded_images( string $html, array $exclusions ): string {
-		return (string) preg_replace_callback(
-			'#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i',
-			static function ( array $m ) use ( $exclusions ) {
-				$tag = $m[0];
+		$img_re  = '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i';
+		$claimed = (bool) preg_match( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*?(?<![-\w])fetchpriority\s*=\s*["\']?high\b#i', $html );
+		$skip    = $claimed ? array() : array_merge( self::chrome_container_ranges( $html ), Lazy_Loader::hidden_ranges( $html ) );
+
+		$result = preg_replace_callback(
+			$img_re,
+			static function ( array $m ) use ( $exclusions, &$claimed, $skip ) {
+				[ $tag, $offset ] = $m[0];
 				foreach ( $exclusions as $needle ) {
 					if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
 						$tag = (string) preg_replace( '#\s*\bloading=(["\'])\s*lazy\s*\1#i', '', $tag );
-						$tag = self::set_fetchpriority( $tag );
+						if ( ! $claimed && ! self::offset_in_ranges( (int) $offset, $skip ) && ! Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
+							$tag     = self::set_fetchpriority( $tag );
+							$claimed = true;
+						}
 						if ( ! preg_match( '#\bdecoding=#i', $tag ) ) {
 							$tag = (string) preg_replace( '#<img\b#i', '<img decoding="async"', $tag, 1 );
 						}
@@ -175,8 +186,13 @@ final class Resource_Hints_Processor {
 				}
 				return $tag;
 			},
-			$html
+			$html,
+			-1,
+			$count,
+			PREG_OFFSET_CAPTURE
 		);
+
+		return is_string( $result ) ? $result : $html;
 	}
 
 	/**
@@ -257,20 +273,19 @@ final class Resource_Hints_Processor {
 		// marker list and size gate were heuristics layered on top of the
 		// wrong primitive rather than replacing it. (#96)
 		$candidates  = array();
-		$skip_ranges = self::chrome_container_ranges( $html );
+		// Markup hidden on arrival (a closed <details>, `hidden`, inline
+		// display:none) cannot paint as LCP either. Preloading the hero of a
+		// closed accordion spent the page's one High fetch on it. (#558)
+		$skip_ranges = array_merge( self::chrome_container_ranges( $html ), Lazy_Loader::hidden_ranges( $html ) );
+		// <img> indexes that can't be the LCP however they are marked: chrome,
+		// hidden, or a logo/icon. Only these give up a stray `high`. (#558)
+		$ruled_out = array();
 		if ( preg_match_all( '#<img\b[^>]*>#i', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
 			foreach ( $matches[0] as $index => $match ) {
 				[ $tag, $offset ] = $match;
 
 				// Skip anything the user excluded.
-				$excluded = false;
-				foreach ( $exclusions as $needle ) {
-					if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
-						$excluded = true;
-						break;
-					}
-				}
-				if ( $excluded ) {
+				if ( self::matches_any( $tag, $exclusions ) ) {
 					continue;
 				}
 
@@ -279,7 +294,8 @@ final class Resource_Hints_Processor {
 				// never be the LCP element, whatever size it declares. On the
 				// FBS-84576 repro these decoys outranked the real hero three
 				// times on one layout.
-				if ( self::offset_in_ranges( $offset, $skip_ranges ) ) {
+				if ( self::offset_in_ranges( $offset, $skip_ranges ) || Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
+					$ruled_out[ $index ] = true;
 					continue;
 				}
 
@@ -303,6 +319,7 @@ final class Resource_Hints_Processor {
 				// Chrome markers / explicit opt-out / obviously-tiny images
 				// never compete. (FBS-83553 H1 "logo before hero".)
 				if ( self::looks_too_small( $tag ) ) {
+					$ruled_out[ $index ] = true;
 					continue;
 				}
 
@@ -313,6 +330,7 @@ final class Resource_Hints_Processor {
 					'sizes'  => $sizes,
 					'score'  => self::weighted_score( self::lcp_score( $tag, $srcset ), $tag, $index ),
 					'order'  => $index,
+					'offset' => $offset,
 				);
 			}
 		}
@@ -347,7 +365,27 @@ final class Resource_Hints_Processor {
 			$candidates[] = $sb;
 		}
 
+		// A background video with no poster, ahead of every candidate, is the
+		// hero. Nothing in its box is preloadable, and every image after it
+		// sits lower on the page. Preloading the first of those spent the one
+		// high-priority fetch on an image below the fold, ahead of the CSS.
+		// Those images also give up a stray `high` from the lazy pass.
+		$video_at = self::background_video_offset( $html, $skip_ranges );
+		if ( null !== $video_at ) {
+			foreach ( $candidates as $i => $c ) {
+				if ( $c['offset'] > $video_at ) {
+					if ( empty( $c['background'] ) ) {
+						$ruled_out[ $c['order'] ] = true;
+					}
+					unset( $candidates[ $i ] );
+				}
+			}
+		}
+
 		if ( empty( $candidates ) ) {
+			if ( null !== $video_at ) {
+				$html = self::demote_images( $html, $ruled_out );
+			}
 			return array( $html, '' );
 		}
 
@@ -393,12 +431,24 @@ final class Resource_Hints_Processor {
 		// matching on tag text, because the same markup can legitimately
 		// appear more than once on a page and only the ranked instance should
 		// be promoted.
-		$seen = -1;
-		$html = preg_replace_callback(
+		//
+		// When an <img> wins, it is the page's one High image, so an image
+		// that can't be the LCP (a logo, an icon, a hidden panel, chrome)
+		// gives up any `high` it carries. That is usually the lazy pass handing
+		// its slot to the first image in the_content. An image that merely scored
+		// lower, or that the user kept out of the pick, keeps its hint: the
+		// ranking can be wrong, and core or the theme may have named the real
+		// hero. (#558)
+		$demote = ! empty( $chosen ) || null !== $video_at ? $ruled_out : array();
+		$seen   = -1;
+		$html   = preg_replace_callback(
 			'#<img\b[^>]*>#i',
-			static function ( array $m ) use ( &$seen, $chosen ) {
+			static function ( array $m ) use ( &$seen, $chosen, $demote ) {
 				++$seen;
 				if ( ! isset( $chosen[ $seen ] ) ) {
+					if ( isset( $demote[ $seen ] ) && 'high' === strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+						return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
+					}
 					return $m[0];
 				}
 				// Add fetchpriority="high" AND remove any loading="lazy" the
@@ -412,6 +462,54 @@ final class Resource_Hints_Processor {
 		);
 
 		return array( (string) $html, $preload );
+	}
+
+	/**
+	 * Byte offset of the first visible background video with no poster, or
+	 * null when the page has none.
+	 *
+	 * @param string                        $html        Full page HTML.
+	 * @param array<int,array{0:int,1:int}> $skip_ranges Chrome and hidden spans.
+	 */
+	private static function background_video_offset( string $html, array $skip_ranges ): ?int {
+		$body = stripos( $html, '<body' );
+		if ( ! preg_match_all( '#<video\b[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE, false === $body ? 0 : $body ) ) {
+			return null;
+		}
+		foreach ( $m[0] as [ $tag, $offset ] ) {
+			if ( self::offset_in_ranges( $offset, $skip_ranges ) || Lazy_Loader::tag_is_hidden( $tag, 'video' ) ) {
+				continue;
+			}
+			if ( Lazy_Loader::is_background_video_without_poster( $tag ) ) {
+				return $offset;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Strip fetchpriority="high" from the <img> tags at the given indexes.
+	 *
+	 * @param string            $html    Page HTML.
+	 * @param array<int,bool>   $indexes <img> indexes, in document order.
+	 */
+	private static function demote_images( string $html, array $indexes ): string {
+		if ( empty( $indexes ) ) {
+			return $html;
+		}
+		$seen = -1;
+		$out  = preg_replace_callback(
+			'#<img\b[^>]*>#i',
+			static function ( array $m ) use ( &$seen, $indexes ) {
+				++$seen;
+				if ( isset( $indexes[ $seen ] ) && 'high' === strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+					return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
+				}
+				return $m[0];
+			},
+			$html
+		);
+		return null === $out ? $html : $out;
 	}
 
 	/**
@@ -488,6 +586,7 @@ final class Resource_Hints_Processor {
 				// Offset so a background never ties ahead of an <img> that
 				// appeared earlier in the document; ties still break on order.
 				'order'      => 100000 + $index,
+				'offset'     => $offset,
 				'background' => true,
 			);
 		}
@@ -545,6 +644,7 @@ final class Resource_Hints_Processor {
 				'sizes'      => '',
 				'score'      => (float) $area,
 				'order'      => 100000 + $index,
+				'offset'     => $offset,
 				'background' => true,
 			);
 		}
@@ -649,6 +749,7 @@ final class Resource_Hints_Processor {
 					// background is one inference step less certain, so it must
 					// never tie ahead of one read straight off the element.
 					'order'      => 200000 + $offset,
+					'offset'     => $offset,
 					'background' => true,
 				);
 			}
@@ -927,10 +1028,27 @@ final class Resource_Hints_Processor {
 		return $ranges;
 	}
 
+	/**
+	 * Does a tag contain any of the given substring patterns?
+	 *
+	 * @param string[] $patterns
+	 */
+	private static function matches_any( string $tag, array $patterns ): bool {
+		foreach ( $patterns as $needle ) {
+			if ( '' !== $needle && false !== stripos( $tag, $needle ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Does a byte offset fall inside any of the given [start, end] ranges? */
 	private static function offset_in_ranges( int $offset, array $ranges ): bool {
 		foreach ( $ranges as $range ) {
-			if ( $offset > $range[0] && $offset < $range[1] ) {
+			// >= on the start: a closed <details> span from
+			// Lazy_Loader::hidden_ranges() opens right at the first image
+			// after its <summary>.
+			if ( $offset >= $range[0] && $offset < $range[1] ) {
 				return true;
 			}
 		}

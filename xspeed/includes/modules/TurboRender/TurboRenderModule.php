@@ -88,7 +88,8 @@ final class TurboRenderModule extends Module {
 		return array(
 			'label'       => __( 'Turbo Render', 'xspeed' ),
 			'icon'        => 'Layers',
-			'description' => __( 'Paints the top of your page first and brings the rest in as visitors scroll. Every section still loads in full.', 'xspeed' ),
+			'description' => __( 'Shows the top of each page first and the rest as visitors scroll.', 'xspeed' ),
+			'group'       => 'performance',
 		);
 	}
 
@@ -98,7 +99,7 @@ final class TurboRenderModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Render as visitors scroll', 'xspeed' ),
-				'description' => __( 'Lets the browser spend its first moments on what visitors actually see, then render the lower sections just before they scroll into view. The content of your page is unchanged — it simply arrives in a smarter order.', 'xspeed' ),
+				'description' => __( 'The browser draws what visitors see first and draws lower sections just before they scroll to them. Your content does not change.', 'xspeed' ),
 			),
 			'skip_first' => array(
 				'type'        => 'int',
@@ -106,19 +107,23 @@ final class TurboRenderModule extends Module {
 				'min'         => 1,
 				'max'         => 10,
 				'label'       => __( 'Sections to render immediately', 'xspeed' ),
-				'description' => __( 'How many sections at the top of the page are rendered right away, before any deferring begins. The default of 2 suits most layouts. Increase it if a section near the top of your page appears a moment late.', 'xspeed' ),
+				'description' => __( 'How many sections at the top are drawn right away. The default of 2 suits most pages; raise it if a section near the top appears late.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'section_classes' => array(
 				'type'        => 'list',
 				'default'     => self::DEFAULT_CLASSES,
 				'label'       => __( 'Section classes', 'xspeed' ),
-				'description' => __( 'Tells xSpeed which parts of your page count as sections. The defaults cover Elementor, Divi, Bricks, Oxygen, and Beaver Builder — and when none of them match, xSpeed falls back to your page\'s own top-level sections automatically. Add a class here only if you want to target something specific.', 'xspeed' ),
+				'description' => __( 'CSS classes that mark a section. The defaults cover the main page builders, and other themes are detected on their own.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'excluded_classes' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'label'       => __( 'Excluded classes', 'xspeed' ),
-				'description' => __( 'Sections with any of these classes always render right away. Use this when a design overlaps its neighbours — a card that hangs over the section below it gets cut off at the boundary when either section is deferred.', 'xspeed' ),
+				'description' => __( 'Sections with any of these classes are always drawn right away. Add one here if part of a section gets cut off where it overlaps the next.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);
 	}

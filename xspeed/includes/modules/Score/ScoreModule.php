@@ -61,8 +61,9 @@ final class ScoreModule extends Module {
 			// configured (PageSpeed Insights by default, no API key needed).
 			// The Hub-run test has its own copy and is gated behind
 			// hub_speed_test_enabled(), so this line must not promise it.
-			'description'  => __( 'Run a PageSpeed Insights or GTmetrix audit from the dashboard and keep the history next to your TTFB benchmark.', 'xspeed' ),
+			'description'  => __( 'Run a PageSpeed Insights or GTmetrix test and keep a history of the scores.', 'xspeed' ),
 			'custom_panel' => 'ScorePanel',
+			'group'        => 'insights',
 		);
 	}
 
@@ -80,7 +81,7 @@ final class ScoreModule extends Module {
 				// still guards is everything that is NOT a Test press — an
 				// optimize run measuring its own effect, for instance.
 				// Switch it off (REST/CLI) and nothing contacts a provider.
-				'description' => __( 'Turns on automatically the first time you run a speed test — the button press is the consent. Switch it off to stop every feature, including optimize runs, from contacting a score provider.', 'xspeed' ),
+				'description' => __( 'Turns on the first time you run a speed test. Switch it off and no feature, not even an optimize run, contacts a test provider.', 'xspeed' ),
 				// No dashboard control: the Test press manages it, and a
 				// visible switch that gates a button elsewhere was the
 				// confusion #425 removed. Hidden fields are skipped by the
@@ -95,17 +96,18 @@ final class ScoreModule extends Module {
 					'psi'      => 'PageSpeed Insights',
 					'gtmetrix' => 'GTmetrix',
 				),
-				'label'       => __( 'Provider', 'xspeed' ),
-				'description' => __( 'PageSpeed Insights works without an API key. GTmetrix requires one.', 'xspeed' ),
+				'label'       => __( 'Test provider', 'xspeed' ),
+				'description' => __( 'PageSpeed Insights works without an API key. GTmetrix needs one.', 'xspeed' ),
 			),
 			'psi_api_key'       => array(
 				'type'        => 'secret',
 				'default'     => '',
 				'label'       => __( 'PageSpeed API key (optional)', 'xspeed' ),
-				'description' => __( 'Only needed if you hit Google\'s anonymous rate limit. Free from cloud.google.com.', 'xspeed' ),
+				'description' => __( 'Only needed if Google starts refusing tests without a key. You can get a free key at cloud.google.com.', 'xspeed' ),
 				// Rendered as a trailing "Check the documentation" link —
 				// descriptions themselves are plain text (#111).
 				'doc_url'     => 'https://xspeedcache.com/docs/pagespeed-insights-integration/',
+				'advanced'    => true,
 				'dependsOn'   => array(
 					'field' => 'provider',
 					'value' => 'psi',
@@ -115,7 +117,7 @@ final class ScoreModule extends Module {
 				'type'        => 'secret',
 				'default'     => '',
 				'label'       => __( 'GTmetrix API key', 'xspeed' ),
-				'description' => __( 'Required — GTmetrix has no anonymous mode. Found in your GTmetrix account settings.', 'xspeed' ),
+				'description' => __( 'GTmetrix does not run tests without a key. Find it in your GTmetrix account settings.', 'xspeed' ),
 				'dependsOn'   => array(
 					'field' => 'provider',
 					'value' => 'gtmetrix',
@@ -131,8 +133,8 @@ final class ScoreModule extends Module {
 				'type'        => 'enum',
 				'default'     => 'mobile',
 				'options'     => array( 'mobile', 'desktop' ),
-				'label'       => __( 'Strategy', 'xspeed' ),
-				'description' => __( 'PageSpeed Insights only. Mobile is what Google ranks on.', 'xspeed' ),
+				'label'       => __( 'Device', 'xspeed' ),
+				'description' => __( 'Test as a phone or a desktop visitor. Google ranks sites on the mobile result.', 'xspeed' ),
 				'dependsOn'   => array(
 					'field' => 'provider',
 					'value' => 'psi',

@@ -31,7 +31,8 @@ final class BrowserCacheModule extends Module {
 		return array(
 			'label'       => __( 'Browser Cache', 'xspeed' ),
 			'icon'        => 'Clock',
-			'description' => __( 'Tell browsers (and intermediate CDNs) how long to cache static assets and HTML.', 'xspeed' ),
+			'description' => __( 'Tells browsers and CDNs how long to keep your files and pages.', 'xspeed' ),
+			'group'       => 'cache',
 		);
 	}
 
@@ -41,16 +42,16 @@ final class BrowserCacheModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Enable browser cache headers', 'xspeed' ),
-				'description' => __( 'On Apache/LiteSpeed this writes Cache-Control + Expires rules into .htaccess. On nginx it just stores the settings — you paste the snippet into your server block manually.', 'xspeed' ),
+				'description' => __( 'On Apache and LiteSpeed, xSpeed adds the rules to .htaccess for you. On nginx, you copy the snippet into your server config.', 'xspeed' ),
 			),
 			'asset_ttl' => array(
 				'type'        => 'int',
 				'default'     => Browser_Cache::DEFAULT_ASSET_TTL,
 				'min'         => 0,
 				'max'         => 31536000,
-				'label'       => __( 'Static asset TTL (seconds)', 'xspeed' ),
+				'label'       => __( 'File lifetime (seconds)', 'xspeed' ),
 				'unit'        => 'seconds',
-				'description' => __( 'Cache lifetime for CSS, JS, fonts, images. Defaults to 1 year + immutable (the industry-standard "fingerprinted assets never change" pattern).', 'xspeed' ),
+				'description' => __( 'How long browsers keep CSS, JS, fonts and images. The default is 1 year, which suits files that change name when they change.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'html_ttl' => array(
@@ -58,9 +59,9 @@ final class BrowserCacheModule extends Module {
 				'default'     => Browser_Cache::DEFAULT_HTML_TTL,
 				'min'         => 0,
 				'max'         => 31536000,
-				'label'       => __( 'HTML TTL (seconds)', 'xspeed' ),
+				'label'       => __( 'Page lifetime (seconds)', 'xspeed' ),
 				'unit'        => 'seconds',
-				'description' => __( 'Cache lifetime for the HTML document itself. Keep short (default 1h) so post edits roll out same-day.', 'xspeed' ),
+				'description' => __( 'How long browsers keep the page itself. Keep it short (default 1 hour) so visitors see your edits the same day.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);

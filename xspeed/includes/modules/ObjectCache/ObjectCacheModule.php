@@ -31,7 +31,8 @@ final class ObjectCacheModule extends Module {
 		return array(
 			'label'        => __( 'Object Cache', 'xspeed' ),
 			'icon'         => 'Server',
-			'description'  => __( 'Configure a persistent object cache (Redis / Memcached) and generate a paste-ready wp-config.php snippet.', 'xspeed' ),
+			'description'  => __( 'Stores database query results in Redis or Memcached so pages build faster.', 'xspeed' ),
+			'group'        => 'cache',
 			'custom_panel' => 'ObjectCachePanel',
 		);
 	}
@@ -58,15 +59,16 @@ final class ObjectCacheModule extends Module {
 					'redis'     => 'Redis',
 					'memcached' => 'Memcached',
 				),
-				'label'         => __( 'Backend', 'xspeed' ),
-				'description'   => __( 'Which cache server you intend to use. Affects the generated wp-config snippet.', 'xspeed' ),
+				'label'         => __( 'Cache server', 'xspeed' ),
+				'description'   => __( 'The cache server your host provides. Ask your host if you are not sure.', 'xspeed' ),
 			),
 			'redis_host' => array(
 				'type'        => 'string',
 				'default'     => '127.0.0.1',
 				'constants'   => array( 'XSPEED_OC_HOST', 'WP_REDIS_HOST' ),
-				'label'       => __( 'Redis Host', 'xspeed' ),
-				'description' => __( 'Hostname or IP of the Redis server. Use 127.0.0.1 for a local socket on the same machine as PHP.', 'xspeed' ),
+				'label'       => __( 'Redis host', 'xspeed' ),
+				'description' => __( 'Address of the Redis server. Use 127.0.0.1 when Redis runs on the same server as your site.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'redis_port' => array(
 				'type'        => 'int',
@@ -74,8 +76,10 @@ final class ObjectCacheModule extends Module {
 				'min'         => 1,
 				'max'         => 65535,
 				'constants'   => array( 'XSPEED_OC_PORT', 'WP_REDIS_PORT' ),
-				'label'       => __( 'Redis Port', 'xspeed' ),
-				'description' => __( 'Default Redis port is 6379.', 'xspeed' ),
+				'label'       => __( 'Redis port', 'xspeed' ),
+				'description' => __( 'The default Redis port is 6379.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'redis_user' => array(
 				'type'                => 'string',
@@ -87,16 +91,18 @@ final class ObjectCacheModule extends Module {
 				'constants'           => array( 'XSPEED_OC_USER', 'WP_REDIS_USER', 'WP_REDIS_PASSWORD' ),
 				'constants_pair_only' => array( 'WP_REDIS_PASSWORD' ),
 				'constant_pair'       => 'user',
-				'label'               => __( 'Redis User', 'xspeed' ),
-				'description'         => __( 'Optional. Set this only if your host provisioned a dedicated Redis ACL user (Redis 6+) — e.g. some managed hosts issue a Redis User alongside the password. Leave blank to authenticate as the default user (legacy password-only Redis).', 'xspeed' ),
+				'label'               => __( 'Redis username', 'xspeed' ),
+				'description'         => __( 'Only needed if your host gave you a Redis username along with the password. Leave blank otherwise.', 'xspeed' ),
+				'dependsOn'           => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'redis_password' => array(
 				'type'          => 'secret',
 				'default'       => '',
 				'constants'     => array( 'XSPEED_OC_PASSWORD', 'WP_REDIS_PASSWORD' ),
 				'constant_pair' => 'password',
-				'label'         => __( 'Redis Password', 'xspeed' ),
-				'description'   => __( 'Leave blank if your Redis server runs without auth.', 'xspeed' ),
+				'label'         => __( 'Redis password', 'xspeed' ),
+				'description'   => __( 'Leave blank if your Redis server has no password.', 'xspeed' ),
+				'dependsOn'     => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'redis_database' => array(
 				'type'        => 'int',
@@ -104,8 +110,10 @@ final class ObjectCacheModule extends Module {
 				'min'         => 0,
 				'max'         => 15,
 				'constants'   => array( 'XSPEED_OC_DATABASE', 'WP_REDIS_DATABASE' ),
-				'label'       => __( 'Redis Database', 'xspeed' ),
-				'description' => __( 'Redis logical DB number (0-15). Use a dedicated DB per site if Redis is shared.', 'xspeed' ),
+				'label'       => __( 'Redis database', 'xspeed' ),
+				'description' => __( 'Database number, 0 to 15. If several sites share one Redis server, give each site its own number.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'memcached_host' => array(
 				'type'        => 'string',
@@ -132,8 +140,9 @@ final class ObjectCacheModule extends Module {
 					'reader' => array( '\\XSpeed\\Object_Cache', 'first_memcached_server' ),
 					'slot'   => 0,
 				),
-				'label'       => __( 'Memcached Host', 'xspeed' ),
-				'description' => __( 'Used when Backend = Memcached.', 'xspeed' ),
+				'label'       => __( 'Memcached host', 'xspeed' ),
+				'description' => __( 'Address of the Memcached server. Use 127.0.0.1 when it runs on the same server as your site.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'backend', 'value' => 'memcached' ),
 			),
 			'memcached_port' => array(
 				'type'          => 'int',
@@ -154,8 +163,10 @@ final class ObjectCacheModule extends Module {
 					'reader' => array( '\\XSpeed\\Object_Cache', 'first_memcached_server' ),
 					'slot'   => 1,
 				),
-				'label'       => __( 'Memcached Port', 'xspeed' ),
-				'description' => __( 'Default Memcached port is 11211.', 'xspeed' ),
+				'label'       => __( 'Memcached port', 'xspeed' ),
+				'description' => __( 'The default Memcached port is 11211.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array( 'field' => 'backend', 'value' => 'memcached' ),
 			),
 			'key_prefix' => array(
 				'type'        => 'string',
@@ -181,8 +192,10 @@ final class ObjectCacheModule extends Module {
 				// blank and editable; the drop-in still honours a defined
 				// WP_CACHE_KEY_SALT as its last-resort salt at runtime.
 				'constants'   => array( 'XSPEED_OC_SALT', 'WP_REDIS_PREFIX' ),
-				'label'       => __( 'Cache Key Prefix', 'xspeed' ),
-				'description' => __( 'Unique salt for this site\'s cache keys. Leave blank and xSpeed derives one automatically for this install, so sites sharing a Redis/Memcached server never collide. On ACL/namespaced Redis (e.g. xCloud), set this to the host\'s "Redis Object Cache Key" — otherwise cache writes are denied (NOPERM) and nothing persists.', 'xspeed' ),
+				'label'       => __( 'Cache key prefix', 'xspeed' ),
+				'description' => __( 'Leave blank and xSpeed picks a unique prefix for this site. Some managed Redis hosts, such as xCloud, give you a key to paste here, or nothing gets saved.', 'xspeed' ),
+				// Not advanced: on ACL hosts it is required, and the write-denied
+				// notice (Object_Cache::write_denied_message) sends users here.
 			),
 			'connection_timeout' => array(
 				'type'        => 'int',
@@ -190,16 +203,18 @@ final class ObjectCacheModule extends Module {
 				'min'         => 0,
 				'max'         => 60,
 				'constants'   => array( 'XSPEED_OC_TIMEOUT', 'WP_REDIS_TIMEOUT' ),
-				'label'       => __( 'Connection Timeout (seconds)', 'xspeed' ),
+				'label'       => __( 'Connection timeout (seconds)', 'xspeed' ),
 				'unit'        => 'seconds',
-				'description' => __( 'How long to wait for a connection. Keep low (1-2s) so a misconfigured cache never stalls the page.', 'xspeed' ),
+				'description' => __( 'How long to wait for the cache server. Keep it at 1 or 2 seconds so a broken cache server never holds up a page.', 'xspeed' ),
+				'advanced'    => true,
 			),
 			'persistent' => array(
 				'type'        => 'bool',
 				'default'     => true,
 				'constants'   => array( 'XSPEED_OC_PERSISTENT', 'WP_REDIS_PERSISTENT' ),
-				'label'       => __( 'Persistent Connections', 'xspeed' ),
-				'description' => __( 'Reuse the connection across PHP requests when supported. Generally a win unless the cache server complains about idle connections.', 'xspeed' ),
+				'label'       => __( 'Persistent connections', 'xspeed' ),
+				'description' => __( 'Keep the connection open between page loads. Turn off only if your cache server reports too many idle connections.', 'xspeed' ),
+				'advanced'    => true,
 			),
 		);
 	}

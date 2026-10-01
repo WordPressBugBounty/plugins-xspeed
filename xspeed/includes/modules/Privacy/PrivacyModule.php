@@ -46,7 +46,8 @@ final class PrivacyModule extends Module {
 		return array(
 			'label'       => __( 'Privacy & usage data', 'xspeed' ),
 			'icon'        => 'ShieldCheck',
-			'description' => __( 'Control the usage analytics you were asked about in the setup wizard.', 'xspeed' ),
+			'description' => __( 'Change the usage data choice you made in the setup wizard.', 'xspeed' ),
+			'group'       => 'settings',
 		);
 	}
 
@@ -56,7 +57,7 @@ final class PrivacyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Share usage data', 'xspeed' ),
-				'description' => __( 'Share a few basics — WordPress & PHP version, active theme & plugins, server type, and which features you enable. Never page content. Turning this off stops all collection and clears the scheduled send.', 'xspeed' ),
+				'description' => __( 'Sends your WordPress and PHP versions, theme, plugins, server type and the features you use, never page content. Turn it off to stop all sending.', 'xspeed' ),
 			),
 		);
 	}

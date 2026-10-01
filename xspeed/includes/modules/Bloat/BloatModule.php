@@ -37,7 +37,8 @@ final class BloatModule extends Module {
 		return array(
 			'label'       => __( 'Bloat Control', 'xspeed' ),
 			'icon'        => 'Sliders',
-			'description' => __( 'Turn off WordPress defaults you do not use — saves bytes, requests, and attack surface.', 'xspeed' ),
+			'description' => __( 'Turns off WordPress features you do not use, so pages load less.', 'xspeed' ),
+			'group'       => 'performance',
 		);
 	}
 
@@ -46,80 +47,81 @@ final class BloatModule extends Module {
 			'disable_emojis' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Disable Emojis', 'xspeed' ),
+				'label'       => __( 'Disable emojis', 'xspeed' ),
 				'description' => __( 'Remove the emoji detection script and its inline styles from every page. Modern browsers draw emojis natively, so visitors still see them. Saves a script and an inline stylesheet per page.', 'xspeed' ),
 			),
 			'disable_dashicons_frontend' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Disable Dashicons on Frontend', 'xspeed' ),
-				'description' => __( 'Drop the dashicons stylesheet from non-admin pages. Most themes do not need it. Saves ~45 KB per visitor.', 'xspeed' ),
+				'label'       => __( 'Remove Dashicons for visitors', 'xspeed' ),
+				'description' => __( 'Removes the WordPress admin icon font for logged-out visitors. Most themes do not use it, and it saves about 45 KB.', 'xspeed' ),
 			),
 			'disable_oembed' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Disable oEmbed Discovery + wp-embed.min.js', 'xspeed' ),
-				'description' => __( 'Strip the auto-embed handlers + the embed script. Posts that paste a YouTube URL will no longer auto-render the player — embed it via a block instead. Saves a request per page.', 'xspeed' ),
+				'label'       => __( 'Disable auto-embeds', 'xspeed' ),
+				'description' => __( 'Removes the embed script, saving one request per page. A pasted YouTube link no longer turns into a player, so use an embed block.', 'xspeed' ),
 			),
 			'disable_rss_feeds' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Disable RSS Feeds', 'xspeed' ),
-				'description' => __( 'Return a 404 on /feed/ and similar endpoints. Useful for sites that do not publish feeds and want to cut feed-fetcher traffic.', 'xspeed' ),
+				'label'       => __( 'Disable RSS feeds', 'xspeed' ),
+				'description' => __( 'Feed addresses such as /feed/ return "not found". Use this if your site has no feed readers.', 'xspeed' ),
 			),
 			'disable_xmlrpc' => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Disable XML-RPC', 'xspeed' ),
-				'description' => __( 'Disable the legacy xmlrpc.php endpoint. Cuts pingback brute-force noise; safe to disable unless you use a remote WP client (Jetpack, WordPress mobile app).', 'xspeed' ),
+				'description' => __( 'Turns off the old xmlrpc.php file that attackers often target. Leave this off if you use Jetpack or the WordPress mobile app.', 'xspeed' ),
 			),
 			'strip_jquery_migrate' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Strip jQuery Migrate on Frontend', 'xspeed' ),
-				'description' => __( 'Remove the jquery-migrate compatibility shim from non-admin pages. Saves ~10 KB; safe on modern themes / plugins.', 'xspeed' ),
+				'label'       => __( 'Remove jQuery Migrate', 'xspeed' ),
+				'description' => __( 'Removes a script that old themes and plugins need, from pages visitors see. Saves about 10 KB and is safe on current themes.', 'xspeed' ),
 			),
 			'strip_editor_styles' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Strip Block-Editor Styles on Frontend', 'xspeed' ),
-				'description' => __( 'Drop editor-only stylesheets (wp-editor, wp-components, and friends) from anonymous pages. A plugin that enqueues them on the frontend usually does so by accident — they can add hundreds of KB of render-blocking CSS. Frontend block styles (wp-block-library) are never touched.', 'xspeed' ),
+				'label'       => __( 'Remove editor styles for visitors', 'xspeed' ),
+				'description' => __( 'Removes block editor CSS that some plugins load on public pages by mistake, which can add hundreds of KB. Block styles for visitors stay.', 'xspeed' ),
 			),
 			'remove_rsd_link' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Remove RSD Link', 'xspeed' ),
+				'label'       => __( 'Remove RSD link', 'xspeed' ),
 				'description' => __( 'Drop the Really Simple Discovery link from the page head. Only old desktop blogging clients read it.', 'xspeed' ),
 			),
 			'remove_shortlink' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Remove Shortlink', 'xspeed' ),
+				'label'       => __( 'Remove shortlink', 'xspeed' ),
 				'description' => __( 'Drop the ?p=123 shortlink tag and header from posts and pages. The shortlinks keep working; they are just no longer advertised.', 'xspeed' ),
 			),
 			'remove_rest_api_links' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Remove REST API Links', 'xspeed' ),
+				'label'       => __( 'Remove REST API links', 'xspeed' ),
 				'description' => __( 'Drop the /wp-json/ discovery link tag and Link header. The REST API itself stays on; to block it, use the setting below.', 'xspeed' ),
 			),
 			'hide_wp_version' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Hide WordPress Version', 'xspeed' ),
+				'label'       => __( 'Hide WordPress version', 'xspeed' ),
 				'description' => __( 'Remove the WordPress generator tag from pages and feeds, so it no longer states the WordPress version. Other plugins print their own tags; those stay. Script and style URLs still carry ?ver= numbers.', 'xspeed' ),
 			),
 			'disable_self_pingbacks' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Disable Self-Pingbacks', 'xspeed' ),
+				'label'       => __( 'Disable self-pingbacks', 'xspeed' ),
 				'description' => __( 'Stop WordPress from sending a pingback to your own site when a post links to another of your posts. Pingbacks to other sites are not affected.', 'xspeed' ),
 			),
 			'restrict_rest_to_authed' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Restrict REST API to Logged-In Users', 'xspeed' ),
-				'description' => __( 'Block /wp-json/ for anonymous requests. WooCommerce checkout, contact-form submissions, and many block-editor previews need anonymous REST — keep this off unless you know your site does not depend on it.', 'xspeed' ),
+				'label'       => __( 'REST API for logged-in users only', 'xspeed' ),
+				'description' => __( 'Blocks /wp-json/ for logged-out visitors. This breaks WooCommerce checkout and many contact forms, so keep it off unless you are sure.', 'xspeed' ),
+				'advanced'    => true,
 			),
 		);
 	}
@@ -176,6 +178,17 @@ final class BloatModule extends Module {
 
 		if ( ! empty( $opts['strip_jquery_migrate'] ) ) {
 			add_action( 'wp_default_scripts', array( __CLASS__, 'strip_jquery_migrate' ) );
+			/*
+			 * `wp_default_scripts` fires once, when something first builds the
+			 * script registry. A plugin that registers a script while it loads
+			 * (Elementor Pro's Forms module registers its reCAPTCHA script) does
+			 * that before this runs on `init`, so the hook above never fires and
+			 * Migrate stays. Strip it from the registry that already exists,
+			 * before the page enqueues anything. (#587)
+			 */
+			if ( did_action( 'wp_default_scripts' ) ) {
+				add_action( 'wp_enqueue_scripts', array( __CLASS__, 'strip_jquery_migrate_now' ), 0 );
+			}
 		}
 
 		if ( ! empty( $opts['strip_editor_styles'] ) ) {
@@ -408,6 +421,14 @@ final class BloatModule extends Module {
 		if ( is_array( $jquery->deps ?? null ) ) {
 			$jquery->deps = array_values( array_diff( $jquery->deps, array( 'jquery-migrate' ) ) );
 		}
+	}
+
+	/**
+	 * strip_jquery_migrate() on the registry that exists now, for a request
+	 * where `wp_default_scripts` fired before this module hooked it. (#587)
+	 */
+	public static function strip_jquery_migrate_now(): void {
+		self::strip_jquery_migrate( wp_scripts() );
 	}
 
 	/**

@@ -142,7 +142,9 @@ class Gzip {
 		$res = wp_remote_get(
 			home_url( '/' ),
 			array(
-				'headers'   => array( 'Accept-Encoding' => 'gzip' ),
+				// WordPress's own UA, which firewalls let through; the header
+				// keeps this probe out of analytics.
+				'headers'   => Self_Traffic::headers( array( 'Accept-Encoding' => 'gzip' ) ),
 				// 3s wasn't enough to pull a full homepage on a busy shared
 				// host, and every timeout used to read as "gzip is broken".
 				'timeout'   => 5,

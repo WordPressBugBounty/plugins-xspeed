@@ -37,7 +37,8 @@ final class HeartbeatModule extends Module {
 		return array(
 			'label'       => __( 'Heartbeat', 'xspeed' ),
 			'icon'        => 'Activity',
-			'description' => __( 'Control the WordPress Heartbeat API per context.', 'xspeed' ),
+			'description' => __( 'Controls how often WordPress checks in with your server in the background.', 'xspeed' ),
+			'group'       => 'performance',
 		);
 	}
 
@@ -62,7 +63,7 @@ final class HeartbeatModule extends Module {
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
 				'label'         => __( 'Dashboard', 'xspeed' ),
-				'description'   => __( 'Heartbeat behavior on /wp-admin/ screens (autosave, notifications).', 'xspeed' ),
+				'description'   => __( 'Background checks on admin screens, used for notifications.', 'xspeed' ),
 			),
 			'behavior_editor'    => array(
 				'type'          => 'enum',
@@ -70,7 +71,7 @@ final class HeartbeatModule extends Module {
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
 				'label'         => __( 'Editor', 'xspeed' ),
-				'description'   => __( 'Heartbeat in the post / block editor. Disable only if you do not need autosave or co-edit locks.', 'xspeed' ),
+				'description'   => __( 'Background checks in the post editor. Disable only if you do not need autosave or the warning when someone else is editing.', 'xspeed' ),
 			),
 			'behavior_frontend'  => array(
 				'type'          => 'enum',
@@ -78,15 +79,24 @@ final class HeartbeatModule extends Module {
 				'options'       => $behavior_options,
 				'option_labels' => $behavior_option_labels,
 				'label'         => __( 'Frontend', 'xspeed' ),
-				'description'   => __( 'Controls the Heartbeat API on the public site. Only takes effect when a plugin or theme actually loads heartbeat on the frontend (e.g. WooCommerce cart fragments, membership/notification plugins) — a default WordPress site loads none there, so this has no visible effect on such sites. Recommended: Disable, to stop the admin-ajax polling those plugins add.', 'xspeed' ),
+				'description'   => __( 'Background checks on the public site, which only some plugins add. Disable is recommended, as it cuts extra requests to your server.', 'xspeed' ),
 			),
 			'frequency'          => array(
 				'type'        => 'int',
 				'default'     => 60,
 				'min'         => 15,
 				'max'         => 300,
-				'label'       => __( 'Throttle Frequency', 'xspeed' ),
-				'description' => __( 'Interval in seconds for contexts set to Throttle. 60 is a sane default; lower = faster sync but more requests.', 'xspeed' ),
+				'label'       => __( 'Throttle interval', 'xspeed' ),
+				'unit'        => 'seconds',
+				'description' => __( 'Seconds between checks where you chose Throttle. 60 suits most sites; a lower number means more requests.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array(
+					'any' => array(
+						array( 'field' => 'behavior_dashboard', 'value' => self::BEHAVIOR_THROTTLE ),
+						array( 'field' => 'behavior_editor', 'value' => self::BEHAVIOR_THROTTLE ),
+						array( 'field' => 'behavior_frontend', 'value' => self::BEHAVIOR_THROTTLE ),
+					),
+				),
 			),
 		);
 	}

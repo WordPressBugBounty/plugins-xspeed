@@ -522,7 +522,7 @@ final class Optimize_Diagnosis {
 	private static function risks(): array {
 		return array(
 			'delay_js_off'      => __( 'Scripts do not run until the visitor interacts. Sliders, counters and anything that animates on load may sit still until first touch, and a script that expects to run immediately can misbehave.', 'xspeed' ),
-			'async_css_off'     => __( 'Stylesheets load without blocking the first paint, so a theme with no critical CSS can flash unstyled for a moment. It also moves styling to after first paint, which can INCREASE layout shift on a page that already shifts.', 'xspeed' ),
+			'async_css_off'     => __( 'Stylesheets load without blocking the first paint only on pages that have critical CSS; elsewhere only font stylesheets change. Where it applies, styling moves to after first paint, which can INCREASE layout shift on a page that already shifts.', 'xspeed' ),
 			'jquery_migrate_on' => __( 'Older themes and plugins still depend on it. Removing it broke a real page with "jQuery.Deferred exception: e.indexOf is not a function" — an error the page-level check cannot see, because the HTML arrives intact and only the browser notices.', 'xspeed' ),
 		);
 	}

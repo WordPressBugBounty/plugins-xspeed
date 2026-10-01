@@ -29,6 +29,7 @@ final class SupportModule extends Module {
 			'icon'         => 'LifeBuoy',
 			'description'  => __( 'Open a support ticket with a one-click system snapshot already attached.', 'xspeed' ),
 			'custom_panel' => 'SupportPanel',
+			'group'        => 'settings',
 		);
 	}
 
@@ -38,7 +39,8 @@ final class SupportModule extends Module {
 				'type'        => 'string',
 				'default'     => 'https://xspeedcache.com/support/',
 				'label'       => __( 'Support URL', 'xspeed' ),
-				'description' => __( 'Where the "Open ticket" button takes the user.', 'xspeed' ),
+				'description' => __( 'The page the "Open ticket" button opens. Leave the default to reach xSpeed support.', 'xspeed' ),
+				'advanced'    => true,
 			),
 		);
 	}

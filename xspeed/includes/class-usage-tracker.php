@@ -10,7 +10,7 @@
  * every admin); it stores the reason in the canonical WPInsight options and
  * deactivate_this_plugin() transmits it — see that method.
  *
- * PRIVACY CONTRACT (see CLAUDE.md "Hard do-not" + readme.txt):
+ * PRIVACY CONTRACT (see AGENTS.md "Hard rules" + readme.txt):
  *   Nothing is collected or sent until the site admin EXPLICITLY opts in via
  *   the setup wizard. `require_optin` is always true. Until `opt_in( true )`
  *   has run, `is_tracking_allowed()` is false, no cron is scheduled, and

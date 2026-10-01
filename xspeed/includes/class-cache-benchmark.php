@@ -158,13 +158,15 @@ final class Cache_Benchmark {
 	 * @return array{ttfb_ms:float,time_ms:float,bytes:int,bytes_transferred:int,status:int}
 	 */
 	private static function measure( string $url, bool $bypass ): array {
-		$headers = array(
-			'User-Agent'      => 'xSpeed Benchmark/1.0',
-			// Ask for compression like a real browser so the WIRE size is
-			// measurable. Only encodings we can decode locally — no brotli
-			// (ext-brotli is rare, and an undecodable body would break the
-			// uncompressed measurement).
-			'Accept-Encoding' => 'gzip, deflate',
+		$headers = Self_Traffic::headers(
+			array(
+				'User-Agent'      => 'xSpeed Benchmark/1.0',
+				// Ask for compression like a real browser so the WIRE size is
+				// measurable. Only encodings we can decode locally — no brotli
+				// (ext-brotli is rare, and an undecodable body would break the
+				// uncompressed measurement).
+				'Accept-Encoding' => 'gzip, deflate',
+			)
 		);
 		if ( $bypass ) {
 			// The X-XSpeed-Bypass header only short-circuits the PHP

@@ -42,7 +42,8 @@ final class LazyModule extends Module {
 			'label'        => __( 'Media Optimization', 'xspeed' ),
 			'tab_label'    => __( 'Lazy Loading', 'xspeed' ), // its own tab on the Media Optimization page
 			'icon'         => 'Image',
-			'description'  => __( 'Control how images, iframes, and videos load — lazy-loading, missing dimensions, and format optimization.', 'xspeed' ),
+			'description'  => __( 'Loads images, videos and embeds only when visitors scroll to them.', 'xspeed' ),
+			'group'        => 'performance',
 			// Host page: Lazy Loading (this module) + Image Optimization (Pro)
 			// + AI Suggestions (Pro) as tabs — everything a page loads on one
 			// page instead of separate rows (FBS-83633). Fonts is NOT here: it
@@ -56,31 +57,31 @@ final class LazyModule extends Module {
 			'lazy_images'            => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Lazy-load Images', 'xspeed' ),
-				'description' => __( 'Add loading="lazy" + decoding="async" to <img> tags in post content. The first images on the page get loading="eager" so the LCP image is not deferred.', 'xspeed' ),
+				'label'       => __( 'Lazy-load images', 'xspeed' ),
+				'description' => __( 'Images load when the visitor scrolls near them. The first image on the page still loads right away.', 'xspeed' ),
 			),
 			'lazy_iframes'           => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Lazy-load Iframes', 'xspeed' ),
-				'description' => __( 'Add loading="lazy" to <iframe> tags. Useful for YouTube / Vimeo embeds + map widgets that pull a lot of bytes.', 'xspeed' ),
+				'label'       => __( 'Lazy-load embeds', 'xspeed' ),
+				'description' => __( 'Embedded content such as YouTube videos and maps loads when the visitor scrolls near it.', 'xspeed' ),
 			),
 			'video_facade'           => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Click-to-Play Video Facade', 'xspeed' ),
-				'description' => __( 'Replace YouTube and Vimeo embeds — and self-hosted <video> tags that have a poster — with the poster image and a play button. The video only loads when a visitor clicks it, so a page with embeds no longer pays ~1MB of third-party JavaScript, or the full weight of a hosted video file, for visitors who never press play. Autoplaying videos are left alone. Falls back to the normal embed when JavaScript is off.', 'xspeed' ),
+				'label'       => __( 'Click-to-play videos', 'xspeed' ),
+				'description' => __( 'Shows a preview image with a play button in place of YouTube, Vimeo and your own videos that have a poster image. The video loads only when clicked. Autoplaying videos are left alone.', 'xspeed' ),
 			),
 			'lazy_videos'            => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Lazy-load HTML5 Videos', 'xspeed' ),
-				'description' => __( 'Set preload="none" on self-hosted <video> tags, overriding a player\'s own preload="auto"/"metadata". Autoplaying videos are left alone — they need their bytes regardless. Browsers do not yet support loading="lazy" on video; preload="none" is the closest equivalent.', 'xspeed' ),
+				'label'       => __( 'Lazy-load your own videos', 'xspeed' ),
+				'description' => __( 'Videos uploaded to your site download only when played. Autoplaying videos are left alone.', 'xspeed' ),
 			),
 			'lazy_background_images' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Lazy-load Background Images', 'xspeed' ),
+				'label'       => __( 'Lazy-load background images', 'xspeed' ),
 				'description' => __( 'Hold back background images set in an element\'s inline style (a Cover or Group block, a page-builder section) until the element is near the screen. Uses a small script; visitors without JavaScript get every background as usual. The first N backgrounds on the page load straight away, like images. Backgrounds set in a stylesheet are not affected.', 'xspeed' ),
 			),
 			'eager_first_n'          => array(
@@ -88,21 +89,30 @@ final class LazyModule extends Module {
 				'default'     => 1,
 				'min'         => 0,
 				'max'         => 10,
-				'label'       => __( 'Eager-load First N Images', 'xspeed' ),
-				'description' => __( 'How many images at the top of the post get loading="eager". 1 is usually right (the LCP hero image). 0 to lazy-load everything. Lazy-loaded background images use the same number.', 'xspeed' ),
+				'label'       => __( 'Images to load right away', 'xspeed' ),
+				'description' => __( 'How many images at the top of the page skip lazy loading. Only the first of them also loads at high priority, and images in hidden or closed sections are not counted. Lazy-loaded background images use the same number. 1 suits most sites; 0 lazy-loads every image.', 'xspeed' ),
+				'advanced'    => true,
+				// Both counters read this number (class-lazy-loader.php), so it
+				// shows while either kind of lazy loading is on.
+				'dependsOn'   => array(
+					'any' => array(
+						array( 'field' => 'lazy_images' ),
+						array( 'field' => 'lazy_background_images' ),
+					),
+				),
 			),
 			'add_missing_dimensions' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Add Missing Image Dimensions', 'xspeed' ),
-				'description' => __( 'When an <img class="wp-image-N"> has no width/height, look the values up from the media library and inject them. Prevents the page-layout shift that hurts CLS scores.', 'xspeed' ),
+				'label'       => __( 'Add missing image sizes', 'xspeed' ),
+				'description' => __( 'Adds width and height to images that lack them, using the media library. This stops the page from jumping as images load.', 'xspeed' ),
 			),
 			'excluded_images'        => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Excluded Images', 'xspeed' ),
-				'description' => __( 'Substring patterns that, if found anywhere in the <img> / <iframe> tag (typically a class or filename), exempt that element from lazy-loading. Useful for hero / logo / sprite images. Or add data-skip-lazy to the tag directly.', 'xspeed' ),
+				'label'       => __( 'Excluded images', 'xspeed' ),
+				'description' => __( 'Images and embeds whose tag contains a line here, such as a class or file name, are never lazy-loaded. Useful for logos and hero images.', 'xspeed' ),
 			),
 		);
 	}

@@ -148,8 +148,9 @@ final class McpModule extends Module {
 		return array(
 			'label'        => __( 'MCP Server', 'xspeed' ),
 			'icon'         => 'Sparkles',
-			'description'  => __( 'Let Claude or another AI agent run this site — purge, check stats, change settings. This is the only thing you connect an AI to, and it is free with no API key.', 'xspeed' ),
+			'description'  => __( 'Let Claude or another AI assistant clear the cache, check stats and change settings.', 'xspeed' ),
 			'custom_panel' => 'McpPanel',
+			'group'        => 'ai-agents',
 		);
 	}
 
@@ -172,6 +173,15 @@ final class McpModule extends Module {
 
 	public function boot(): void {
 		add_action( 'rest_api_init', array( $this, 'register_rest' ) );
+		add_action( Mcp_Pairing::TOKEN_CHANGED_ACTION, array( Mcp_Hub::class, 'on_token_changed' ) );
+
+		// The only place the body cap can run before WordPress decodes it.
+		// WP_REST_Server::dispatch() fires rest_pre_dispatch, and only after
+		// that calls has_valid_params() — which json_decode()s the whole body
+		// for any application/json request, ahead of the permission callback
+		// and the handler. A cap inside a handler is therefore a second line,
+		// not the bound it reads like.
+		add_filter( 'rest_pre_dispatch', array( $this, 'cap_request_body' ), 10, 3 );
 
 		// Pretty per-site endpoint: /xspeed/mcp → MCP JSON-RPC handler.
 		// `wp_loaded`, not `init`: add_rewrite() decides whether to claim the
@@ -763,6 +773,8 @@ final class McpModule extends Module {
 				status_header( 403 );
 				echo wp_json_encode( array( 'error' => 'invalid_or_expired_attach_request' ) );
 			} else {
+				// The Hub needs only the credential, as on the REST route.
+				unset( $result['user_id'] );
 				status_header( 200 );
 				echo wp_json_encode( $result );
 			}
@@ -1476,6 +1488,59 @@ final class McpModule extends Module {
 	}
 
 	/**
+	 * Reject an over-sized MCP request body before WordPress decodes it.
+	 *
+	 * `rest_pre_dispatch` is the last hook that runs before
+	 * `WP_REST_Server::dispatch()` calls `has_valid_params()`, and that is
+	 * what `json_decode()`s the body — before the permission callback, so an
+	 * unauthenticated caller already pays for the decode. Capping here is the
+	 * difference between reading a length and parsing megabytes of JSON.
+	 *
+	 * Refusing is not enough on its own. Core reads request params again on
+	 * the way out — `rest_filter_response_fields()` on `rest_post_dispatch`
+	 * looks up `_fields` — and for an `application/json` request that lookup
+	 * runs `parse_json_params()` over whatever body is still attached. So a
+	 * refused body is also emptied, and the 413 goes out with nothing left to
+	 * decode. QA measured a refused 3 MB body peaking near 90 MB without this.
+	 *
+	 * Scoped to the two routes that carry tool payloads, compared
+	 * case-insensitively: `WP_REST_Server::match_request_to_handler()` matches
+	 * routes with the `i` flag, so `/XSPEED/v1/MCP` reaches the same handler
+	 * and has to meet the same cap. Returning null leaves the request alone,
+	 * which is what this filter does for everything else.
+	 *
+	 * @param mixed            $result  A short-circuit response, if one is set.
+	 * @param mixed            $server  Unused; the REST server instance.
+	 * @param \WP_REST_Request $request Incoming request.
+	 * @return mixed Null to continue, or a WP_Error to refuse.
+	 */
+	public function cap_request_body( $result, $server = null, $request = null ) {
+		if ( null !== $result || ! $request instanceof \WP_REST_Request ) {
+			return $result;
+		}
+
+		$route = strtolower( (string) $request->get_route() );
+		$mcp   = '/' . self::NS . '/mcp';
+		if ( $route !== $mcp && 0 !== strpos( $route, $mcp . '/tool/' ) ) {
+			return $result;
+		}
+
+		if ( strlen( (string) $request->get_body() ) <= Mcp_Tools::MAX_TOOL_BODY_BYTES ) {
+			return $result;
+		}
+
+		// Drop the body before refusing. Nothing downstream needs it, and
+		// core's response pipeline would otherwise json_decode() it anyway.
+		$request->set_body( '' );
+
+		return new \WP_Error(
+			'xspeed_mcp_tool_payload_too_large',
+			__( 'The MCP tool payload is too large.', 'xspeed' ),
+			array( 'status' => 413 )
+		);
+	}
+
+	/**
 	 * Token-authenticated tool route for the hosted broker. Maps a broker
 	 * tool call (e.g. GET /mcp/tool/get_cache_status) onto the shared
 	 * Mcp_Tools catalog, so the broker path and the JSON-RPC path never
@@ -1483,6 +1548,16 @@ final class McpModule extends Module {
 	 */
 	public function rest_tool( \WP_REST_Request $request ) {
 		$tool = (string) $request->get_param( 'tool' );
+		// Second line behind cap_request_body(). This one still matters: the
+		// pretty front-door path builds its own WP_REST_Request and calls the
+		// handler without going through WP_REST_Server::dispatch() at all.
+		if ( strlen( $request->get_body() ) > Mcp_Tools::MAX_TOOL_BODY_BYTES ) {
+			return new \WP_Error(
+				'xspeed_mcp_tool_payload_too_large',
+				__( 'The MCP tool payload is too large.', 'xspeed' ),
+				array( 'status' => 413 )
+			);
+		}
 		$args = $request->get_json_params();
 		if ( ! is_array( $args ) ) {
 			$args = array();

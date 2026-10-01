@@ -76,8 +76,9 @@ final class CloudflareModule extends Module {
 		return array(
 			'label'        => __( 'Cloudflare', 'xspeed' ),
 			'icon'         => 'Cloud',
-			'description'  => __( 'Connect a Cloudflare zone for automatic edge purging when xSpeed clears its cache, plus a dev-mode toggle.', 'xspeed' ),
+			'description'  => __( 'Clear the Cloudflare cache whenever xSpeed clears its own cache.', 'xspeed' ),
 			'custom_panel' => 'CloudflarePanel',
+			'group'        => 'network',
 		);
 	}
 
@@ -99,8 +100,8 @@ final class CloudflareModule extends Module {
 			'enabled' => array(
 				'type'        => 'bool',
 				'default'     => false,
-				'label'       => __( 'Enable Cloudflare integration', 'xspeed' ),
-				'description' => __( 'Use the credentials below to verify your zone and run purges.', 'xspeed' ),
+				'label'       => __( 'Connect Cloudflare', 'xspeed' ),
+				'description' => __( 'Lets xSpeed clear the Cloudflare cache for your domain, using the details below.', 'xspeed' ),
 			),
 			'auth_method' => array(
 				'type'          => 'enum',
@@ -111,14 +112,14 @@ final class CloudflareModule extends Module {
 					'key'   => 'Global API Key',
 				),
 				'label'         => __( 'Authentication', 'xspeed' ),
-				'description'   => __( 'API Tokens (scoped, recommended) or the legacy Global API Key with your account email.', 'xspeed' ),
+				'description'   => __( 'An API token is safer and recommended. The older Global API Key also needs your account email.', 'xspeed' ),
 				'dependsOn'     => array( 'field' => 'enabled' ),
 			),
 			'api_token' => array(
 				'type'        => 'secret',
 				'default'     => '',
 				'label'       => __( 'API Token', 'xspeed' ),
-				'description' => __( 'Create a token at dash.cloudflare.com → My Profile → API Tokens. Needs "Zone → Cache Purge" + "Zone Settings" permissions.', 'xspeed' ),
+				'description' => __( 'Create one at dash.cloudflare.com → My Profile → API Tokens. Give it the "Zone → Cache Purge" and "Zone Settings" permissions.', 'xspeed' ),
 				// Only the token auth branch (and only while CF is enabled, via
 				// the transitive gate on auth_method → enabled).
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'token' ),
@@ -126,29 +127,29 @@ final class CloudflareModule extends Module {
 			'email' => array(
 				'type'        => 'string',
 				'default'     => '',
-				'label'       => __( 'Account Email', 'xspeed' ),
-				'description' => __( 'Only used when Authentication is set to Global API Key.', 'xspeed' ),
+				'label'       => __( 'Account email', 'xspeed' ),
+				'description' => __( 'The email address of your Cloudflare account.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'key' ),
 			),
 			'api_key' => array(
 				'type'        => 'secret',
 				'default'     => '',
 				'label'       => __( 'Global API Key', 'xspeed' ),
-				'description' => __( 'Found at dash.cloudflare.com → My Profile → API Tokens → Global API Key.', 'xspeed' ),
+				'description' => __( 'Find it at dash.cloudflare.com → My Profile → API Tokens → Global API Key.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'auth_method', 'value' => 'key' ),
 			),
 			'zone_id' => array(
 				'type'        => 'string',
 				'default'     => '',
 				'label'       => __( 'Zone ID', 'xspeed' ),
-				'description' => __( 'The 32-character hex Zone ID from your domain overview page.', 'xspeed' ),
+				'description' => __( 'The 32-character Zone ID shown on your domain overview page in Cloudflare.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'auto_purge_on_update' => array(
 				'type'        => 'bool',
 				'default'     => true,
-				'label'       => __( 'Auto-purge Cloudflare on xSpeed purge', 'xspeed' ),
-				'description' => __( 'When xSpeed clears its own cache (post save, settings change, manual purge), trigger a Cloudflare purge too.', 'xspeed' ),
+				'label'       => __( 'Clear Cloudflare with xSpeed', 'xspeed' ),
+				'description' => __( 'Clear the Cloudflare cache each time xSpeed clears its own, for example after you save a post.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);

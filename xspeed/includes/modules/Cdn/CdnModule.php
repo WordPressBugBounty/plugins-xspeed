@@ -27,7 +27,8 @@ final class CdnModule extends Module {
 		return array(
 			'label'       => __( 'CDN', 'xspeed' ),
 			'icon'        => 'Globe',
-			'description' => __( 'Serve static assets (images, fonts, CSS, JS) from a pull-zone CDN host like BunnyCDN, KeyCDN, or your own.', 'xspeed' ),
+			'description' => __( 'Serve images, fonts, CSS and JS from a CDN such as BunnyCDN or KeyCDN.', 'xspeed' ),
+			'group'       => 'network',
 		);
 	}
 
@@ -37,29 +38,29 @@ final class CdnModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Enable CDN', 'xspeed' ),
-				'description' => __( 'Rewrite static asset URLs to the CDN hostname below. Your CDN must be a pull-zone configured to fetch from this site.', 'xspeed' ),
+				'description' => __( 'Load static files from the CDN address below. Set up the CDN to pull files from this site first.', 'xspeed' ),
 			),
 			'cdn_url' => array(
 				'type'        => 'string',
 				'default'     => '',
 				'label'       => __( 'CDN URL', 'xspeed' ),
-				'description' => __( 'CDN hostname, e.g. cdn.example.com. https:// and trailing slashes are stripped automatically.', 'xspeed' ),
+				'description' => __( 'The CDN address, for example cdn.example.com. xSpeed removes https:// and any trailing slash.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'included_extensions' => array(
 				'type'        => 'list',
 				'default'     => Cdn_Rewriter::DEFAULT_EXTENSIONS,
 				'item_type'   => 'string',
-				'label'       => __( 'Included File Extensions', 'xspeed' ),
-				'description' => __( 'Only URLs ending in these extensions are rewritten. Defaults cover images, fonts, CSS, JS, and common media.', 'xspeed' ),
+				'label'       => __( 'File types to serve', 'xspeed' ),
+				'description' => __( 'Only files with these extensions load from the CDN. The defaults cover images, fonts, CSS, JS and common media.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'excluded_patterns' => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'string',
-				'label'       => __( 'Excluded Patterns', 'xspeed' ),
-				'description' => __( 'Glob patterns matched against the URL path. Matching URLs stay on the origin. Examples: /wp-admin/*, *.pdf, /private/*', 'xspeed' ),
+				'label'       => __( 'Excluded paths', 'xspeed' ),
+				'description' => __( 'Files whose path matches a pattern load from your server, not the CDN. Use * as a wildcard, for example /private/* or *.pdf.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 		);

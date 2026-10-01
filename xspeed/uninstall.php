@@ -67,6 +67,7 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_setup_snapshot' );
 	delete_option( 'xspeed_stats' );
 	delete_option( 'xspeed_gc_cursor' );
+	delete_option( 'xspeed_mcp_rl_gen' );
 	wp_clear_scheduled_hook( 'xspeed_gc' );
 
 	global $wpdb;
