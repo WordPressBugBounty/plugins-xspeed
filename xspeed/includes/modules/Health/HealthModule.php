@@ -54,6 +54,16 @@ final class HealthModule extends Module {
 		// only ever reads the cached verdict, so the HTTP round-trip
 		// happens here instead of inside a request the user waits on.
 		add_action( \XSpeed\Cookie_Inspector::CRON_HOOK, array( $this, 'refresh_cookie_probe' ) );
+
+		// Same pattern for the edge-mode probe: the page it requests is
+		// answered here, and the two round-trips run from cron.
+		\XSpeed\Edge_Mode_Probe::boot();
+		add_action( \XSpeed\Edge_Mode_Probe::CRON_HOOK, array( $this, 'refresh_edge_mode_probe' ) );
+	}
+
+	/** Cron callback: ask the edge whether it obeys "do not store". */
+	public function refresh_edge_mode_probe(): void {
+		\XSpeed\Edge_Mode_Probe::run();
 	}
 
 	/** Cron callback: perform the real (blocking) probe off-request. */

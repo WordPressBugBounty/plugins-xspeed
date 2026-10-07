@@ -522,6 +522,33 @@ final class Edge_Provider {
 			return self::answer( 'cloudflare', self::CONFIRMED, 'plugin' );
 		}
 
+		// xCloud's Cloudflare Enterprise purge mu-plugin. xCloud installs it
+		// on a site whose domain has Cloudflare Enterprise bought through
+		// xCloud, and it defines this constant whatever version it is. Its
+		// whole job is purging that Cloudflare zone, so the site is behind
+		// Cloudflare.
+		//
+		// `confirmed`, like the plugin signals above. The evidence is
+		// server-side state that no visitor can send, so it is safe to bake
+		// into the drop-in and replay from a sidecar. On these sites it is
+		// the one signal that names Cloudflare in a `bake`, which is what
+		// lets the drop-in carry a hold that needs evidence.
+		//
+		// It is wrong only when the mu-plugin outlives the CFE subscription.
+		// That costs what a grey-clouded zone costs above, one inert
+		// `cf-edge-cache` header, because the Cloudflare set is the blind set
+		// plus that one. The value is not read. xCloud renders the version
+		// into the file, and a copy rendered without one still says the
+		// same thing about the zone.
+		//
+		// Below the pins and the filter, so `off` and a named provider still
+		// win. A mu-plugin loads before plugins, so the constant is there by
+		// the time anything here runs, CLI and cron included. The drop-in
+		// runs before mu-plugins, which is why it gets this as a baked answer.
+		if ( defined( 'XCLOUD_CFE_PURGE_VERSION' ) ) {
+			return self::answer( 'cloudflare', self::CONFIRMED, 'xcloud-cfe' );
+		}
+
 		// Everything below reads the inbound request, so it is skipped
 		// outside `request`. A bake runs once in an admin or CLI request and
 		// answers for every page on the site; a sidecar is written from one

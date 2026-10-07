@@ -120,6 +120,12 @@ final class CdnModule extends Module {
 		if ( empty( $opts['enabled'] ) || empty( $opts['cdn_url'] ) ) {
 			return;
 		}
+		// Something else on the site has taken over serving these files. The
+		// switch stays as the owner left it, and nothing is rewritten while
+		// the block lasts. See Module::blocked_by().
+		if ( null !== $this->blocked_by() ) {
+			return;
+		}
 		Cdn_Rewriter::reset_state();
 
 		// Attachment URLs still go through their own filter: media-library

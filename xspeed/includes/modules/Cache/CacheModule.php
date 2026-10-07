@@ -226,7 +226,8 @@ final class CacheModule extends Module {
 					'/edd-api',
 					'/wp-login',
 				),
-				'item_type'   => 'string',
+				// `path`: kept as typed, percent-encoded slugs included.
+				'item_type'   => 'path',
 				'label'       => __( 'Excluded URLs', 'xspeed' ),
 				'description' => __( 'Pages whose URL matches a line here are never cached. Plain text matches anywhere (/cart). A pattern with * matches from the start of the path: /cart/* matches /cart/items but not /shop/cart/items. ~ starts a regex.', 'xspeed' ),
 			),
@@ -266,6 +267,14 @@ final class CacheModule extends Module {
 				'label'       => __( 'Clear cache after updates', 'xspeed' ),
 				'description' => __( 'Clear the page cache when a plugin, theme or WordPress is updated, so visitors never get old pages with broken asset links.', 'xspeed' ),
 			),
+			'purge_affected_only' => array(
+				'type'        => 'bool',
+				'default'     => true,
+				'label'       => __( 'Clear only the pages a change affects', 'xspeed' ),
+				'description' => __( 'When you publish, edit or delete a post, clear that post, the pages that list it and its feeds instead of the whole site. Pages with a post grid from a page builder, a block plugin or the theme are noted as they are built and cleared when the change can affect their list; turn this off if a grid still shows an old list.', 'xspeed' ),
+				'info_title'  => __( 'Which pages are cleared', 'xspeed' ),
+				'info'        => __( 'The post, its old address if it moved, the home page, the blog page, its categories, tags and author pages with every page of each, the date archives, feeds, the posts next to it, pages that show a Latest Posts or Query Loop block, directly or in a synced pattern, and pages noted running a post grid of their own (a page builder, block plugin, related-posts or theme list) that the change can affect. If your theme shows a list that can be on any page, and the change alters it, xSpeed clears the whole site instead: a Recent Posts, Archives or Calendar widget, a post list block, or a latest-posts grid from a page builder or plugin (usually a new post, or an edit to one of the newest few it shows), a page list or menu (a page published, withdrawn, renamed or moved), or a Categories or Tag Cloud list (a post moved to other categories or tags).', 'xspeed' ),
+			),
 			'mobile_separate' => array(
 				'type'        => 'bool',
 				'default'     => false,
@@ -278,7 +287,7 @@ final class CacheModule extends Module {
 				'options'       => array( 'auto', 'off', 'cloudflare', 'fastly', 'varnish', 'nginx', 'akamai', 'cloudfront', 'google', 'keycdn', 'bunny', 'sucuri', 'incapsula', 'generic', 'custom' ),
 				'option_labels' => array(
 					'auto'       => 'Detect automatically',
-					'off'        => 'Off — send nothing',
+					'off'        => 'Off (no edge lifetime or cache tags)',
 					'cloudflare' => 'Cloudflare',
 					'varnish'    => 'Varnish',
 					'nginx'      => 'nginx proxy cache',
@@ -306,7 +315,7 @@ final class CacheModule extends Module {
 				'description'   => __( 'Tells your CDN or proxy not to store pages xSpeed does not cache. Leave on Detect automatically unless you know your provider.', 'xspeed' ),
 				'advanced'      => true,
 				'info_title'    => __( 'Cache in front of this site', 'xspeed' ),
-				'info'          => __( 'Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Run "wp xspeed cache edge" to see what was detected and what gets sent.', 'xspeed' )
+				'info'          => __( 'Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Off stops the edge lifetime and cache tags. When an add-on that manages the edge, such as a Cloudflare Enterprise add-on, is active, the "don\'t store" headers for logged-in, cart and search pages still go out. Run "wp xspeed cache edge" to see what was detected and what gets sent.', 'xspeed' )
 			),
 			'edge_custom_headers' => array(
 				'type'        => 'list',
@@ -515,7 +524,7 @@ final class CacheModule extends Module {
 					array(
 						'type'        => 'assoc',
 						'name'        => 'type',
-						'description' => 'What to clear: all (default), page, object, cloudflare, cdn — or a group name (edge). Comma-separate to clear several.',
+						'description' => 'What to clear: all (default), page, object, cloudflare, xcloud (sites with xCloud\'s purge plugin), cdn — or a group name (edge). Comma-separate to clear several.',
 						'optional'    => true,
 					),
 					array(
@@ -536,12 +545,12 @@ final class CacheModule extends Module {
 			array(
 				'name'      => 'xspeed cache',
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it. To clear the whole site use `wp xspeed purge`.',
+				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it, or `listings` to show which pages were recorded running a post list of their own (cleared by a narrow purge when a save may change that list). To clear the whole site use `wp xspeed purge`.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config', 'edge' ),
+						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config', 'edge', 'listings' ),
 						'optional' => true,
 					),
 					array(
@@ -552,7 +561,7 @@ final class CacheModule extends Module {
 					array(
 						'type'        => 'assoc',
 						'name'        => 'limit',
-						'description' => 'Rows to print for inventory / purge-log. Default 20.',
+						'description' => 'Rows to print for inventory / purge-log (default 20), or sample pages for listings (default 5).',
 						'optional'    => true,
 					),
 					array(
@@ -904,6 +913,13 @@ final class CacheModule extends Module {
 			$probe    = \XSpeed\Cache::qualify_rewrite_probe( \XSpeed\Cache::recheck_static_rewrite() );
 			$blocked  = '' !== (string) $probe['block_reason'];
 
+			// Whether the installed rules are the ones these settings
+			// generate. Reported before the verdict below because it is the
+			// question someone running this command has just acted on — they
+			// pasted a block and want to know if it took — and because
+			// "active" is true for a stale block too.
+			$this->cli_report_rules_state( (array) ( $probe['rules'] ?? array() ) );
+
 			if ( $probe['active'] ) {
 				\WP_CLI::success( 'Static rewrite is active — the web server is serving cache hits directly.' );
 				return;
@@ -928,9 +944,19 @@ final class CacheModule extends Module {
 				return;
 			}
 			$cause   = isset( $assoc['cause'] ) && '' !== trim( (string) $assoc['cause'] ) ? trim( (string) $assoc['cause'] ) : 'CLI';
-			$removed = \XSpeed\Cache::purge_url( $url, $cause );
+			$result    = \XSpeed\Cache::purge_url_reported( $url, $cause );
+			$removed   = $result['removed'];
+			$forwarded = implode( ', ', $result['forwarded'] );
 			if ( $removed > 0 ) {
-				\WP_CLI::success( sprintf( 'Purged %d cache file(s) for %s', $removed, $url ) );
+				\WP_CLI::success(
+					'' === $forwarded
+						? sprintf( 'Purged %d cache file(s) for %s', $removed, $url )
+						: sprintf( 'Purged %d cache file(s) for %s, and sent the purge to %s', $removed, $url, $forwarded )
+				);
+			} elseif ( '' !== $forwarded ) {
+				// xSpeed's own cache held nothing, but a cache in front of
+				// PHP took the purge: that copy is the one visitors get.
+				\WP_CLI::success( sprintf( 'Sent the purge for %s to %s. xSpeed\'s own cache held no copy.', $url, $forwarded ) );
 			} else {
 				\WP_CLI::log( sprintf( 'No cache entries found for %s (already cold, or the URL never cached).', $url ) );
 			}
@@ -954,6 +980,11 @@ final class CacheModule extends Module {
 
 		if ( 'edge' === $action ) {
 			$this->cli_edge();
+			return;
+		}
+
+		if ( 'listings' === $action ) {
+			$this->cli_listings( isset( $assoc['limit'] ) ? $limit : 5 );
 			return;
 		}
 
@@ -1037,13 +1068,129 @@ final class CacheModule extends Module {
 			}
 		}
 
+		// The same bake the drop-in gets, so it asks no per-page question.
+		$variant = \XSpeed\Cache::query_variant_edge_headers();
+
 		\WP_CLI::log( '' );
-		\WP_CLI::log( 'X-XSpeed-Edge-Hold names why a response was held: bypass, bypass-shape, miss, mobile-split or pending. No header means nothing was held.' );
+		if ( array() === $variant ) {
+			\WP_CLI::log( 'A cached page requested with an ignored parameter (?utm_source=x) gets the same headers as without one. It is held only where a cache in front was detected, and with Separate Mobile Cache on every page is held already.' );
+		} else {
+			\WP_CLI::log( 'On a cached page requested with an ignored parameter (?utm_source=x), a cached search or a query-form feed:' );
+			foreach ( $variant as $name => $value ) {
+				\WP_CLI::log( sprintf( '  %s: %s', $name, $value ) );
+			}
+		}
+
+		\WP_CLI::log( '' );
+		\WP_CLI::log( 'X-XSpeed-Edge-Hold names why a response was held: bypass, bypass-shape, miss, mobile-split, pending or query-variant. No header means nothing was held.' );
 
 		if ( 'cloudflare' === $answer['provider'] ) {
 			\WP_CLI::log( '' );
 			\WP_CLI::log( 'A Cloudflare Cache Rule whose Edge TTL is "Ignore cache-control header and use this TTL" overrides all of the above. Use "Respect origin TTL" on that rule if pages are still being stored.' );
 		}
+	}
+
+	/**
+	 * `wp xspeed cache listings`: the pages recorded running a post list
+	 * outside the main loop, which a narrow purge adds when a save may
+	 * change that list.
+	 *
+	 * For measuring how wide that set gets on a real site: close to every
+	 * page means a narrow purge saves little there.
+	 *
+	 * @param int $samples Pages to print.
+	 */
+	private function cli_listings( int $samples ): void {
+		$narrow = ! empty( Settings_Manager::get( self::SLUG )['purge_affected_only'] );
+		$stats  = \XSpeed\Listing_Pages::stats( $samples );
+		$limit  = \XSpeed\Affected_Pages::LIMIT;
+
+		\WP_CLI::log( 'narrow purge  ' . ( $narrow ? 'on' : 'off' ) );
+		\WP_CLI::log( 'recording     ' . ( \XSpeed\Listing_Pages::enabled() ? 'on' : 'off' ) );
+		\WP_CLI::log( 'directory     ' . $stats['dir'] );
+
+		\WP_CLI::log( '' );
+		\WP_CLI::log( 'Newest-N lists (' . count( $stats['specs'] ) . ' of ' . \XSpeed\Listing_Pages::SPEC_CAP . '): a change to one of the newest N clears the whole site.' );
+		foreach ( $stats['specs'] as $spec ) {
+			\WP_CLI::log( sprintf( '  newest %d of %s%s', $spec['n'], implode( ', ', $spec['types'] ), $spec['sticky'] ? ', sticky posts first' : '' ) );
+		}
+
+		\WP_CLI::log( '' );
+		\WP_CLI::log( sprintf( 'Pages with other lists: %d recorded (%d files, cap %d); %d posts in the shown-on index.', $stats['pages'], $stats['files'], \XSpeed\Listing_Pages::CAP, $stats['posts'] ) );
+		foreach ( $stats['types'] as $type => $counts ) {
+			\WP_CLI::log(
+				sprintf(
+					'  %-14s %d pages, %d not precise%s',
+					$type,
+					$counts['all'],
+					$counts['loose'],
+					$counts['loose'] > $limit
+						? ' (over ' . $limit . ' not precise: any change to a post of this type clears the whole site)'
+						: ( $counts['all'] > $limit ? ' (over ' . $limit . ': a change that is not a plain edit clears the whole site)' : '' )
+				)
+			);
+		}
+
+		if ( null !== $stats['full'] ) {
+			\WP_CLI::warning(
+				sprintf(
+					'The record is full, and pages listing %s went unrecorded: a change to a post of those types clears the whole site until a save finds the record under the cap.',
+					implode( ', ', array_map( 'strval', (array) ( $stats['full']['types'] ?? array( 'any' ) ) ) )
+				)
+			);
+		}
+		if ( array() === $stats['samples'] ) {
+			return;
+		}
+		\WP_CLI::log( '' );
+		foreach ( $stats['samples'] as $record ) {
+			\WP_CLI::log(
+				sprintf(
+					'  %s  [%s] %s',
+					$record['url'],
+					implode( ', ', $record['types'] ),
+					$record['precise'] ? 'precise, ' . count( $record['ids'] ) . ' post(s) shown' : 'not precise'
+				)
+			);
+		}
+	}
+
+	/**
+	 * Say which version of the cache rules the server is running.
+	 *
+	 * The generated block stamps every static hit with a hash of itself, and
+	 * the probe reads that back — the only way to tell what someone actually
+	 * pasted into a config WordPress cannot open. `stale` names the settings
+	 * that moved since, where we can tell, because "re-paste the block" with
+	 * no reason attached is what makes people ignore it.
+	 *
+	 * @param array $rules Cache::rules_state() output.
+	 */
+	private function cli_report_rules_state( array $rules ): void {
+		$state = (string) ( $rules['state'] ?? '' );
+
+		if ( 'current' === $state ) {
+			\WP_CLI::log( 'Cache rules: current — the installed rules are the ones these settings generate.' );
+			return;
+		}
+		if ( 'stale' === $state ) {
+			$changed = array_filter( array_map( 'strval', (array) ( $rules['changed'] ?? array() ) ) );
+			\WP_CLI::log(
+				'' === implode( '', $changed )
+					? 'Cache rules: stale — a different version of the rules is installed. Re-paste the block.'
+					: sprintf(
+						'Cache rules: stale — a different version of the rules is installed (%s changed since). Re-paste the block.',
+						implode( ', ', $changed )
+					)
+			);
+			return;
+		}
+		if ( 'absent' === $state ) {
+			\WP_CLI::log( 'Cache rules: absent — no xSpeed rules are installed, or they predate the version marker.' );
+			return;
+		}
+
+		\WP_CLI::log( 'Cache rules: unknown — the probe could not read a rules marker back from this server.' );
 	}
 
 	/** `wp xspeed cache inventory [--limit=N]` — which pages are cached, and how old. */

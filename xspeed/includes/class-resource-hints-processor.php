@@ -60,7 +60,7 @@ final class Resource_Hints_Processor {
 		if ( ! empty( $opts['lcp_preload'] ) ) {
 			$count      = max( 0, (int) ( $opts['lcp_image_count'] ?? 1 ) );
 			$exclusions = array_filter( array_map( 'strval', (array) ( $opts['lcp_exclusions'] ?? array() ) ) );
-			[ $html, $preload ] = self::build_lcp_preload( $html, $count, $exclusions );
+			[ $html, $preload ] = self::build_lcp_preload( $html, $count, $exclusions, (string) ( $opts['page_url'] ?? '' ) );
 			$hints .= $preload;
 		}
 
@@ -248,11 +248,53 @@ final class Resource_Hints_Processor {
 	 * @param string   $html       Page HTML.
 	 * @param int      $count      How many top images to preload.
 	 * @param string[] $exclusions Substring patterns that exempt an <img>.
+	 * @param string   $page_url   The page being served, for the candidate seam.
 	 * @return array{0:string,1:string} [rewritten html, preload markup]
 	 */
-	private static function build_lcp_preload( string $html, int $count, array $exclusions ): array {
+	private static function build_lcp_preload( string $html, int $count, array $exclusions, string $page_url = '' ): array {
 		if ( $count < 1 ) {
 			return array( $html, '' );
+		}
+
+		/**
+		 * Supply the LCP preload candidate for this page instead of the
+		 * automatic pick.
+		 *
+		 * The automatic pick reads the served HTML, so it cannot see a hero set
+		 * as a background in an external stylesheet, and it skips an <img> that
+		 * WordPress core marked lazy. An extension that has measured the page in
+		 * a browser can answer instead. Return null to leave the automatic pick
+		 * in charge; return an array to replace it:
+		 *
+		 *  - `url`    (string) the image to preload; an empty string means the
+		 *             page has no LCP image, so nothing is preloaded;
+		 *  - `srcset` (string, optional) and `sizes` (string, optional), emitted
+		 *             as `imagesrcset` / `imagesizes`;
+		 *  - `kind`   (string, optional) `img` or `background`, passed to the URL
+		 *             filters below. An image no <img> on the page carries is a
+		 *             background regardless;
+		 *  - `media`  (string, optional) a media query for the preload link.
+		 *
+		 * Or a list of up to three such arrays, each with its own `media`, when
+		 * phones and desktops paint different images: each device then preloads
+		 * its own. Any `media` (also on a single answer) sets the matched <img>s
+		 * to `loading="lazy"`, so a device never downloads the other one's hero.
+		 *
+		 * Anything else (an empty list, a URL that is not a string, a URL
+		 * esc_url() refuses, a relative URL such as `hero.png`, a `media` that
+		 * is not a string, over 200 characters or holding `<`, `>` or `"`) is
+		 * not understood, and the automatic pick runs.
+		 *
+		 * The `<img>` carrying that URL, if the page has one, gets
+		 * `fetchpriority="high"` and loses `loading="lazy"`. The URL filters
+		 * below (`xspeed_lcp_preload_url` and friends) still apply.
+		 *
+		 * @param array|null $candidate Null = no opinion.
+		 * @param string     $page_url  The page being served; empty outside a request.
+		 */
+		$supplied = self::supplied_candidates( apply_filters( 'xspeed_lcp_preload_candidate', null, $page_url ) );
+		if ( null !== $supplied ) {
+			return self::build_supplied_preload( $html, $supplied );
 		}
 
 		$preload = '';
@@ -416,7 +458,7 @@ final class Resource_Hints_Processor {
 				$existing
 			);
 			if ( ! $already ) {
-				$preload .= self::preload_link( $w['src'], $w['srcset'], $w['sizes'] );
+				$preload .= self::preload_link( $w['src'], $w['srcset'], $w['sizes'], empty( $w['background'] ) ? 'img' : 'background' );
 			}
 			// Only <img> winners are promoted in PASS 2 — there is no
 			// fetchpriority/loading attribute to fix on a background element,
@@ -1107,7 +1149,7 @@ final class Resource_Hints_Processor {
 	 * redirect the preload to the format it will actually serve, WITHOUT Free
 	 * knowing that layer exists. (FBS-83553 H3)
 	 */
-	private static function preload_link( string $src, string $srcset, string $sizes ): string {
+	private static function preload_link( string $src, string $srcset, string $sizes, string $kind = 'img', string $media = '' ): string {
 		// Resolve the `type` from the ORIGINAL image URL (before rewriting), so a
 		// negotiating layer can key off the source .jpg/.png — after rewriting,
 		// the URL is already a .webp and the derivation would no-op.
@@ -1120,18 +1162,26 @@ final class Resource_Hints_Processor {
 		 *
 		 * @param string $type Defaults to '' (no type attribute).
 		 * @param string $src  The ORIGINAL (pre-rewrite) preload URL.
+		 * @param string $kind `img` for an <img>, `background` for a CSS
+		 *                     background or a video poster. Only an <img> can be
+		 *                     wrapped in <picture>; a background is requested by
+		 *                     the URL its stylesheet names.
 		 */
-		$type = (string) apply_filters( 'xspeed_lcp_preload_type', '', $original );
+		$type = (string) apply_filters( 'xspeed_lcp_preload_type', '', $original, $kind );
 		/**
 		 * Filter the LCP preload href. Return a modern-format sibling (webp/avif)
 		 * when one will actually be served for this image.
 		 *
-		 * @param string $src The original image URL chosen for preload.
+		 * @param string $src  The original image URL chosen for preload.
+		 * @param string $kind `img` or `background`, as for xspeed_lcp_preload_type.
 		 */
-		$src = (string) apply_filters( 'xspeed_lcp_preload_url', $src );
+		$src = (string) apply_filters( 'xspeed_lcp_preload_url', $src, $kind );
 		if ( '' !== $srcset ) {
-			/** @param string $srcset The original srcset chosen for preload. */
-			$srcset = (string) apply_filters( 'xspeed_lcp_preload_srcset', $srcset );
+			/**
+			 * @param string $srcset The original srcset chosen for preload.
+			 * @param string $kind   `img` or `background`.
+			 */
+			$srcset = (string) apply_filters( 'xspeed_lcp_preload_srcset', $srcset, $kind );
 		}
 
 		$attrs = sprintf( 'href="%s"', esc_url( $src ) );
@@ -1147,6 +1197,10 @@ final class Resource_Hints_Processor {
 
 		if ( '' !== $type ) {
 			$attrs .= sprintf( ' type="%s"', esc_attr( $type ) );
+		}
+
+		if ( '' !== $media ) {
+			$attrs .= sprintf( ' media="%s"', esc_attr( $media ) );
 		}
 
 		return sprintf( '<link rel="preload" as="image" %s fetchpriority="high">' . "\n", $attrs );
@@ -1255,6 +1309,223 @@ final class Resource_Hints_Processor {
 		return (int) $w <= self::MIN_LCP_DIMENSION && (int) $h <= self::MIN_LCP_DIMENSION;
 	}
 
+	/** Most candidates one answer may carry (one per device class). */
+	private const MAX_SUPPLIED_CANDIDATES = 3;
+
+	/**
+	 * The filter's answer as a list of well-formed candidates, or null when
+	 * it is no answer or not one this understands (then the automatic pick
+	 * runs). An empty list means "this page has no LCP image".
+	 *
+	 * @param mixed $answer What `xspeed_lcp_preload_candidate` returned.
+	 * @return array<int,array{url:string,srcset:string,sizes:string,kind:string,media:string}>|null
+	 */
+	private static function supplied_candidates( $answer ): ?array {
+		if ( ! is_array( $answer ) || empty( $answer ) ) {
+			return null;
+		}
+		$items = array_key_exists( 'url', $answer ) ? array( $answer ) : $answer;
+		if ( array_values( $items ) !== $items || count( $items ) > self::MAX_SUPPLIED_CANDIDATES ) {
+			return null;
+		}
+		$out = array();
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) || ! array_key_exists( 'url', $item ) || ! is_string( $item['url'] ) ) {
+				return null;
+			}
+			$url = trim( $item['url'] );
+			if ( '' === $url ) {
+				// "No LCP image" only makes sense as the whole answer.
+				if ( 1 === count( $items ) ) {
+					return array();
+				}
+				return null;
+			}
+			// Absolute, protocol-relative or root-relative. A bare `hero.png`
+			// passed esc_url() as `http://hero.png`: a high-priority fetch to
+			// a host that does not exist.
+			if ( '' === esc_url( $url ) || ! preg_match( '#^(?:https?:)?/#i', $url ) ) {
+				return null;
+			}
+			// A media rule this cannot use rejects the answer. Dropping only
+			// the rule kept the preload and sent it to every device.
+			$media = $item['media'] ?? '';
+			if ( ! is_string( $media ) || strlen( $media ) > 200 || preg_match( '#[<>"]#', $media ) ) {
+				return null;
+			}
+			$text  = static fn ( $v, int $max ): string => ( is_string( $v ) && strlen( $v ) <= $max ) ? trim( $v ) : '';
+			$out[] = array(
+				'url'    => $url,
+				'srcset' => $text( $item['srcset'] ?? '', 4096 ),
+				'sizes'  => $text( $item['sizes'] ?? '', 512 ),
+				'kind'   => 'background' === ( $item['kind'] ?? '' ) ? 'background' : 'img',
+				'media'  => trim( $media ),
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Preload what an extension supplied, and promote the <img> it names.
+	 *
+	 * The answer is measured, not guessed, so every other <img> gives up a
+	 * stray `fetchpriority="high"`: two High images compete with the one
+	 * that paints first.
+	 *
+	 * @param string                                                                           $html       Page HTML.
+	 * @param array<int,array{url:string,srcset:string,sizes:string,kind:string,media:string}> $candidates From supplied_candidates().
+	 * @return array{0:string,1:string} [rewritten html, preload markup]
+	 */
+	private static function build_supplied_preload( string $html, array $candidates ): array {
+		// Scoped when any preload carries a media rule, even a single one:
+		// Pro sends one desktop-only candidate when the phone's LCP is text,
+		// and promoting that <img> made phones download a hero they hide.
+		$scoped = '' !== implode( '', array_column( $candidates, 'media' ) );
+		$skip   = array_merge( self::chrome_container_ranges( $html ), Lazy_Loader::hidden_ranges( $html ) );
+
+		// Which <img> index each candidate promotes: the first one, outside
+		// site chrome and hidden markup, whose src or one of whose srcset
+		// URLs IS the candidate. A substring match picked an earlier image
+		// whose srcset merely contained the name.
+		// Two candidates may claim the same <img>: a phone and a desktop size
+		// of one responsive image. The second one is still an <img>, not a
+		// background.
+		$promote = array();
+		$matched = array();
+		if ( preg_match_all( '#<img\b[^>]*>#i', $html, $imgs, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $candidates as $c => $candidate ) {
+				foreach ( $imgs[0] as $index => $match ) {
+					[ $tag, $offset ] = $match;
+					if ( self::offset_in_ranges( $offset, $skip ) || Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
+						continue;
+					}
+					[ $src, $img_srcset, $img_sizes ] = self::effective_image_src( $tag );
+					if ( ! self::same_url( $src, $candidate['url'] ) && ! self::srcset_has( $img_srcset, $candidate['url'] ) ) {
+						continue;
+					}
+					$promote[ $index ] = true;
+					$matched[ $c ]     = true;
+					// The <img> may already be served as a format sibling the
+					// answer did not name (`hero.png.webp` for `hero.png`: an
+					// image plugin swapped it for this browser). Preload what
+					// the <img> will fetch, or the page downloads both.
+					if ( self::format_original( $src ) !== $src ) {
+						$candidates[ $c ]['url']    = html_entity_decode( $src, ENT_QUOTES );
+						$candidates[ $c ]['srcset'] = html_entity_decode( $img_srcset, ENT_QUOTES );
+						$candidates[ $c ]['sizes']  = $img_sizes;
+					}
+					// An answer that names only the URL still gets the <img>'s
+					// responsive set: without it the preload fetches the full
+					// file and the browser then downloads the size it shows.
+					if ( '' === $candidates[ $c ]['srcset'] && '' !== $img_srcset ) {
+						$candidates[ $c ]['srcset'] = $img_srcset;
+						$candidates[ $c ]['sizes']  = $img_sizes;
+					}
+					break;
+				}
+			}
+		}
+
+		$seen = -1;
+		$html = (string) preg_replace_callback(
+			'#<img\b[^>]*>#i',
+			static function ( array $m ) use ( &$seen, $promote, $scoped ) {
+				++$seen;
+				if ( isset( $promote[ $seen ] ) ) {
+					// Scoped to a device: make the <img> lazy, so the device
+					// that hides it never downloads it. Keeping whatever
+					// `loading` it had was not enough: Lazy Load's default
+					// "load the first image straight away" had already made
+					// it eager. The device that shows it gets it from its own
+					// preload, which already fetched it early.
+					return $scoped ? self::force_lazy( self::set_fetchpriority( $m[0] ) ) : self::promote_lcp_img( $m[0] );
+				}
+				if ( 'high' === strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+					return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
+				}
+				return $m[0];
+			},
+			$html
+		);
+
+		$preload = '';
+		foreach ( $candidates as $c => $candidate ) {
+			// Idempotency, as for the automatic pick: a second pass over an
+			// already-processed body must not emit the link twice. Compared
+			// with `&amp;` decoded, the way the markup spells a query.
+			$already = false;
+			if ( preg_match_all( '#<link\b[^>]*rel=["\']preload["\'][^>]*>#i', $html, $links ) ) {
+				foreach ( $links[0] as $link ) {
+					if ( false !== strpos( html_entity_decode( $link, ENT_QUOTES ), $candidate['url'] ) ) {
+						$already = true;
+						break;
+					}
+				}
+			}
+			if ( $already ) {
+				continue;
+			}
+			// An image the page shows through no <img> is a background,
+			// whatever the answer said: nothing here can wrap it in <picture>.
+			$kind     = isset( $matched[ $c ] ) ? $candidate['kind'] : 'background';
+			$preload .= self::preload_link( $candidate['url'], $candidate['srcset'], $candidate['sizes'], $kind, $candidate['media'] );
+		}
+		return array( $html, $preload );
+	}
+
+	/** Set `loading="lazy"` on an <img>, replacing any other loading value. */
+	private static function force_lazy( string $tag ): string {
+		$tag = (string) preg_replace( '#\s*(?<![-\w])loading\s*=\s*(["\']?)[a-z]*\1#i', '', $tag, 1 );
+		return (string) preg_replace( '#<img\b#i', '<img loading="lazy"', $tag, 1 );
+	}
+
+	/** Two URLs name the same image: `&amp;` decoded, and a root-relative one compared by path. */
+	private static function same_url( string $a, string $b ): bool {
+		$a = html_entity_decode( $a, ENT_QUOTES );
+		$b = html_entity_decode( $b, ENT_QUOTES );
+		if ( '' === $a || '' === $b ) {
+			return false;
+		}
+		if ( $a === $b ) {
+			return true;
+		}
+		// A format sibling is the same image: `hero.png.webp` is `hero.png`.
+		$a = self::format_original( $a );
+		$b = self::format_original( $b );
+		if ( $a === $b ) {
+			return true;
+		}
+		$rel = static function ( string $u ): string {
+			if ( 0 === strpos( $u, '/' ) && 0 !== strpos( $u, '//' ) ) {
+				return $u;
+			}
+			$path  = (string) wp_parse_url( $u, PHP_URL_PATH );
+			$query = (string) wp_parse_url( $u, PHP_URL_QUERY );
+			return $path . ( '' !== $query ? '?' . $query : '' );
+		};
+		return ( 0 === strpos( $a, '/' ) || 0 === strpos( $b, '/' ) ) && $rel( $a ) === $rel( $b );
+	}
+
+	/**
+	 * The original of a modern-format sibling that appends its extension,
+	 * `hero.png.webp` → `hero.png`, the naming ShortPixel, Imagify and other
+	 * image plugins use. Any other URL comes back unchanged.
+	 */
+	private static function format_original( string $url ): string {
+		return (string) preg_replace( '#(\.(?:jpe?g|png))\.(?:webp|avif)(?=$|\?)#i', '$1', $url );
+	}
+
+	/** Whether one of the URLs in a srcset IS $url (not merely contains it). */
+	private static function srcset_has( string $srcset, string $url ): bool {
+		foreach ( explode( ',', $srcset ) as $entry ) {
+			$candidate = strtok( trim( $entry ), " \t\n" );
+			if ( false !== $candidate && self::same_url( $candidate, $url ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Promote an <img> to the LCP element: force fetchpriority="high" and
 	 * strip any loading="lazy" so the browser loads it immediately. Both are
@@ -1288,6 +1559,14 @@ final class Resource_Hints_Processor {
 	 * render-blocking CSS. Falls back to after <head>, then prepend.
 	 */
 	private static function inject_into_head( string $html, string $hints ): string {
+		// Only a supplied candidate's preload carries `media`. Every other
+		// page keeps exactly the placement it had before the seam existed.
+		if ( false !== strpos( $hints, ' media="' ) ) {
+			$pos = self::after_viewport_offset( $html );
+			if ( null !== $pos ) {
+				return substr( $html, 0, $pos ) . "\n" . $hints . substr( $html, $pos );
+			}
+		}
 		// Before the first <link rel="stylesheet"> if there is one.
 		if ( preg_match( '#<link\b[^>]*rel=["\']stylesheet["\'][^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
 			$pos = $m[0][1];
@@ -1300,5 +1579,146 @@ final class Resource_Hints_Processor {
 		}
 		// No head at all — prepend (degenerate documents).
 		return $hints . $html;
+	}
+
+	/**
+	 * Where a media-scoped preload goes: before the first stylesheet, as
+	 * usual, but never ahead of <meta name="viewport">. Null when the head
+	 * could not be read, and the usual placement is used instead.
+	 *
+	 * A preload's `media` is evaluated when the parser reaches the link, and
+	 * until the viewport meta is parsed a phone lays out at its default
+	 * desktop width. A `(min-width: 768px)` preload placed earlier matched on
+	 * phones too and fetched the desktop hero at high priority.
+	 *
+	 * Reads only the head, tag by tag, so a viewport meta or a stylesheet
+	 * written inside a script string, a comment or an attribute value is
+	 * never taken for a real one. That put the hints inside a script, which
+	 * then threw a SyntaxError. A pattern over the whole page did the same
+	 * job but could give up on a large inline block, and then searched the
+	 * raw markup.
+	 *
+	 * @return int|null Byte offset in $html.
+	 */
+	private static function after_viewport_offset( string $html ) {
+		$len        = strlen( $html );
+		$i          = 0;
+		$head_start = null;
+		$stylesheet = null;
+		$viewport   = null;
+		while ( $i < $len ) {
+			$lt = strpos( $html, '<', $i );
+			if ( false === $lt ) {
+				break;
+			}
+			if ( 0 === substr_compare( $html, '<!--', $lt, 4 ) ) {
+				// `<!-->` and `<!--->` close at once, so look from the second dash.
+				$close = strpos( $html, '-->', $lt + 2 );
+				if ( false === $close ) {
+					return null;
+				}
+				$i = $close + 3;
+				continue;
+			}
+			if ( ! preg_match( '#\G<(/?)([a-z][a-z0-9-]*)#i', $html, $t, 0, $lt ) ) {
+				$i = $lt + 1;
+				continue;
+			}
+			$gt = self::tag_end( $html, $lt + strlen( $t[0] ) );
+			if ( null === $gt ) {
+				return null;
+			}
+			$name = strtolower( $t[2] );
+			$tag  = substr( $html, $lt, $gt + 1 - $lt );
+			$i    = $gt + 1;
+
+			if ( '/' === $t[1] ) {
+				if ( 'head' === $name ) {
+					break;
+				}
+				continue;
+			}
+			if ( 'head' === $name ) {
+				$head_start = $i;
+				continue;
+			}
+			if ( 'body' === $name ) {
+				break;
+			}
+			if ( in_array( $name, array( 'script', 'style', 'noscript', 'template', 'title', 'textarea' ), true ) ) {
+				$close = stripos( $html, '</' . $name, $i );
+				if ( false === $close ) {
+					return null;
+				}
+				$i = $close;
+				continue;
+			}
+			if ( null === $head_start ) {
+				continue;
+			}
+			if ( 'link' !== $name && 'meta' !== $name ) {
+				continue;
+			}
+			$attrs = self::tag_attrs( $tag );
+			if ( null === $stylesheet && 'link' === $name && 'stylesheet' === strtolower( $attrs['rel'] ?? '' ) ) {
+				if ( null !== $viewport ) {
+					return $lt;
+				}
+				$stylesheet = $lt;
+				continue;
+			}
+			if ( null === $viewport && 'meta' === $name && 'viewport' === strtolower( $attrs['name'] ?? '' ) ) {
+				if ( null !== $stylesheet ) {
+					return $i;
+				}
+				$viewport = $i;
+			}
+		}
+		if ( null !== $stylesheet ) {
+			return $stylesheet;
+		}
+		return $viewport ?? $head_start;
+	}
+
+	/**
+	 * A tag's attributes, read in order so a quoted value is consumed whole:
+	 * `content="name=viewport"` is a content attribute, not a name.
+	 *
+	 * @return array<string,string> Lowercase name => trimmed value; the first of a repeated name wins.
+	 */
+	private static function tag_attrs( string $tag ): array {
+		$out = array();
+		preg_match_all( '#\s([^\s=/>"\']+)(?:\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+))?#', $tag, $m, PREG_SET_ORDER );
+		foreach ( $m as $a ) {
+			$key = strtolower( $a[1] );
+			if ( ! isset( $out[ $key ] ) ) {
+				$out[ $key ] = trim( trim( $a[2] ?? '', '"\'' ) );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Offset of the `>` that ends a tag whose attributes start at $from,
+	 * stepping over quoted values so `content="a>b"` does not end it early.
+	 *
+	 * @return int|null
+	 */
+	private static function tag_end( string $html, int $from ) {
+		$len   = strlen( $html );
+		$quote = '';
+		for ( $j = $from; $j < $len; $j++ ) {
+			$c = $html[ $j ];
+			if ( '' !== $quote ) {
+				if ( $c === $quote ) {
+					$quote = '';
+				}
+			} elseif ( '"' === $c || "'" === $c ) {
+				$quote = $c;
+			} elseif ( '>' === $c ) {
+				return $j;
+			}
+		}
+		return null;
 	}
 }

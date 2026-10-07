@@ -9,9 +9,11 @@
  * using a file, so nobody is served a stale page), but the expired bodies sit
  * on disk forever and the admin's Cache Size figure only ever climbs.
  *
- * Minified assets are worse: the key is md5(source path | source mtime)
- * (Minifier::rewrite_asset), so every plugin or theme update mints a new
- * min/ file and orphans the old one permanently.
+ * Minified assets are worse: they are named by content (Minifier::
+ * rewrite_asset), so every plugin or theme update mints a new min/ file and
+ * orphans the old one permanently. The per-source manifests that map a
+ * source to its current name (min/manifests/<blog>/*.json) orphan the same
+ * way when a source goes away or its output is collected.
  *
  * This adds the missing time-driven collector — a daily `xspeed_gc` cron that
  * sweeps in three phases:
@@ -19,6 +21,7 @@
  *   flat    wp-content/cache/xspeed/<md5>.html         per-entry TTL
  *   static  wp-content/cache/xspeed-static/**\/index.html   global TTL
  *   min     wp-content/cache/xspeed/min/**\/*.css|js   long max-age
+ *           plus min/manifests/**\/*.json               long max-age, orphans only
  *
  * Deliberately NOT swept: `rest/*.json`. A REST entry's TTL is resolved per
  * request through the `xspeed_rest_cache_ttl` filter and is never written to
@@ -234,6 +237,17 @@ final class Cache_GC {
 				continue;
 			}
 
+			// A manifest is never linked from a page, so the reference index
+			// has nothing to say about it. It goes only when it can no longer
+			// be used: its source is gone, or the output it names is.
+			if ( 'min' === $phase && '.json' === substr( $path, -5 ) ) {
+				if ( self::manifest_is_orphan( $path ) ) {
+					wp_delete_file( $path );
+					++$removed;
+				}
+				continue;
+			}
+
 			// An asset a live cached page still links to is NOT collectable,
 			// however old it is. Age is a hint about orphanhood; this is the
 			// fact. Without it GC deleted files every cached page pointed at
@@ -310,7 +324,42 @@ final class Cache_GC {
 			case 'static':
 				return 'index.html' === $name;
 			case 'min':
+				if ( '.json' === substr( $name, -5 ) ) {
+					$manifests = self::phase_root( 'min' ) . '/' . Asset_Manifest::SUBDIR . '/';
+					return 0 === strpos( $path, $manifests );
+				}
 				return '.css' === substr( $name, -4 ) || '.js' === substr( $name, -3 );
+		}
+		return false;
+	}
+
+	/**
+	 * Is this manifest useless now?
+	 *
+	 * True when its source no longer exists, or when it names a minified
+	 * output that is no longer on disk. The second is safe to drop even while
+	 * the source lives: the next render rebuilds both. A combine-part
+	 * manifest names no output, so only its source decides. An unreadable
+	 * manifest is useless by definition.
+	 *
+	 * @param string $path Absolute manifest path.
+	 */
+	private static function manifest_is_orphan( string $path ): bool {
+		$manifest = Asset_Manifest::read( $path );
+		if ( null === $manifest || empty( $manifest['src'] ) || ! is_string( $manifest['src'] ) ) {
+			return true;
+		}
+		if ( ! file_exists( $manifest['src'] ) ) {
+			return true;
+		}
+		$root = self::phase_root( 'min' );
+		$key  = isset( $manifest['key'] ) && is_string( $manifest['key'] ) ? $manifest['key'] : '';
+		if ( '' === $key || null === $root ) {
+			return true;
+		}
+		$kind = isset( $manifest['kind'] ) && is_string( $manifest['kind'] ) ? $manifest['kind'] : '';
+		if ( 'css' === $kind || 'js' === $kind ) {
+			return ! file_exists( $root . '/' . $key . '.' . $kind );
 		}
 		return false;
 	}

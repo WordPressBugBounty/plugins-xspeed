@@ -145,7 +145,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'list_modules' ),
 			),
 			'get_site_info'    => array(
-				'description' => 'Get facts about this site and install: whether xSpeed Pro is active and licensed, plugin/WordPress/PHP versions, and the detected web server. Use this rather than inferring the tier from the module list.',
+				'description' => 'Get facts about this site and install: whether xSpeed Pro is active and licensed, plugin/WordPress/PHP versions, and the detected web server. Use this rather than inferring the tier from the module list. `addons` maps each separately licensed add-on to `{licensed, status}`. `licensed` says whether the add-on\'s licence is active. `status` is the licence status the site has stored (`valid`, `expired`, `inactive`, and so on), or null when no key is stored. Both are read from stored state, never from the licence server. `addons` is `{}` when no add-on reports. A licensed add-on may still have nothing set up.',
 				'inputSchema' => self::object_schema( array(), array() ),
 				'write'       => false,
 				'handler'     => array( self::class, 'get_site_info' ),
@@ -505,9 +505,17 @@ final class Mcp_Tools {
 				'description' => 'Enable or disable the object cache drop-in. Verify the backend with test_object_cache first — enabling against an unreachable server slows every request.',
 				'inputSchema' => self::object_schema(
 					array(
-						'enabled' => array(
+						'enabled'  => array(
 							'type'        => 'boolean',
 							'description' => 'true installs the drop-in, false removes it.',
+						),
+						'takeover' => array(
+							'type'        => 'boolean',
+							'description' => 'With enabled=true: switch from the plugin that owns object-cache.php. Without it, enabling refuses while another plugin owns the file.',
+						),
+						'restore'  => array(
+							'type'        => 'boolean',
+							'description' => 'With enabled=false: put back the plugin xSpeed switched from.',
 						),
 					),
 					array( 'enabled' )
@@ -575,7 +583,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'list_commands' ),
 			),
 			'run_command'      => array(
-				'description' => 'Run any xSpeed command — the full CLI surface (~50 commands across every module: cache, cloudflare, database, critical/unused CSS, pagespeed, images, migration, preloader, object cache, analytics, RUM, smart-* and more). Call list_commands first to discover names + options. Examples: run_command("cloudflare purge"), run_command("psi", {}, {"url":"https://site.com","strategy":"mobile"}). Permanently destructive commands ("database clean") additionally require a confirm_token from scan_database and are refused without one — this gateway is not a way around that confirmation.',
+				'description' => 'Run any xSpeed command — the full CLI surface (~50 commands across every module: cache, cloudflare, database, critical/unused CSS, pagespeed, images, migration, preloader, object cache, analytics, RUM, smart-* and more). Call list_commands first to discover names + options. Examples: run_command("cloudflare purge"), run_command("psi", {}, {"url":"https://site.com","strategy":"mobile"}). Permanently destructive commands additionally require a confirm_token and are refused without one — this gateway is not a way around that confirmation. "database clean" takes its token from scan_database, which previews exactly what would be deleted; every other destructive command is refused once and the refusal carries a token, so repeating the same call with it confirms the action.',
 				'inputSchema' => self::object_schema(
 					array(
 						'command' => array(
@@ -593,7 +601,7 @@ final class Mcp_Tools {
 						),
 						'confirm_token' => array(
 							'type'        => 'string',
-							'description' => 'Required ONLY for permanently destructive commands such as "database clean". Obtain it from scan_database, which previews exactly what would be deleted. Without it those commands are refused.',
+							'description' => 'Required ONLY for permanently destructive commands. For "database clean" obtain it from scan_database, which previews exactly what would be deleted; for any other destructive command, make the call once without this argument and the refusal returns the token to repeat it with. Without it those commands are refused.',
 						),
 					),
 					array( 'command' )
@@ -1069,13 +1077,29 @@ final class Mcp_Tools {
 		 * same command. (#184)
 		 */
 		$destructive = self::destructive_action( $name, $args );
-		if ( '' !== $destructive ) {
-			$confirmed = self::verify_clean_token( $args );
+		if ( ! empty( $destructive ) ) {
+			$confirmed = self::verify_confirm_token( $args, $name, $destructive );
 			if ( is_wp_error( $confirmed ) ) {
-				Mcp_Activity_Log::record( $name, $args, false, $confirmed->get_error_message(), 'write', self::$channel );
+				// The refusal message can carry a freshly minted token (see
+				// confirm_required()); the log gets the redacted twin so a
+				// live token is never persisted in wp_options twice over.
+				Mcp_Activity_Log::record( $name, $args, false, self::loggable_error( $confirmed ), 'write', self::$channel );
 				return $confirmed;
 			}
 		}
+
+		/*
+		 * The token authorised the call; it is not an argument any handler
+		 * takes. A generated command tool forwards every property it does not
+		 * recognise as a positional straight to Cli_Bridge::run() as a CLI
+		 * option, so leaving it in place would turn a correctly confirmed
+		 * `xspeed_cfe` call into `--confirm_token=…` and an unknown-option
+		 * failure: the gate satisfied and the action still unreachable, which
+		 * is the same broken feature by a later route. Dropped for every tool,
+		 * not just the gated ones, and dropped before the audit record so a
+		 * live token is never written into the activity log.
+		 */
+		unset( $args['confirm_token'] );
 
 		self::$dispatching = true;
 		try {
@@ -1245,7 +1269,88 @@ final class Mcp_Tools {
 			'php_version'    => PHP_VERSION,
 			'server'         => Server::type(),
 			'multisite'      => is_multisite(),
+			'addons'         => self::addon_licences(),
 		);
+	}
+
+	/** Most add-on entries `get_site_info` reports. */
+	private const MAX_ADDONS = 20;
+
+	/** Longest licence status kept. The library's statuses are short slugs. */
+	private const MAX_ADDON_STATUS_LENGTH = 40;
+
+	/**
+	 * The licence state of each separately licensed add-on, keyed by slug.
+	 *
+	 * Free cannot know which add-ons exist, so it asks. An add-on answers from
+	 * the licence state it has stored. Callers poll this tool, and a
+	 * licence-server round trip here would make every call wait on it.
+	 *
+	 * Always an object, `{}` when nothing answers. An empty PHP array encodes
+	 * as `[]`, and a consumer reading `addons.some_slug` should not have to
+	 * handle a list as well.
+	 *
+	 * @return object Slug => `{licensed: bool, status: ?string}`.
+	 */
+	private static function addon_licences(): object {
+		/**
+		 * Filter: xspeed_site_info_addons
+		 *
+		 * Licence state for add-ons sold separately, reported by the
+		 * `get_site_info` MCP tool. Seeded empty; add your own entry and
+		 * return the array:
+		 *
+		 *     $addons['my_addon'] = array( 'licensed' => true, 'status' => 'valid' );
+		 *
+		 * `licensed` is whether the add-on may run. `status` is the licence
+		 * status as stored, or null when no key is stored. Read stored state
+		 * only, never the licence server. Keys go through sanitize_key(),
+		 * statuses are trimmed to short slugs, and any other field is dropped.
+		 *
+		 * @param array $addons Entries gathered so far, keyed by slug.
+		 */
+		try {
+			$raw = apply_filters( 'xspeed_site_info_addons', array() );
+		} catch ( \Throwable $e ) {
+			// A broken add-on costs the add-on entries, not the whole tool.
+			// The other facts are still true and the caller still needs them.
+			// Pop our hook off the stack the throw left it on, for the reason
+			// Pro_Audit::contributed() gives.
+			if ( isset( $GLOBALS['wp_current_filter'] )
+				&& is_array( $GLOBALS['wp_current_filter'] )
+				&& end( $GLOBALS['wp_current_filter'] ) === 'xspeed_site_info_addons' ) {
+				array_pop( $GLOBALS['wp_current_filter'] );
+			}
+			return (object) array();
+		}
+
+		$out = array();
+		foreach ( is_array( $raw ) ? $raw : array() as $slug => $entry ) {
+			if ( count( $out ) >= self::MAX_ADDONS ) {
+				break;
+			}
+			if ( ! is_string( $slug ) || ! is_array( $entry ) ) {
+				continue;
+			}
+			$slug = sanitize_key( $slug );
+			if ( '' === $slug || isset( $out[ $slug ] ) ) {
+				continue;
+			}
+
+			$status = $entry['status'] ?? null;
+			$status = is_string( $status )
+				? substr( sanitize_key( $status ), 0, self::MAX_ADDON_STATUS_LENGTH )
+				: '';
+
+			$out[ $slug ] = array(
+				'licensed' => (bool) ( $entry['licensed'] ?? false ),
+				// An empty status says nothing a null does not, and two ways
+				// of saying "none" is one more case for every consumer.
+				'status'   => '' === $status ? null : $status,
+			);
+		}
+
+		return (object) $out;
 	}
 
 	/**
@@ -1794,7 +1899,7 @@ final class Mcp_Tools {
 		 * window where a scan is shown to a human, something changes, and the
 		 * delete removes more than was agreed to. (#184)
 		 */
-		$result['confirm_token'] = self::mint_clean_token();
+		$result['confirm_token'] = self::mint_confirm_token( self::clean_fingerprint() );
 		$result['confirm_note']  = __( 'This preview deletes nothing. To delete what is listed, call clean_database with this confirm_token. It expires in 5 minutes and stops working if the database changes.', 'xspeed' );
 
 		return $result;
@@ -1841,74 +1946,213 @@ final class Mcp_Tools {
 	}
 
 	/**
-	 * Name the destructive action a call would run, or '' if it is harmless.
+	 * Name the destructive action a call would run, or an empty array if it
+	 * is harmless.
 	 *
 	 * @param string $name Tool name.
 	 * @param array  $args Decoded tool arguments.
-	 * @return string Canonical "<command> <action>", or '' when not destructive.
+	 * @return array{name?:string,action?:string} The classified pair, or array() when not destructive.
 	 */
-	private static function destructive_action( string $name, array $args ): string {
+	private static function destructive_action( string $name, array $args ): array {
 		// The gateway carries the real command in its arguments; a typed tool
 		// is identified by the command it is mapped to.
 		if ( 'run_command' === $name ) {
 			$command = isset( $args['command'] ) ? (string) $args['command'] : '';
 			if ( '' === $command ) {
-				return '';
+				return array();
 			}
 			$positional = isset( $args['args'] ) && is_array( $args['args'] ) ? $args['args'] : array();
-			$resolved   = Cli_Bridge::classify( $command, $positional );
-		} elseif ( 'clean_database' === $name ) {
-			$resolved = Cli_Bridge::classify( 'db', array( 'clean' ) );
-		} else {
-			return '';
+			return self::destructive_hit( Cli_Bridge::classify( $command, $positional ) );
 		}
 
-		if ( '' === $resolved['name'] ) {
+		if ( 'clean_database' === $name ) {
+			return self::destructive_hit( Cli_Bridge::classify( 'db', array( 'clean' ) ) );
+		}
+
+		/*
+		 * The third door: the tool generated for every registered CLI command.
+		 *
+		 * run_command and clean_database were the two names this guard knew,
+		 * so a command whose destructive action the filter names was still
+		 * reachable without a confirm_token by calling its own generated tool
+		 * — `xspeed_cfe` with action `remove` ran what
+		 * run_command("cfe", ["remove"]) would have refused. The generated
+		 * tool takes its action as the `action` property, so resolve the name
+		 * back to a command and classify that action exactly as the gateway
+		 * classifies its own.
+		 */
+		$action = isset( $args['action'] ) ? (string) $args['action'] : '';
+		if ( '' === $action ) {
+			return array();
+		}
+
+		$candidates = self::cli_commands_by_tool_name()[ $name ] ?? array();
+		if ( empty( $candidates ) ) {
+			/*
+			 * The map has no entry for this tool name. Two ways to get here
+			 * and neither may answer "harmless":
+			 *
+			 *   - the registry is unavailable (an unbooted module, a call
+			 *     arriving before modules register, a bare unit-test context);
+			 *   - the registry is POPULATED but does not contain the command
+			 *     this tool name came from — Cli_Bridge::commands() memoises
+			 *     in a function-local static with no reset, so a module that
+			 *     registers its commands after the first call is invisible to
+			 *     the map while its generated tool is still dispatchable.
+			 *
+			 * This condition used to also require `array() === commands()`,
+			 * which made the second case fall through with no candidates at
+			 * all and return "not destructive" — the gate opening precisely
+			 * where it was least able to see. Fall back on the naive inverse
+			 * of cli_tool_name() in both cases. It is the mapping that can be
+			 * wrong (underscores in a command name), but wrong here means
+			 * asking for a confirm_token that was not strictly needed, never
+			 * skipping one that was.
+			 */
+			$candidates = array( str_replace( '_', ' ', $name ) );
+		}
+
+		foreach ( $candidates as $command ) {
+			$hit = self::destructive_hit( Cli_Bridge::classify( $command, array( $action ) ) );
+			if ( ! empty( $hit ) ) {
+				return $hit;
+			}
+		}
+
+		return array();
+	}
+
+	/**
+	 * Render a classified pair as the canonical "<command> <action>".
+	 *
+	 * @param array{name?:string,action?:string} $action Pair from destructive_action().
+	 * @return string Canonical name, or '' for the empty (harmless) pair.
+	 */
+	private static function canonical_action( array $action ): string {
+		if ( empty( $action['name'] ) ) {
 			return '';
+		}
+		return trim( $action['name'] . ' ' . ( $action['action'] ?? '' ) );
+	}
+
+	/**
+	 * Is a classified (command, action) pair one the filter calls destructive?
+	 *
+	 * @param array{name:string,action:string} $resolved Output of Cli_Bridge::classify().
+	 * @return array{name?:string,action?:string} The pair, or array() when not destructive.
+	 */
+	private static function destructive_hit( array $resolved ): array {
+		if ( '' === $resolved['name'] ) {
+			return array();
 		}
 
 		$destructive = self::destructive_actions();
 		if ( ! isset( $destructive[ $resolved['name'] ] ) ) {
-			return '';
+			return array();
 		}
 		if ( ! in_array( $resolved['action'], (array) $destructive[ $resolved['name'] ], true ) ) {
-			return '';
+			return array();
 		}
 
-		return trim( $resolved['name'] . ' ' . $resolved['action'] );
+		return array(
+			'name'   => $resolved['name'],
+			'action' => $resolved['action'],
+		);
 	}
 
 	/**
-	 * Verify (and consume) the confirm_token minted by scan_database.
+	 * Which CLI command(s) a generated tool name could have come from.
 	 *
-	 * @param array $args Decoded tool arguments.
+	 * cli_tool_name() replaces spaces with underscores, which is not
+	 * injective: a command named "xspeed foo bar" and one named
+	 * "xspeed foo_bar" produce the same tool name, and splitting the tool
+	 * name back on underscores cannot tell them apart. So the map is built
+	 * forwards — cli_tool_name() applied to every registered command, the
+	 * same function over the same input set that named the tools in the
+	 * first place. No Free command carries an underscore today; a Pro or
+	 * third-party module registering one must not quietly disarm this guard.
+	 *
+	 * A tool name claimed by two commands keeps both, and the caller treats
+	 * the call as destructive if any of them is — the fail-closed direction,
+	 * the same reasoning Cli_Bridge::classify() applies when the registry
+	 * cannot resolve an input at all.
+	 *
+	 * @return array<string,string[]> Tool name => the commands that produce it.
+	 */
+	private static function cli_commands_by_tool_name(): array {
+		$map = array();
+		foreach ( array_keys( Cli_Bridge::commands() ) as $command ) {
+			$tool_name = self::cli_tool_name( (string) $command );
+			if ( '' === $tool_name ) {
+				continue;
+			}
+			$map[ $tool_name ][] = (string) $command;
+		}
+		return $map;
+	}
+
+	/**
+	 * Marker: this build gates destructive command actions on a confirm_token
+	 * whichever tool they are reached through, generated tools included.
+	 *
+	 * Add-ons that register a destructive CLI action need to know whether the
+	 * host plugin will demand the second factor for them. Where this method
+	 * is absent they have to refuse the action themselves when it arrives
+	 * from anywhere but the dashboard or real wp-cli; where it answers true
+	 * they can let the confirmation gate do the work. Keep it — an add-on
+	 * keys its refusal on the absence, so removing it is a behaviour change
+	 * in another plugin.
+	 */
+	public static function supports_command_confirmation(): bool {
+		return true;
+	}
+
+	/**
+	 * The one destructive action whose token comes from a preview tool.
+	 *
+	 * `scan_database` is the only surface that shows what a delete would
+	 * remove, so its token is sealed to that preview and nothing else may
+	 * mint one — including `xspeed_db` with `action: clean`, which is just
+	 * another door onto the same rows.
+	 */
+	private const PREVIEW_CONFIRMED_ACTION = 'xspeed db clean';
+
+	/**
+	 * Verify (and consume) the confirm_token for a destructive action.
+	 *
+	 * @param array  $args   Decoded tool arguments.
+	 * @param string $tool   Tool name the call arrived on.
+	 * @param array  $action Classified pair from destructive_action().
 	 * @return true|\WP_Error
 	 */
-	private static function verify_clean_token( array $args ) {
+	private static function verify_confirm_token( array $args, string $tool, array $action ) {
 		$token = isset( $args['confirm_token'] ) ? (string) $args['confirm_token'] : '';
 		if ( '' === $token ) {
-			return new \WP_Error(
-				'xspeed_mcp_confirm_required',
-				__( 'This permanently deletes content and cannot be undone. Call scan_database first to see exactly what would be removed, then pass the confirm_token it returns.', 'xspeed' ),
-				array( 'status' => 400 )
-			);
+			return self::confirm_required( $tool, $action );
 		}
 
-		// Single use: consumed whether or not the delete goes ahead, so one
-		// approval can never authorise a second, different deletion.
-		$sealed = self::consume_clean_token( $token );
+		// Computed only now: for the database clean the fingerprint is a full
+		// bloat scan, and a call refused for having no token at all should not
+		// pay for one.
+		$expected = self::confirm_fingerprint( $action );
+
+		// Single use: consumed whether or not the action goes ahead, so one
+		// approval can never authorise a second, different call.
+		$sealed = self::consume_confirm_token( $token );
 		if ( '' === $sealed ) {
 			return new \WP_Error(
 				'xspeed_mcp_confirm_invalid',
-				__( 'That confirm_token is unknown or has expired (they last 5 minutes). Run scan_database again and use the fresh token.', 'xspeed' ),
+				__( 'That confirm_token is unknown or has expired (they last 5 minutes). Ask for a fresh one by making the same call without a confirm_token.', 'xspeed' ),
 				array( 'status' => 400 )
 			);
 		}
 
-		if ( ! hash_equals( $sealed, self::clean_fingerprint() ) ) {
+		if ( ! hash_equals( $sealed, $expected ) ) {
 			return new \WP_Error(
 				'xspeed_mcp_confirm_stale',
-				__( 'The database changed since that scan, so the preview no longer describes what would be deleted. Run scan_database again and confirm against the new result.', 'xspeed' ),
+				self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action )
+					? __( 'The database changed since that scan, so the preview no longer describes what would be deleted. Run scan_database again and confirm against the new result.', 'xspeed' )
+					: __( 'That confirm_token was issued for a different action, so it does not authorise this one. Repeat this exact call without a confirm_token to get one that does.', 'xspeed' ),
 				array( 'status' => 409 )
 			);
 		}
@@ -1916,16 +2160,158 @@ final class Mcp_Tools {
 		return true;
 	}
 
-	/** Fingerprint of the scope, so a token cannot outlive what it described. */
+	/**
+	 * Refuse a destructive call that arrived without a confirm_token.
+	 *
+	 * Two shapes, because the two kinds of destructive action differ in where
+	 * a token can honestly come from.
+	 *
+	 * `xspeed db clean` has a preview — `scan_database` — and the token is
+	 * sealed to what that preview showed. Refuse and point at it; minting one
+	 * here would authorise a delete nobody had been shown.
+	 *
+	 * Every other destructive action has no preview, and until now borrowed
+	 * the database scope: the caller was told to "call scan_database first"
+	 * for a token sealed to a fingerprint of row counts, which
+	 * verify_confirm_token() would then reject as not matching. On an install
+	 * where `xspeed db` is not registered there was no minting path at all,
+	 * so the gate could not be passed by any sequence of calls. A guard that
+	 * cannot be satisfied is a broken feature, and the pressure it creates is
+	 * to delete the guard. (#184)
+	 *
+	 * So the refusal itself mints the token, sealed to this action. That is
+	 * not authentication — the connection is already authenticated and holds
+	 * write scope — it is a deliberate second round trip: the caller has to
+	 * read a message naming what it is about to destroy and decide to send
+	 * the call again. The token is single use, expires in five minutes, and
+	 * confirms nothing but the action it names.
+	 *
+	 * The token travels in the MESSAGE, not just the error data:
+	 * Mcp_Server::call_tool() renders a WP_Error as its message text alone
+	 * and drops the data, so a token that lived only in the data would never
+	 * reach the caller and the gate would stay unsatisfiable over MCP.
+	 *
+	 * @param string $tool   Tool name the call arrived on.
+	 * @param array  $action Classified pair from destructive_action().
+	 * @return \WP_Error
+	 */
+	private static function confirm_required( string $tool, array $action ): \WP_Error {
+		$canonical = self::canonical_action( $action );
+
+		if ( self::PREVIEW_CONFIRMED_ACTION === $canonical ) {
+			return new \WP_Error(
+				'xspeed_mcp_confirm_required',
+				__( 'This permanently deletes content and cannot be undone. Call scan_database first to see exactly what would be removed, then pass the confirm_token it returns.', 'xspeed' ),
+				array(
+					'status'      => 400,
+					'action'      => $canonical,
+					'log_message' => sprintf( 'Refused %s: no confirm_token (scan_database mints it).', $canonical ),
+				)
+			);
+		}
+
+		$token = self::mint_confirm_token( self::confirm_fingerprint( $action ) );
+
+		$repeat = 'run_command' === $tool
+			? sprintf(
+				/* translators: %s: the confirm_token to send back. */
+				__( 'Call run_command again with the same command plus confirm_token: %s', 'xspeed' ),
+				$token
+			)
+			: sprintf(
+				/* translators: 1: tool name, 2: action value, 3: the confirm_token to send back. */
+				__( 'Call %1$s again with action: %2$s plus confirm_token: %3$s', 'xspeed' ),
+				$tool,
+				(string) ( $action['action'] ?? '' ),
+				$token
+			);
+
+		return new \WP_Error(
+			'xspeed_mcp_confirm_required',
+			sprintf(
+				/* translators: 1: canonical "<command> <action>", 2: how to repeat the call. */
+				__( '"%1$s" is destructive and cannot be undone, so it needs a second, deliberate call. %2$s — the token is single use and expires in 5 minutes.', 'xspeed' ),
+				$canonical,
+				$repeat
+			),
+			array(
+				'status'        => 400,
+				'action'        => $canonical,
+				'confirm_token' => $token,
+				'expires_in'    => self::CONFIRM_TOKEN_TTL,
+				'log_message'   => sprintf( 'Refused %s: awaiting confirm_token.', $canonical ),
+			)
+		);
+	}
+
+	/**
+	 * The activity-log text for a refusal.
+	 *
+	 * A refusal that mints a token puts that token in its message, because
+	 * that is the only channel the caller can read it on. The activity log is
+	 * a different audience and a durable one, so it takes the redacted twin
+	 * the error carries alongside.
+	 *
+	 * @param \WP_Error $error Refusal to describe.
+	 * @return string
+	 */
+	private static function loggable_error( \WP_Error $error ): string {
+		$data = $error->get_error_data();
+		if ( is_array( $data ) && ! empty( $data['log_message'] ) ) {
+			return (string) $data['log_message'];
+		}
+		return $error->get_error_message();
+	}
+
+	/**
+	 * The scope a confirm_token for this action is sealed to.
+	 *
+	 * `xspeed db clean` is sealed to the preview: the categories enabled and
+	 * the counts found, so the token dies the moment the database stops
+	 * matching what the operator was shown.
+	 *
+	 * Every other action is sealed to itself — the (command, action) pair —
+	 * because there is nothing else to bind to and binding to the database
+	 * would make the token both meaningless (it proves nothing about the
+	 * action) and fragile (any unrelated write invalidates it). A token for
+	 * `xspeed cfe pause` therefore does not confirm `xspeed cfe remove`.
+	 *
+	 * @param array $action Classified pair from destructive_action().
+	 * @return string
+	 */
+	private static function confirm_fingerprint( array $action ): string {
+		if ( self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action ) ) {
+			return self::clean_fingerprint();
+		}
+
+		return hash(
+			'sha256',
+			(string) wp_json_encode(
+				array(
+					(string) ( $action['name'] ?? '' ),
+					(string) ( $action['action'] ?? '' ),
+				)
+			)
+		);
+	}
+
+	/** Fingerprint of the scan scope, so a token cannot outlive what it described. */
 	private static function clean_fingerprint(): string {
 		return hash( 'sha256', (string) wp_json_encode( self::clean_scope() ) );
 	}
 
 	/** Lifetime of a confirm_token, from mint to refusal. */
-	private const CLEAN_TOKEN_TTL = 5 * MINUTE_IN_SECONDS;
+	private const CONFIRM_TOKEN_TTL = 5 * MINUTE_IN_SECONDS;
 
-	/** Storage key for a minted token (the token itself is never stored). */
-	private static function clean_token_key( string $token ): string {
+	/**
+	 * Storage key for a minted token (the token itself is never stored).
+	 *
+	 * The `xspeed_mcp_clean_` prefix predates tokens for actions other than
+	 * the database clean. It is the on-disk format, and purge_expired_confirm_
+	 * tokens() sweeps by exactly this prefix, so renaming it would strand
+	 * every token minted by the running build.
+	 */
+	private static function confirm_token_key( string $token ): string {
 		return 'xspeed_mcp_clean_' . hash( 'sha256', $token );
 	}
 
@@ -1953,23 +2339,29 @@ final class Mcp_Tools {
 	 * read, since options have no TTL of their own.
 	 */
 
-	private static function mint_clean_token(): string {
+	/**
+	 * Mint a single-use token sealed to a scope fingerprint.
+	 *
+	 * @param string $fingerprint Scope the token confirms — see confirm_fingerprint().
+	 * @return string
+	 */
+	private static function mint_confirm_token( string $fingerprint ): string {
 		$token = wp_generate_password( 32, false );
 
 		// autoload=no: this is read once, by one request, minutes from now.
 		add_option(
-			self::clean_token_key( $token ),
+			self::confirm_token_key( $token ),
 			wp_json_encode(
 				array(
-					'fingerprint' => self::clean_fingerprint(),
-					'expires'     => time() + self::CLEAN_TOKEN_TTL,
+					'fingerprint' => $fingerprint,
+					'expires'     => time() + self::CONFIRM_TOKEN_TTL,
 				)
 			),
 			'',
 			'no'
 		);
 
-		self::purge_expired_clean_tokens();
+		self::purge_expired_confirm_tokens();
 
 		return $token;
 	}
@@ -1980,14 +2372,58 @@ final class Mcp_Tools {
 	 * Consumes the record either way: a token is single use, so one approval
 	 * can never authorise a second, different deletion.
 	 */
-	private static function consume_clean_token( string $token ): string {
-		$key    = self::clean_token_key( $token );
+	private static function consume_confirm_token( string $token ): string {
+		global $wpdb;
+
+		$key    = self::confirm_token_key( $token );
 		$stored = get_option( $key );
 		if ( ! is_string( $stored ) || '' === $stored ) {
 			return '';
 		}
 
-		delete_option( $key );
+		/*
+		 * The claim is the DELETE, and nothing before it.
+		 *
+		 * This used to read the option, decide it existed, and then call
+		 * delete_option() — check-then-act, with the whole verification
+		 * sitting inside the gap. Twenty calls carrying one token, arriving
+		 * together, all read the row before any of them removed it, and all
+		 * twenty passed. QA measured six getting through and the database
+		 * clean running six times. A persistent object cache widens it
+		 * further: get_option() keeps answering from cache after the row is
+		 * gone, so the read cannot be the gate under any timing.
+		 *
+		 * A single DELETE is the only step here MySQL makes atomic. InnoDB
+		 * takes a row lock, exactly one statement reports a row affected, and
+		 * every other concurrent caller sees zero however they got here. So
+		 * the row's disappearance IS the permission, and the read above is
+		 * demoted to what it should always have been — a way to recover the
+		 * fingerprint, not evidence of anything.
+		 *
+		 * Raw rather than delete_option() because delete_option() reports
+		 * whether it thinks a row existed, not whether THIS caller removed
+		 * it, and it decides that from a cache. rows_affected comes from the
+		 * server.
+		 */
+		// No database, no atomic claim, no confirmation. Refusing here costs a
+		// caller one retry; the alternative is granting permission on the
+		// strength of a read that was never proof of anything.
+		if ( ! $wpdb instanceof \wpdb && ! is_object( $wpdb ) ) {
+			return '';
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the atomic claim needs rows_affected from the server; the cache entry is dropped right after.
+		$claimed = $wpdb->query(
+			$wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $key )
+		);
+
+		// Whoever won, the row is gone for everyone; a cache still holding it
+		// would let a later read look live.
+		wp_cache_delete( $key, 'options' );
+
+		if ( 1 !== (int) $claimed ) {
+			return '';
+		}
 
 		$data = json_decode( $stored, true );
 		if ( ! is_array( $data ) || empty( $data['fingerprint'] ) ) {
@@ -2007,7 +2443,7 @@ final class Mcp_Tools {
 	 * wp_options forever — a scan that is never followed by a clean is the
 	 * normal case, not the exception.
 	 */
-	private static function purge_expired_clean_tokens(): void {
+	private static function purge_expired_confirm_tokens(): void {
 		global $wpdb;
 
 		if ( ! isset( $wpdb ) || ! is_object( $wpdb ) ) {
@@ -2218,7 +2654,14 @@ final class Mcp_Tools {
 		if ( null === $on ) {
 			return new \WP_Error( 'xspeed_mcp_invalid_enabled', __( 'The enabled argument must be true or false.', 'xspeed' ), array( 'status' => 400 ) );
 		}
-		return Cli_Bridge::run( 'objcache', array( $on ? 'enable' : 'disable' ) );
+		$assoc = array();
+		if ( $on && ! empty( $args['takeover'] ) && filter_var( $args['takeover'], FILTER_VALIDATE_BOOLEAN ) ) {
+			$assoc['takeover'] = true;
+		}
+		if ( ! $on && ! empty( $args['restore'] ) && filter_var( $args['restore'], FILTER_VALIDATE_BOOLEAN ) ) {
+			$assoc['restore'] = true;
+		}
+		return Cli_Bridge::run( 'objcache', array( $on ? 'enable' : 'disable' ), $assoc );
 	}
 
 	/**

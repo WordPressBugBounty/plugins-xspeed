@@ -240,10 +240,12 @@ final class Purge_Runner {
 		$targets = array(
 			'page'       => array(
 				// Named for the flag users reach for, but it is the whole
-				// local sweep: flat HTML, the static tree, cached REST
-				// responses and minified assets. Splitting those into four
-				// line items would be four rows that always move together.
-				'label'    => __( 'Page cache (HTML, static, REST, minified assets)', 'xspeed' ),
+				// local sweep: flat HTML, the static tree and cached REST
+				// responses. Splitting those into three line items would be
+				// three rows that always move together. Minified assets are
+				// not in it: they are named by content, so a site purge
+				// leaves them (see `wp xspeed minify purge`).
+				'label'    => __( 'Page cache (HTML, static, REST)', 'xspeed' ),
 				'group'    => 'page',
 				// Always attempted. Files outlive the setting that wrote them,
 				// so a site that has just turned page caching OFF is exactly
@@ -265,6 +267,20 @@ final class Purge_Runner {
 				'enabled'  => array( self::class, 'cloudflare_enabled' ),
 				'callback' => array( self::class, 'purge_cloudflare' ),
 			),
+		);
+		// Only where xCloud's purge plugin is installed, so every other site's
+		// report is not padded with a row that can never apply. An installed
+		// copy too old to take purges still gets the row: its reason is the
+		// instruction to update.
+		if ( Managed_Edge_Purge::installed() ) {
+			$targets['xcloud'] = array(
+				'label'    => __( 'Cloudflare Enterprise (xCloud)', 'xspeed' ),
+				'group'    => 'edge',
+				'enabled'  => array( Managed_Edge_Purge::class, 'status' ),
+				'callback' => array( Managed_Edge_Purge::class, 'purge_everything' ),
+			);
+		}
+		$targets += array(
 			'cdn'        => array(
 				'label'    => __( 'CDN', 'xspeed' ),
 				'group'    => 'cdn',
@@ -300,9 +316,9 @@ final class Purge_Runner {
 	}
 
 	/**
-	 * Local files: the flat tree, the static tree, REST responses, minified
-	 * assets — and, through `xspeed_after_purge_all`, whatever modules clear
-	 * alongside them.
+	 * Local files: the flat tree, the static tree and REST responses, and,
+	 * through `xspeed_after_purge_all`, whatever modules clear alongside
+	 * them.
 	 *
 	 * @param string $cause Who asked.
 	 * @return array{entries:int,bytes:int}

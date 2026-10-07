@@ -54,12 +54,13 @@ defined( 'ABSPATH' ) || exit;
  * on the purge-event contract — which is also where the reasoning for standing
  * down on a content purge is written. Nothing here listens to a hook.
  *
- * Purge-ALL only. Nginx Helper's per-URL entry point is
+ * Two calls: purge_nginx_helper() clears the whole zone through the action
+ * above, and purge_nginx_helper_urls() clears named pages through
  * `$GLOBALS['nginx_purger']->purge_url()`, a method on its purger object
- * rather than an action, and it calls `is_page()`/`is_single()` internally —
- * which emits `_doing_it_wrong` outside a main query, so WP-CLI, cron and REST
- * purges would warn. The contract already carries the exact `urls`, so
- * per-URL forwarding is a follow-up rather than a redesign.
+ * rather than an action. That method checks `is_page()`/`is_single()` before
+ * purging an AMP copy; both only warn when the global `$wp_query` does not
+ * exist, and `wp-settings.php` creates it for every request, so WP-CLI, cron
+ * and REST purges are quiet.
  *
  * **Multisite:** nginx keys one cache zone per *install*, not per subsite, so
  * a purge here clears every site on the network at the nginx layer. That is
@@ -128,6 +129,44 @@ final class Host_Page_Caches {
 			return false;
 		}
 
+		return true;
+	}
+
+	/**
+	 * Purge named pages from the nginx FastCGI cache through Nginx Helper.
+	 *
+	 * Its purger's `purge_url()` is the same call Nginx Helper makes for its
+	 * own post purges. Feeds are not added (`$feed = false`): xSpeed names the
+	 * feeds it means. If the purger cannot take a URL, the whole zone goes
+	 * instead, because a page left stale is worse than a cold cache. The
+	 * same happens when the calls run past `$seconds`: with the `get_request`
+	 * method each one is a blocking HTTP request, and a slow purge endpoint
+	 * would otherwise hold the request for the whole list.
+	 *
+	 * @param string[] $urls    Absolute URLs on this site.
+	 * @param float    $seconds Time allowed for the per-URL calls; 0 for no limit.
+	 */
+	public static function purge_nginx_helper_urls( array $urls, float $seconds = 0.0 ): bool {
+		if ( array() === $urls || ! self::nginx_helper_is_fastcgi() ) {
+			return false;
+		}
+		$purger = $GLOBALS['nginx_purger'] ?? null;
+		if ( ! is_object( $purger ) || ! method_exists( $purger, 'purge_url' ) ) {
+			return self::purge_nginx_helper();
+		}
+		$started = microtime( true );
+		$left    = count( $urls );
+		try {
+			foreach ( $urls as $url ) {
+				$purger->purge_url( (string) $url, false );
+				--$left;
+				if ( $left > 0 && $seconds > 0 && microtime( true ) - $started > $seconds ) {
+					return self::purge_nginx_helper();
+				}
+			}
+		} catch ( \Throwable $e ) {
+			return self::purge_nginx_helper();
+		}
 		return true;
 	}
 

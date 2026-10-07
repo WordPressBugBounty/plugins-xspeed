@@ -87,6 +87,10 @@ final class Cache_Inventory {
 		}
 
 		$path = '' === implode( '/', $segments ) ? '/' : '/' . implode( '/', $segments ) . '/';
+		// The tree stores decoded names (Cache::static_path()). Encode them
+		// back the way a permalink is spelled, so the row merges with the
+		// flat entry's canonical URL instead of listing the page twice.
+		$path = Cache::normalize_path( $path );
 
 		return ( $https ? 'https://' : 'http://' ) . $host . $path;
 	}
@@ -143,7 +147,10 @@ final class Cache_Inventory {
 
 		foreach ( $rows as $row ) {
 			$url = isset( $row['url'] ) && is_string( $row['url'] ) ? $row['url'] : null;
-			$key = null !== $url ? 'u:' . $url : 'p:' . (string) ( $row['path'] ?? '' );
+			// A flat entry's URL comes from the page's canonical link, which
+			// may carry either escape case; compare in the cache key's one
+			// spelling so a page's flat and static copies stay one row.
+			$key = null !== $url ? 'u:' . Cache::normalize_path( $url ) : 'p:' . (string) ( $row['path'] ?? '' );
 
 			if ( ! isset( $merged[ $key ] ) ) {
 				$merged[ $key ] = $row;
@@ -398,6 +405,8 @@ final class Cache_Inventory {
 			self::add_glob( $buckets['assets'], XSPEED_CACHE_DIR . '/min/*.js' );
 			self::add_glob( $buckets['assets'], XSPEED_CACHE_DIR . '/min/combined/*.css' );
 			self::add_glob( $buckets['assets'], XSPEED_CACHE_DIR . '/min/combined/*.js' );
+			// One manifest per minified source, per blog (Asset_Manifest).
+			self::add_glob( $buckets['metadata'], XSPEED_CACHE_DIR . '/min/manifests/*/*.json' );
 		}
 
 		if ( defined( 'XSPEED_CACHE_STATIC_DIR' ) && is_dir( XSPEED_CACHE_STATIC_DIR ) ) {

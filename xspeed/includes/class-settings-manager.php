@@ -1087,6 +1087,24 @@ final class Settings_Manager {
 				$settings[ $key ] = self::mask_secret_value( (string) $settings[ $key ] );
 			}
 		}
+
+		/*
+		 * Preserved keys are carried through by `get()` and have no schema, so
+		 * this loop never saw them — a module preserving a credential would
+		 * print it here in full. The MCP module preserves its pairing token,
+		 * which is what made that concrete.
+		 *
+		 * Matched by NAME, since a key with no spec has no declared type. A
+		 * scalar only: `mask_secret_value` takes a string, and a preserved key
+		 * can hold an array (the REST-cache `rules`), which is not a secret
+		 * and must not be flattened into one.
+		 */
+		foreach ( $module->preserved_keys() as $key ) {
+			if ( array_key_exists( $key, $settings ) && is_scalar( $settings[ $key ] ) && self::is_secret_key( $key ) ) {
+				$settings[ $key ] = self::mask_secret_value( (string) $settings[ $key ] );
+			}
+		}
+
 		return $settings;
 	}
 
@@ -1747,6 +1765,8 @@ final class Settings_Manager {
 						if ( $u ) {
 							$out[] = $u;
 						}
+					} elseif ( 'path' === $item_type ) {
+						$out[] = self::sanitize_path_pattern( (string) $item );
 					} else {
 						$out[] = sanitize_text_field( (string) $item );
 					}
@@ -1821,6 +1841,35 @@ final class Settings_Manager {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * sanitize_text_field() for a URL path pattern, minus one step: it keeps
+	 * percent-encoded octets.
+	 *
+	 * sanitize_text_field() deletes every `%XX`, so an excluded URL pasted as
+	 * `/%e7%ac%ac%e5%8d%81/` (how WordPress spells a Chinese slug) was saved
+	 * as `//`, and `/%e8%b3%bc%e7%89%a9%e8%bb%8a` as `/`, which "contains"-
+	 * matches every page and turned the page cache off for the whole site.
+	 * The `%` is swapped for a private-use character while the rest of
+	 * sanitize_text_field() runs (tags, line breaks, invalid UTF-8), then
+	 * swapped back.
+	 *
+	 * Escapes are stored in lower case, the spelling the page cache matches
+	 * paths in. An entry copied from Chrome's address bar arrives as
+	 * `/%E8%81%AF…/`; stored as typed, it never matched.
+	 */
+	private static function sanitize_path_pattern( string $value ): string {
+		$mark  = "\u{E000}";
+		$value = str_replace( $mark, '', $value );
+		$value = str_replace( $mark, '%', sanitize_text_field( str_replace( '%', $mark, $value ) ) );
+		return (string) preg_replace_callback(
+			'/%[0-9a-fA-F]{2}/',
+			static function ( array $m ): string {
+				return strtolower( $m[0] );
+			},
+			$value
+		);
 	}
 
 	/**

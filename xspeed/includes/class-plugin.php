@@ -104,6 +104,13 @@ class Plugin {
 		// gate stands down in favour of.
 		Server_Caches::boot();
 
+		// Remembers the terms a post had before a save, so a narrow purge
+		// can clear the category it left as well as the one it joined.
+		Affected_Pages::boot();
+		// Records which pages run a post list of their own (a page builder
+		// grid, a related-posts block), so a narrow purge clears them too.
+		Listing_Pages::boot();
+
 		// Tell WP Statistics and Slimstat not to count the warmer, the
 		// benchmark and the verifier as visitors. Record-time filters only;
 		// see the class for why the tracking snippet itself is left alone.
@@ -203,7 +210,38 @@ class Plugin {
 		// never revalidates. Clear the tree once. The flat cache is keyed
 		// correctly and is deliberately left alone. (issue #191)
 		if ( version_compare( $current, '1.1.6', '<' ) ) {
-			Cache::purge_static_tree();
+			$removed = Cache::purge_static_tree();
+
+			/*
+			 * And tell anything caching in front of us, because the poisoned
+			 * entry is exactly the kind that reaches an edge: the web server
+			 * served it straight off disk as the homepage, so a CDN in front had
+			 * every opportunity to store it. Deleting our copy leaves that one
+			 * untouched, and the edge's lifetime is the longer of the two.
+			 *
+			 * Announced on `init` rather than here. This runs at
+			 * `plugins_loaded` 21, before an add-on has wired its purge
+			 * listeners, so firing it inline would announce to an empty room.
+			 * Priority 99 puts it after any reasonable `init` registration.
+			 *
+			 * Once per site, on the upgrade that clears the tree — never again,
+			 * since the data version is written immediately below.
+			 *
+			 * Through `Cache::announce_purge()` rather than a bare `do_action`,
+			 * because the purge-event contract (#348) is more than the payload:
+			 * it forwards to the server caches by direct call before the public
+			 * action runs, and it isolates listeners so one throwing add-on
+			 * cannot fatal the first admin request after an update. A raw
+			 * publish here would skip both and hand listeners the pre-contract
+			 * payload shape.
+			 */
+			add_action(
+				'init',
+				static function () use ( $removed ) {
+					Cache::announce_purge( 'static cache repaired on upgrade', $removed );
+				},
+				99
+			);
 		}
 
 		// 1.3.6 — new click and campaign IDs in the default ignored list.
@@ -491,6 +529,20 @@ class Plugin {
 		 *                             install came up with, '' if not fresh.
 		 */
 		do_action( 'xspeed_activated', $installed_by, $profile );
+
+		/*
+		 * Announce the change to anything caching in front of us.
+		 *
+		 * Activation writes the default settings and activates modules, so
+		 * every URL on the site starts returning different HTML. A CDN
+		 * holding renders from before goes on serving them for their whole
+		 * lifetime, and nothing told it.
+		 *
+		 * Cheap on a fresh install — there is nothing to sweep — and the
+		 * case it exists for is reactivation on a site that has been running
+		 * for months behind an edge.
+		 */
+		Cache::purge_all( 'plugin activated' );
 	}
 
 	/**
@@ -535,7 +587,12 @@ class Plugin {
 		Cache::restore_dropin_if_enabled();
 	}
 
-	public static function deactivate() {
+	/**
+	 * @param bool $network_wide Whether a network admin deactivated the
+	 *                           plugin for every site (WordPress passes this
+	 *                           to deactivation hooks).
+	 */
+	public static function deactivate( $network_wide = false ) {
 		// Drop-in + WP_CACHE constant are NOT touched here. WordPress
 		// upgrades run as deactivate → wipe files → install → activate,
 		// so removing those artifacts on every deactivate would silently
@@ -544,7 +601,14 @@ class Plugin {
 		// plugin; auto_heal() restores state on the next admin_init if
 		// the drop-in or WP_CACHE went missing for any other reason.
 		Cache::purge_all();
-		Minifier::purge_minified();
+		// purge_all() is site-scoped and no longer touches min/, so clear it
+		// here. On a network where only this site is deactivating, the other
+		// sites still link those files: drop this site's manifests only.
+		if ( is_multisite() && ! $network_wide ) {
+			Minifier::purge_manifests( Asset_Manifest::blog_id() );
+		} else {
+			Minifier::purge_minified();
+		}
 		Gzip::apply( false );
 
 		Module_Registry::deactivate_all();

@@ -193,23 +193,70 @@ final class Mcp_Hub {
 	public static function public_status( ?int $user_id = null ): array {
 		$state = self::state( $user_id );
 		return array(
-			'attached'       => $state['attached'],
-			'account_email'  => $state['account_email'],
-			'attached_at'    => $state['attached_at'],
-			'site_url'       => Mcp_Pairing::absolute( home_url( '/' ) ),
+			'attached'            => $state['attached'],
+			'account_email'       => $state['account_email'],
+			'attached_at'         => $state['attached_at'],
+			'site_url'            => Mcp_Pairing::absolute( home_url( '/' ) ),
 			// Method 1 paste-in credential — the existing per-site token.
 			// Empty until generate_token() (or a per-site Connect) mints one.
-			'site_token'     => Mcp_Pairing::site_token(),
-			'hub_url'        => self::hub_url(),
+			'site_token'          => Mcp_Pairing::site_token(),
+			'hub_url'             => self::hub_url(),
 			// Where the user goes to paste the URL + token (Add site form).
-			'add_site_url'   => self::hub_url() . '/sites/add',
+			'add_site_url'        => self::hub_url() . '/sites/add',
 			// Method 2 (OAuth attach) — one-click redirect with a fresh nonce.
-			'attach_url'     => self::attach_url(),
+			'attach_url'          => self::attach_url(),
 			// Non-public site? Connecting still works (token returns via the
 			// browser redirect), but Hub-initiated AI control needs a public
 			// URL — surfaced as an honest note on the Connect surfaces.
-			'is_local'       => self::is_local_site(),
+			'is_local'            => self::is_local_site(),
+			// Reasons this site should not be disconnected right now, so the
+			// card can warn BEFORE the click rather than after the POST.
+			'disconnect_blockers' => self::disconnect_blockers(),
 		);
+	}
+
+	/**
+	 * Reasons disconnecting this site would cost the owner something.
+	 *
+	 * Disconnect is not local bookkeeping: it POSTs to the Hub. Anything that
+	 * stops working when the link goes — a feature this site drives THROUGH
+	 * the Hub connection — is a fact only the feature knows, so this is a
+	 * filter and nothing here knows what any blocker is about.
+	 *
+	 * A blocker is `array( 'code' => string, 'message' => string )`. `code`
+	 * is a slug for the UI to key on; `message` is one sentence shown to the
+	 * admin verbatim. Entries that are not that shape are dropped rather than
+	 * repaired — a half-read warning is worse than none.
+	 *
+	 * @return array<int,array{code:string,message:string}>
+	 */
+	public static function disconnect_blockers(): array {
+		$raw = apply_filters( 'xspeed_hub_disconnect_blockers', array() );
+		if ( ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $raw as $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+			$code    = isset( $entry['code'] ) && is_scalar( $entry['code'] )
+				? sanitize_key( (string) $entry['code'] )
+				: '';
+			$message = isset( $entry['message'] ) && is_scalar( $entry['message'] )
+				? trim( wp_strip_all_tags( (string) $entry['message'] ) )
+				: '';
+			if ( '' === $code || '' === $message ) {
+				continue;
+			}
+			$out[] = array(
+				'code'    => $code,
+				'message' => $message,
+			);
+		}
+
+		return $out;
 	}
 
 	/**
@@ -252,7 +299,7 @@ final class Mcp_Hub {
 	}
 
 	/** Canonical site URL used in the nonce + sent to the hub. */
-	private static function site_url_canonical(): string {
+	public static function site_url_canonical(): string {
 		return untrailingslashit( home_url( '/' ) );
 	}
 
@@ -353,11 +400,37 @@ final class Mcp_Hub {
 	 * Verify an attach nonce (constant-time, within TTL). On success returns
 	 * the paste-in values (site_url + site_token) plus the minting admin's
 	 * user ID; on failure returns null. Called by the token-authless
-	 * /mcp/attach route.
+	 * /mcp/attach route. Works once per nonce.
 	 *
 	 * @return array{site_url:string,site_token:string,user_id:int}|null
 	 */
 	public static function verify_attach_nonce( string $nonce ): ?array {
+		$uid = self::check_attach_nonce( $nonce );
+		if ( null === $uid ) {
+			return null;
+		}
+
+		/*
+		 * One credential per nonce. The nonce rides in a browser URL (history,
+		 * referrer, logs) and stays signed for NONCE_TTL, so without this
+		 * anyone who saw it could call /mcp/attach in that window and get the
+		 * site token. The marker outlives the nonce, so it is never re-usable.
+		 */
+		$spent = 'xspeed_hubn_' . hash( 'sha256', $nonce );
+		if ( false !== get_transient( $spent ) ) {
+			return null;
+		}
+		set_transient( $spent, 1, 2 * self::NONCE_TTL );
+
+		return self::grant_attach_credential( $uid );
+	}
+
+	/**
+	 * The minting admin's user id when the nonce is ours, signed and unexpired;
+	 * null otherwise. Hands out nothing, so the browser-return handler can
+	 * use it after the Hub has already spent the nonce on the callback.
+	 */
+	public static function check_attach_nonce( string $nonce ): ?int {
 		$parts = explode( '.', $nonce, 3 );
 		if ( 3 !== count( $parts ) ) {
 			return null;
@@ -373,14 +446,25 @@ final class Mcp_Hub {
 		if ( ! hash_equals( $expected, (string) $hmac ) ) {
 			return null; // bad signature
 		}
+		return (int) $uid;
+	}
 
+	/**
+	 * Hand the Hub this site's credential, once an attach has been proved:
+	 * by a valid nonce (verify_attach_nonce()) or by a redeemed connect code
+	 * (Mcp_Hub_Connect::redeem_code()).
+	 *
+	 * @param int $user_id The admin who started or approved the attach.
+	 * @return array{site_url:string,site_token:string,user_id:int}
+	 */
+	public static function grant_attach_credential( int $user_id ): array {
 		/*
-		 * Only NOW mint the credential the callback hands over — after a valid,
-		 * unexpired, correctly-signed nonce has proved the user went through the
+		 * Only NOW mint the credential the callback hands over — after a valid
+		 * nonce or a redeemed connect code has proved an admin went through the
 		 * Hub and approved. This is the one point in the attach flow where the
 		 * user has unambiguously asked to connect, so it is where the token is
 		 * created; minting it earlier (at nonce time) meant a page render could
-		 * do it. An invalid nonce returns above without minting.
+		 * do it. An invalid nonce or code never reaches this.
 		 *
 		 * connect() reuses an existing token, so a re-attach or a duplicate
 		 * callback is idempotent and never rotates a paired client's secret.
@@ -401,7 +485,7 @@ final class Mcp_Hub {
 		return array(
 			'site_url'   => self::site_url_canonical(),
 			'site_token' => Mcp_Pairing::site_token(),
-			'user_id'    => (int) $uid,
+			'user_id'    => $user_id,
 		);
 	}
 
@@ -437,8 +521,14 @@ final class Mcp_Hub {
 		$resp = wp_remote_get(
 			$url,
 			array(
-				'timeout' => 8,
-				'headers' => array( 'X-XSpeed-Site-Token' => $token ),
+				'timeout'     => 8,
+				// The site token is a bearer for this site's whole Hub link, and
+				// it rides in a header — WordPress re-sends headers on a
+				// redirect, so following one would hand the token to whatever
+				// host the response points at. Nothing legitimate about the Hub
+				// answers with a 3xx, so treat one as the failure it is.
+				'redirection' => 0,
+				'headers'     => array( 'X-XSpeed-Site-Token' => $token ),
 			)
 		);
 		// Cache for 5 min regardless — don't hammer the Hub on transient errors.
@@ -652,11 +742,29 @@ final class Mcp_Hub {
 	 * (still used by the per-site connection). Rotating no longer cuts the
 	 * Hub off either: the new token is sent to the Hub (push_token_to_hub()),
 	 * so removing the site from the Hub is what ends its access.
+	 *
+	 * Refuses while `disconnect_blockers()` is non-empty and the caller has
+	 * not acknowledged them: it returns `blocked => true` plus the blockers
+	 * and changes nothing — no POST, no deletions. The check sits HERE and
+	 * not in the REST handler so every caller (the card, the route, a future
+	 * CLI path) is covered by the same veto.
+	 *
+	 * @param bool $acknowledged The caller has shown the blockers to a human
+	 *                           who chose to continue anyway.
 	 */
-	public static function disconnect(): array {
+	public static function disconnect( bool $acknowledged = false ): array {
 		$user_id = get_current_user_id();
-		$state   = $user_id ? self::state( $user_id ) : array();
-		$email   = isset( $state['account_email'] ) ? (string) $state['account_email'] : '';
+
+		$blockers = self::disconnect_blockers();
+		if ( ! $acknowledged && array() !== $blockers ) {
+			return array(
+				'blocked'  => true,
+				'blockers' => $blockers,
+			) + self::public_status( $user_id );
+		}
+
+		$state = $user_id ? self::state( $user_id ) : array();
+		$email = isset( $state['account_email'] ) ? (string) $state['account_email'] : '';
 
 		// Detach from the Hub for THIS admin's account only (multi-admin: other
 		// admins who attached keep their link). The site token proves ownership;
@@ -666,8 +774,12 @@ final class Mcp_Hub {
 			wp_remote_post(
 				self::hub_url() . '/api/site/detach',
 				array(
-					'timeout' => 8,
-					'headers' => array(
+					'timeout'     => 8,
+					// Never follow a redirect with the site token attached — see
+					// reconcile_with_hub(). A detach that answers 3xx simply
+					// fails; the local state is cleared below either way.
+					'redirection' => 0,
+					'headers'     => array(
 						'Content-Type'        => 'application/json',
 						'X-XSpeed-Site-Token' => $token,
 					),
@@ -874,10 +986,14 @@ final class Mcp_Hub {
 
 		$site_url = self::site_url_canonical();
 		$args     = array(
-			// A test takes a minute, but the Hub answers as soon as it has
-			// ACCEPTED the job — this waits for that handshake only.
-			'timeout' => 15,
-			'headers' => array( 'X-XSpeed-Site-Token' => $token ),
+			// A GTmetrix test takes a minute, but the Hub answers as soon as it
+			// has ACCEPTED the job — this waits for that handshake only.
+			'timeout'     => 15,
+			// Never follow a redirect with the site token attached — see
+			// reconcile_with_hub(). A 3xx falls through to the non-2xx branch
+			// below and becomes a hub_error the panel can show.
+			'redirection' => 0,
+			'headers'     => array( 'X-XSpeed-Site-Token' => $token ),
 		);
 
 		if ( 'POST' === $method ) {

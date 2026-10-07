@@ -76,6 +76,22 @@ final class TurboRenderModule extends Module {
 	 * Spans whose markup is text, not the page: a section tag inside a
 	 * JS template string or a comment must not be stamped.
 	 */
+	/**
+	 * Background images inside a deferred section stay off until the
+	 * section is near the viewport. Scoped to `.xs-tbg`, which only the
+	 * script below sets: without JavaScript, or without
+	 * IntersectionObserver, nothing is held. Screen only, so a printed page
+	 * keeps every background.
+	 */
+	private const HOLD_STYLE = '<style id="xspeed-turbo-hold">@media screen{.xs-tbg [data-xspeed-turbo]:not([data-xspeed-near]),.xs-tbg [data-xspeed-turbo]:not([data-xspeed-near]) *{background-image:none!important}}</style>';
+
+	/**
+	 * Releases a section's backgrounds 1000px before it scrolls into view.
+	 * data-xs-nodelay keeps Delay JS from holding it until the first
+	 * interaction, which would leave every deferred background blank.
+	 */
+	private const HOLD_SCRIPT = '<script id="xspeed-turbo-hold-js" data-xs-nodelay>(function(d){if(!("IntersectionObserver" in window))return;d.documentElement.classList.add("xs-tbg");var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.setAttribute("data-xspeed-near","");io.unobserve(e.target);}});},{rootMargin:"1000px 0px"});function go(){d.querySelectorAll("[data-xspeed-turbo]").forEach(function(s){io.observe(s);});}if(d.readyState!=="loading")go();else d.addEventListener("DOMContentLoaded",go);})(document);</script>';
+
 	private const MASKED_SPANS = '<script\b[^>]*>.*?</script>|<textarea\b[^>]*>.*?</textarea>|<noscript\b[^>]*>.*?</noscript>|<!--.*?-->';
 
 	/** Fallback: a child spanning less bytes than this is decoration (an empty notices div, a spacer), not a section. */
@@ -262,6 +278,23 @@ final class TurboRenderModule extends Module {
 		 */
 		$px    = max( 100, (int) apply_filters( 'xspeed_turbo_render_intrinsic_px', self::DEFAULT_INTRINSIC_PX ) );
 		$style = '<style id="xspeed-turbo">[data-xspeed-turbo]{content-visibility:auto;contain-intrinsic-size:auto ' . $px . 'px}@media print{[data-xspeed-turbo]{content-visibility:visible}}</style>';
+
+		/**
+		 * Filter whether a deferred section's images and CSS backgrounds wait
+		 * until the visitor scrolls near it.
+		 *
+		 * content-visibility skips a section's rendering, not its downloads:
+		 * the browser still fetched every background a stylesheet gave it,
+		 * and eager images in it. On a live Kadence page a 117 KB row
+		 * background 3,600px down loaded before the hero heading painted,
+		 * and PageSpeed counts every byte that lands before LCP.
+		 *
+		 * @param bool $hold Default true.
+		 */
+		if ( apply_filters( 'xspeed_turbo_render_hold_media', true ) ) {
+			$html   = self::lazy_section_images( $html );
+			$style .= self::HOLD_STYLE . self::HOLD_SCRIPT;
+		}
 
 		$head_end = stripos( $html, '</head>' );
 		return substr_replace( $html, $style, (int) $head_end, 0 );
@@ -520,6 +553,91 @@ final class TurboRenderModule extends Module {
 			return null;
 		}
 		return $offset + strlen( $m[0] );
+	}
+
+	/**
+	 * Make the images inside stamped sections lazy.
+	 *
+	 * A stamped section is below the fold by Turbo Render's own count, so
+	 * loading="eager" there buys nothing: the Lazy module's eager slot had
+	 * gone to the first image of a slider 5,600px down. Left alone: an
+	 * image marked fetchpriority="high", data-skip-lazy or data-no-lazy,
+	 * one matching Lazy's Excluded Images, and any loading value other
+	 * than eager.
+	 */
+	private static function lazy_section_images( string $html ): string {
+		$masked = self::mask( $html );
+		if ( ! preg_match_all( '#<[a-zA-Z][a-zA-Z0-9-]*\s+data-xspeed-turbo=""#', $masked, $opens, PREG_OFFSET_CAPTURE ) ) {
+			return $html;
+		}
+		$spans = array();
+		$until = -1;
+		foreach ( $opens[0] as $open ) {
+			$start = (int) $open[1];
+			if ( $start < $until ) {
+				continue; // Nested inside a span already taken.
+			}
+			$end = self::element_end( $masked, $start );
+			if ( null === $end ) {
+				continue;
+			}
+			$spans[] = array( $start, $end );
+			$until   = $end;
+		}
+		if ( empty( $spans ) || ! preg_match_all( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i', $masked, $imgs, PREG_OFFSET_CAPTURE ) ) {
+			return $html;
+		}
+
+		$lazy     = \XSpeed\Settings_Manager::get( 'lazy' );
+		$excluded = is_array( $lazy ) && is_array( $lazy['excluded_images'] ?? null ) ? $lazy['excluded_images'] : array();
+
+		$edits = array();
+		foreach ( $imgs[0] as $img ) {
+			$at = (int) $img[1];
+			$in = false;
+			foreach ( $spans as $span ) {
+				if ( $at > $span[0] && $at < $span[1] ) {
+					$in = true;
+					break;
+				}
+			}
+			if ( ! $in ) {
+				continue;
+			}
+			$tag = substr( $html, $at, strlen( (string) $img[0] ) );
+			$new = self::lazy_img( $tag, $excluded );
+			if ( $new !== $tag ) {
+				$edits[] = array( $at, strlen( $tag ), $new );
+			}
+		}
+		foreach ( array_reverse( $edits ) as $edit ) {
+			$html = substr_replace( $html, $edit[2], $edit[0], $edit[1] );
+		}
+		return $html;
+	}
+
+	/**
+	 * @param string   $tag      One <img> tag.
+	 * @param string[] $excluded Lazy's Excluded Images patterns.
+	 */
+	private static function lazy_img( string $tag, array $excluded ): string {
+		if ( false !== stripos( $tag, 'data-skip-lazy' ) || false !== stripos( $tag, 'data-no-lazy' )
+			|| \XSpeed\Lazy_Loader::has_high_fetchpriority( $tag ) ) {
+			return $tag;
+		}
+		foreach ( $excluded as $pattern ) {
+			$pattern = (string) $pattern;
+			if ( '' !== $pattern && false !== stripos( $tag, $pattern ) ) {
+				return $tag;
+			}
+		}
+		if ( preg_match( '#(?<![-\w])loading\s*=\s*(["\']?)([^"\'\s>]*)\1#i', $tag, $m, PREG_OFFSET_CAPTURE ) ) {
+			if ( 'eager' !== strtolower( (string) $m[2][0] ) ) {
+				return $tag;
+			}
+			return substr_replace( $tag, 'loading="lazy"', (int) $m[0][1], strlen( (string) $m[0][0] ) );
+		}
+		return (string) preg_replace( '#^<img\b#i', '<img loading="lazy"', $tag, 1 );
 	}
 
 	private static function mask( string $html ): string {

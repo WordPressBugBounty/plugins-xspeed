@@ -745,8 +745,12 @@ final class Migration {
 			return $result;
 		}
 
-		$opts  = (array) Settings_Manager::get( 'object-cache' );
-		$state = Object_Cache::enable( $opts );
+		$opts = (array) Settings_Manager::get( 'object-cache' );
+		// An import IS the user switching away from the source plugin, so it
+		// takes the same switch path: the source's own object cache is turned
+		// off through its settings (or the plugin deactivated) before ours goes
+		// in, instead of being overwritten while it stays on. (#686)
+		$state = Object_Cache::enable( $opts, array( 'takeover' => true ) );
 
 		$result['ok']                = ! empty( $state['ok'] );
 		$result['object_cache_ready'] = ! empty( $state['ok'] );

@@ -92,6 +92,124 @@ final class Preloader {
 	}
 
 	/**
+	 * A real phone browser's user-agent, which the warmer's own is appended
+	 * to for the phone copy.
+	 *
+	 * A real phone string rather than the warmer's UA plus a client hint:
+	 * a theme or plugin that reads the user-agent itself (Mobile_Detect and
+	 * the like) instead of calling wp_is_mobile() would otherwise render its
+	 * desktop HTML into the phone copy. The warmer's name stays at the end so
+	 * the request is still recognisable in access logs and still matches no
+	 * bad-bot rule. (#596)
+	 */
+	public const MOBILE_UA_PREFIX = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+	/** The user-agent the phone warm sends. */
+	public static function mobile_user_agent(): string {
+		$default = self::MOBILE_UA_PREFIX . ' ' . self::user_agent();
+		/**
+		 * Filter the user-agent the preloader sends when it warms the phone
+		 * copy of a page (Separate Mobile Cache on).
+		 *
+		 * It must still read as a phone: the cache files the response by the
+		 * same test as wp_is_mobile(). An empty return is ignored.
+		 *
+		 * @param string $user_agent Default: an iPhone Safari string followed by the warmer's user-agent.
+		 */
+		$ua = apply_filters( 'xspeed_preloader_mobile_user_agent', $default );
+
+		return ( is_string( $ua ) && '' !== trim( $ua ) ) ? trim( $ua ) : $default;
+	}
+
+	/**
+	 * The copies of a page a warm fills: the desktop one, and the phone one
+	 * too when Separate Mobile Cache keeps one per device. Before #596 every
+	 * warm sent a desktop user-agent, so the first phone visitor to each
+	 * page got an uncached render.
+	 *
+	 * @return string[] 'desktop', then 'mobile' when it applies.
+	 */
+	public static function devices(): array {
+		$cache   = Settings_Manager::get( 'cache' );
+		$devices = empty( $cache['mobile_separate'] ) ? array( 'desktop' ) : array( 'desktop', 'mobile' );
+		/**
+		 * Filter which copies of a page the preloader warms.
+		 *
+		 * Return array( 'desktop' ) to skip the phone copy, for example on a
+		 * host where the extra requests cost too much. Unknown values are
+		 * dropped; an empty list means desktop.
+		 *
+		 * @param string[] $devices 'desktop', plus 'mobile' when Separate Mobile Cache is on.
+		 */
+		$filtered = apply_filters( 'xspeed_preloader_devices', $devices );
+		$filtered = is_array( $filtered ) ? array_values( array_intersect( array( 'desktop', 'mobile' ), $filtered ) ) : $devices;
+
+		return empty( $filtered ) ? array( 'desktop' ) : $filtered;
+	}
+
+	/**
+	 * Request arguments for one warm of one device copy.
+	 *
+	 * `Sec-CH-UA-Mobile` settles the device whatever the user-agent filters
+	 * return: the cache checks that hint before the user-agent.
+	 *
+	 * @param array<string,string> $headers Extra request headers.
+	 */
+	private static function warm_args( string $device, array $headers = array() ): array {
+		$headers['Sec-CH-UA-Mobile'] = 'mobile' === $device ? '?1' : '?0';
+		return array(
+			'timeout'    => self::REQUEST_TIMEOUT,
+			'sslverify'  => false,
+			'user-agent' => 'mobile' === $device ? self::mobile_user_agent() : self::user_agent(),
+			'headers'    => Self_Traffic::headers( $headers ),
+			'blocking'   => true,
+		);
+	}
+
+	/**
+	 * Warm every copy of $url that devices() names.
+	 *
+	 * @param array<string,string> $headers Extra request headers.
+	 * @return array{failures: array<int,array{device:string,error:string}>, body: string}
+	 *         The failures, and the desktop response body ('' when it failed).
+	 */
+	private static function warm_devices( string $url, array $headers = array() ): array {
+		$failures = array();
+		$body     = '';
+		foreach ( self::devices() as $device ) {
+			$args     = self::warm_args( $device, $headers );
+			$response = wp_remote_get( $url, $args );
+			if ( is_wp_error( $response ) ) {
+				$failures[] = array( 'device' => $device, 'error' => $response->get_error_message() );
+				continue;
+			}
+			$code = (int) wp_remote_retrieve_response_code( $response );
+			if ( $code >= 400 ) {
+				$failures[] = array( 'device' => $device, 'error' => self::failure_detail( $code, $args['user-agent'] ) );
+				if ( self::is_firewall_block( $code ) ) {
+					self::remember_firewall_block( $url, $code, $args['user-agent'] );
+				}
+				continue;
+			}
+			if ( 'desktop' === $device ) {
+				$body = (string) wp_remote_retrieve_body( $response );
+			}
+		}
+		// The notice goes only once every copy got through. A host that
+		// blocks just the phone user-agent would otherwise have the notice
+		// cleared by each desktop warm right after the phone warm set it.
+		if ( empty( $failures ) ) {
+			self::clear_firewall_block();
+		}
+		return array( 'failures' => $failures, 'body' => $body );
+	}
+
+	/** "phone: " for a failure of the phone copy, so the log says which copy failed. */
+	private static function device_prefix( string $device ): string {
+		return 'mobile' === $device ? 'phone: ' : '';
+	}
+
+	/**
 	 * Is this status code the signature of a firewall refusing our warmer?
 	 *
 	 * 403 and 406 are what bad-bot rules (7G/8G, mod_security, Wordfence)
@@ -110,7 +228,7 @@ final class Preloader {
 	 * and the fix is a server rule, so the message has to name the cause and
 	 * the exact UA to allow. (#481)
 	 */
-	private static function failure_detail( int $code ): string {
+	private static function failure_detail( int $code, string $user_agent = '' ): string {
 		if ( ! self::is_firewall_block( $code ) ) {
 			return sprintf( 'HTTP %d', $code );
 		}
@@ -118,7 +236,7 @@ final class Preloader {
 		return sprintf(
 			'HTTP %d — your server\'s firewall is blocking the xSpeed cache warmer by user-agent, so this page was not warmed. Allow the user-agent "%s" (on xCloud this is the 8G firewall\'s bad-bot rule), or change it with the xspeed_preloader_user_agent filter.',
 			$code,
-			self::user_agent()
+			'' !== $user_agent ? $user_agent : self::user_agent()
 		);
 	}
 
@@ -133,7 +251,7 @@ final class Preloader {
 	 * would let a site go back to never warming, silently. Cleared by
 	 * clear_firewall_block() on the first warm that succeeds. (#481)
 	 */
-	private static function remember_firewall_block( string $url, int $code ): void {
+	private static function remember_firewall_block( string $url, int $code, string $user_agent = '' ): void {
 		if ( ! function_exists( 'update_option' ) ) {
 			return;
 		}
@@ -142,7 +260,7 @@ final class Preloader {
 			array(
 				'url'        => $url,
 				'code'       => $code,
-				'user_agent' => self::user_agent(),
+				'user_agent' => '' !== $user_agent ? $user_agent : self::user_agent(),
 				'ts'         => time(),
 			),
 			false
@@ -251,6 +369,11 @@ final class Preloader {
 			// sitemap they configured.
 			'source'        => self::$queue_source,
 			'sitemap_error' => $sitemap_error,
+			// Which copies each URL gets, for the panel and the status
+			// command. Each tick refreshes it: turning Separate Mobile
+			// Cache on or off mid-crawl purges the cache, and the rest of
+			// the crawl should fill the copies that now exist.
+			'devices'       => self::devices(),
 		);
 		set_transient( self::STATE_KEY, $state, self::STATE_TTL );
 
@@ -351,13 +474,39 @@ final class Preloader {
 		$opts  = Settings_Manager::get( 'preloader' );
 		$batch = max( 1, min( 50, (int) ( $opts['batch_size'] ?? 5 ) ) );
 
-		$processed_this_tick = 0;
-		while ( $processed_this_tick < $batch && ! empty( $state['queue'] ) ) {
-			$url = array_shift( $state['queue'] );
+		/**
+		 * Filter: xspeed_preload_batch_size
+		 *
+		 * How much one tick may warm, in the units the batch size setting
+		 * counts. The setting is the site owner's
+		 * intent; this is for anything that knows a lower ceiling applies —
+		 * a CDN with a rate limit in front, say, which will answer a burst
+		 * with a challenge and leave the queue looking warmed when it is not.
+		 *
+		 * Only ever lowers. A filter that raised it would let an add-on
+		 * overrule a number the site owner chose, and the reason to reach for
+		 * this is always that something cannot take the current rate.
+		 *
+		 * @param int $batch The batch this tick would otherwise use.
+		 */
+		$ceiling = (int) apply_filters( 'xspeed_preload_batch_size', $batch );
+		if ( $ceiling > 0 && $ceiling < $batch ) {
+			$batch = $ceiling;
+		}
+
+		// batch_size caps requests, not URLs, so the load on the origin per
+		// tick is the same with the phone copy on: each URL costs one request
+		// per device. A tick always warms at least one URL.
+		$devices          = self::devices();
+		$state['devices'] = $devices;
+		$per_url          = count( $devices );
+		$requests         = 0;
+		while ( ! empty( $state['queue'] ) && ( 0 === $requests || $requests + $per_url <= $batch ) ) {
+			$url = (string) array_shift( $state['queue'] );
 			self::warm_url( $url, $state );
 			$state['processed']++;
 			$state['last_url'] = $url;
-			$processed_this_tick++;
+			$requests         += $per_url;
 		}
 
 		if ( empty( $state['queue'] ) ) {
@@ -385,39 +534,17 @@ final class Preloader {
 		if ( '' === $url ) {
 			return false;
 		}
-		$response = wp_remote_get(
-			$url,
-			array(
-				'timeout'    => self::REQUEST_TIMEOUT,
-				'sslverify'  => false,
-				'user-agent' => self::user_agent(),
-				'headers'    => Self_Traffic::headers(),
-				'blocking'   => true,
-			)
-		);
-		if ( is_wp_error( $response ) ) {
+		$result = self::warm_devices( $url );
+		foreach ( $result['failures'] as $failure ) {
 			Activity_Log::record(
 				'preloader_warm_failed',
-				sprintf( 'Warm %s failed (%s): %s', $cause, $url, $response->get_error_message() ),
+				sprintf( 'Warm %s failed (%s): %s%s', $cause, $url, self::device_prefix( $failure['device'] ), $failure['error'] ),
 				Activity_Log::WARN
 			);
+		}
+		if ( ! empty( $result['failures'] ) ) {
 			return false;
 		}
-		$code = (int) wp_remote_retrieve_response_code( $response );
-		if ( $code >= 400 ) {
-			Activity_Log::record(
-				'preloader_warm_failed',
-				sprintf( 'Warm %s failed (%s): %s', $cause, $url, self::failure_detail( $code ) ),
-				Activity_Log::WARN
-			);
-			if ( self::is_firewall_block( $code ) ) {
-				self::remember_firewall_block( $url, $code );
-			}
-			return false;
-		}
-		// A warm that got through proves the firewall is no longer refusing us,
-		// so the notice must go — otherwise it outlives the problem. (#481)
-		self::clear_firewall_block();
 		Activity_Log::record(
 			'preloader_warmed_one',
 			sprintf( 'Warmed %s (%s)', $url, $cause ),
@@ -427,47 +554,20 @@ final class Preloader {
 	}
 
 	private static function warm_url( string $url, array &$state ): void {
-		$response = wp_remote_get(
-			$url,
-			array(
-				'timeout'    => self::REQUEST_TIMEOUT,
-				'sslverify'  => false,
-				'user-agent' => self::user_agent(),
-				'headers'    => Self_Traffic::headers(
-					array(
-						'Accept' => 'text/html,application/xhtml+xml',
-					)
-				),
-				'blocking'   => true,
-			)
-		);
-		if ( is_wp_error( $response ) ) {
+		$result = self::warm_devices( $url, array( 'Accept' => 'text/html,application/xhtml+xml' ) );
+		foreach ( $result['failures'] as $failure ) {
 			$state['errors'][] = array(
 				'url'   => $url,
-				'error' => $response->get_error_message(),
+				'error' => self::device_prefix( $failure['device'] ) . $failure['error'],
 				'ts'    => time(),
 			);
-			// Cap retained errors so a broken sitemap doesn't blow the
-			// transient size.
-			$state['errors'] = array_slice( $state['errors'], -20 );
-			return;
 		}
-		$code = (int) wp_remote_retrieve_response_code( $response );
-		if ( $code >= 400 ) {
-			$state['errors'][] = array(
-				'url'   => $url,
-				'error' => self::failure_detail( $code ),
-				'ts'    => time(),
-			);
-			$state['errors'] = array_slice( $state['errors'], -20 );
-			if ( self::is_firewall_block( $code ) ) {
-				self::remember_firewall_block( $url, $code );
-			}
-			return;
+		// Cap retained errors so a broken sitemap doesn't blow the
+		// transient size.
+		$state['errors'] = array_slice( $state['errors'], -20 );
+		if ( '' !== $result['body'] ) {
+			self::warm_remote_dimensions( $result['body'] );
 		}
-
-		self::clear_firewall_block();
-		self::warm_remote_dimensions( (string) wp_remote_retrieve_body( $response ) );
 	}
 
 	/**

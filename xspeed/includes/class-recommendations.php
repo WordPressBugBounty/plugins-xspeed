@@ -24,6 +24,20 @@ defined( 'ABSPATH' ) || exit;
 final class Recommendations {
 
 	/**
+	 * Bounds on what `xspeed_recommendations` may add.
+	 *
+	 * The list renders in the Overview card and the cache page's next-best
+	 * action, and the REST route returns it as is. The caps are well above any
+	 * honest use and keep a buggy contributor from flooding either screen.
+	 */
+	private const MAX_CONTRIBUTED = 5;
+	private const MAX_TITLE_LEN   = 120;
+	private const MAX_DETAIL_LEN  = 400;
+	private const MAX_LABEL_LEN   = 40;
+	private const MAX_TAG_LEN     = 24;
+	private const FILTER          = 'xspeed_recommendations';
+
+	/**
 	 * Evaluate all rules against a state snapshot. Pure — unit-tested.
 	 *
 	 * @param array $state See state() for the shape.
@@ -229,6 +243,160 @@ final class Recommendations {
 	/** Ranked recommendations for the live site. */
 	public static function all(): array {
 		return self::evaluate( self::state() );
+	}
+
+	/**
+	 * The live list with add-on entries folded in, for the Overview card.
+	 *
+	 * Kept apart from all() on purpose. all() feeds the cache page's next best
+	 * action, `wp xspeed recommend` and apply(), which answer "what should I
+	 * fix on this site"; an add-on's entry can be an offer, and an offer must
+	 * not take the slot of the site's real next fix or read as one in the CLI.
+	 */
+	public static function all_with_contributed(): array {
+		$state = self::state();
+		return self::with_contributed( self::evaluate( $state ), $state );
+	}
+
+	/**
+	 * Add the entries other plugins contribute, then re-rank.
+	 *
+	 * Contributors may only add. The filter starts from an empty array and
+	 * gets the native list as read-only context, so nothing it returns can
+	 * remove or rewrite a native entry, and an id a native rule already uses
+	 * is dropped rather than replacing it. Only `link` actions are accepted:
+	 * an `apply` action would POST to an endpoint that cannot resolve an id it
+	 * does not own (that is what `xspeed_apply_recommendation` is for).
+	 *
+	 * @param array<int,array<string,mixed>> $native Ranked native entries.
+	 * @param array<string,mixed>            $state  What the rules read, as context.
+	 * @return array<int,array<string,mixed>> Native and contributed, ranked.
+	 */
+	public static function with_contributed( array $native, array $state ): array {
+		/**
+		 * Filter: xspeed_recommendations
+		 *
+		 * Extra recommendations for the Overview card. Starts empty; append
+		 * entries and return the array.
+		 *
+		 * Each entry: id (string, required, unique), title (string, required),
+		 * detail (string, required, one or two sentences, no markup), priority
+		 * (int 0-100, lower ranks first, default 50), tag (string, optional, a
+		 * short label such as "Add-on" shown beside the title) and action
+		 * (required: `type` 'link', `label`, `module` slug, optional `subtab`
+		 * and `focus`). Anything else is dropped.
+		 *
+		 * @param array $contributed Contributed entries (empty on entry).
+		 * @param array $native      The native entries, as context.
+		 * @param array $state       What the native rules read, as context.
+		 */
+		$depth = isset( $GLOBALS['wp_current_filter'] ) && is_array( $GLOBALS['wp_current_filter'] )
+			? count( $GLOBALS['wp_current_filter'] )
+			: 0;
+		try {
+			$raw = apply_filters( self::FILTER, array(), $native, $state );
+		} catch ( \Throwable $e ) {
+			// A contributor that throws costs the round its contributions,
+			// not the card. apply_filters() leaves our name on the
+			// current-filter stack when a callback throws, plus any filter
+			// the contributor ran itself, so cut back to where it was.
+			if ( isset( $GLOBALS['wp_current_filter'] ) && is_array( $GLOBALS['wp_current_filter'] ) ) {
+				array_splice( $GLOBALS['wp_current_filter'], $depth );
+			}
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( '[xspeed] xspeed_recommendations contributor threw: ' . $e->getMessage() );
+			}
+			return $native;
+		}
+		if ( ! is_array( $raw ) || empty( $raw ) ) {
+			return $native;
+		}
+
+		$taken = array();
+		foreach ( $native as $rec ) {
+			$taken[ (string) ( $rec['id'] ?? '' ) ] = true;
+		}
+
+		$out   = $native;
+		$added = 0;
+		foreach ( $raw as $row ) {
+			if ( $added >= self::MAX_CONTRIBUTED ) {
+				break;
+			}
+			$entry = self::normalise_contributed( $row );
+			if ( null === $entry || isset( $taken[ $entry['id'] ] ) ) {
+				continue;
+			}
+			$taken[ $entry['id'] ] = true;
+			$out[]                 = $entry;
+			++$added;
+		}
+
+		// Ties keep their position, so a contribution never jumps a native
+		// entry it ties with. PHP 7.4's sort is not stable, hence the index.
+		$order = array_flip( array_keys( $out ) );
+		uksort(
+			$out,
+			static function ( $a, $b ) use ( $out, $order ) {
+				return array( $out[ $a ]['priority'], $order[ $a ] ) <=> array( $out[ $b ]['priority'], $order[ $b ] );
+			}
+		);
+		return array_values( $out );
+	}
+
+	/**
+	 * One contributed entry in the native shape, or null when it is unusable.
+	 *
+	 * @param mixed $row What the contributor returned.
+	 * @return array<string,mixed>|null
+	 */
+	private static function normalise_contributed( $row ): ?array {
+		if ( ! is_array( $row ) ) {
+			return null;
+		}
+		$text = static function ( $value, int $max ): string {
+			if ( ! is_string( $value ) ) {
+				return '';
+			}
+			$value = trim( wp_strip_all_tags( $value ) );
+			return function_exists( 'mb_substr' ) ? mb_substr( $value, 0, $max ) : substr( $value, 0, $max );
+		};
+
+		$id     = is_string( $row['id'] ?? null ) ? sanitize_key( $row['id'] ) : '';
+		$title  = $text( $row['title'] ?? null, self::MAX_TITLE_LEN );
+		$detail = $text( $row['detail'] ?? null, self::MAX_DETAIL_LEN );
+		$action = is_array( $row['action'] ?? null ) ? $row['action'] : array();
+		$label  = $text( $action['label'] ?? null, self::MAX_LABEL_LEN );
+		$module = is_string( $action['module'] ?? null ) ? sanitize_key( $action['module'] ) : '';
+		if ( '' === $id || '' === $title || '' === $detail || 'link' !== ( $action['type'] ?? '' ) || '' === $label || '' === $module ) {
+			return null;
+		}
+
+		$link = array(
+			'type'   => 'link',
+			'label'  => $label,
+			'module' => $module,
+		);
+		foreach ( array( 'subtab', 'focus' ) as $key ) {
+			if ( is_string( $action[ $key ] ?? null ) && '' !== $action[ $key ] ) {
+				$link[ $key ] = $text( $action[ $key ], 80 );
+			}
+		}
+
+		$entry = array(
+			'id'       => $id,
+			// (int) 'high' is 0, which would rank the entry above every native fix.
+			'priority' => is_numeric( $row['priority'] ?? null ) ? max( 0, min( 100, (int) $row['priority'] ) ) : 50,
+			'title'    => $title,
+			'detail'   => $detail,
+			'action'   => $link,
+		);
+		$tag = $text( $row['tag'] ?? null, self::MAX_TAG_LEN );
+		if ( '' !== $tag ) {
+			$entry['tag'] = $tag;
+		}
+		return $entry;
 	}
 
 	/**

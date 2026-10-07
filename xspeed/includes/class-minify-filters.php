@@ -623,7 +623,15 @@ final class Minify_Filters {
 		// somebody else on purpose. The buffer pass has always checked this;
 		// the enqueue path did not, so a consent-blocked or JSON-carrying
 		// handle could still be rewritten here. (#274)
-		if ( in_array( self::extract_type( $tag ), self::NON_EXECUTABLE_TYPES, true ) ) {
+		//
+		// Read the type from the tag that carries the src. $tag is before +
+		// external + after, and Smart Delay parks the before/after snippets
+		// as text/xspeed-delayed before this filter runs. Reading the first
+		// `type=` in the whole string found the parked snippet, so every
+		// handle with its own snippets kept a live src behind parked
+		// snippets.
+		$type_open = '' !== (string) $src ? self::open_tag_offsets( $tag ) : null;
+		if ( in_array( self::extract_type( null !== $type_open ? $type_open['attrs'] : $tag ), self::NON_EXECUTABLE_TYPES, true ) ) {
 			return $tag;
 		}
 		// src= variant: swap src → data-xs-src and add data-xs-delay marker.
@@ -2129,7 +2137,7 @@ final class Minify_Filters {
 		// one that cleared the textarea has no list at all. Neither may
 		// hide the banner. (#275)
 		foreach ( self::exclusion_floor() as $needle ) {
-			if ( self::target_matches( $needle, $handle, $src ) ) {
+			if ( self::floor_matches( $needle, $handle, $src ) ) {
 				// `continue`, not `break`: a second floor token matching the
 				// same tag has to be named too, or a filter-added token
 				// would be lifted by an entry that names only the first.
@@ -2153,6 +2161,54 @@ final class Minify_Filters {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * target_matches() for a floor token, with the site's own host removed
+	 * from the URL first.
+	 *
+	 * Floor tokens are plugin names, and a plugin's own website is often
+	 * named after the plugin. On notificationx.com the `notificationx` token
+	 * matched every same-origin script URL, so Defer JS and Delay JS skipped
+	 * every script on the site. The path still matches, so a script under
+	 * /plugins/notificationx/ keeps its protection, and a third-party host
+	 * such as consent.cookiebot.com still matches in full.
+	 *
+	 * @param string $needle Floor token.
+	 * @param string $handle Script handle.
+	 * @param string $src    Script URL.
+	 */
+	private static function floor_matches( string $needle, string $handle, string $src ): bool {
+		if ( '' === $needle ) {
+			return false;
+		}
+		if ( $handle === $needle ) {
+			return true;
+		}
+		foreach ( array( $src, self::original_src( $handle ) ) as $url ) {
+			$url = self::without_own_host( $url );
+			if ( '' !== $url && false !== stripos( $url, $needle ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The URL without its scheme and host when the host is the site's own.
+	 * Any other URL comes back unchanged.
+	 *
+	 * @param string $url Script URL.
+	 */
+	private static function without_own_host( string $url ): string {
+		if ( '' === $url || ! function_exists( 'home_url' ) ) {
+			return $url;
+		}
+		$host = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+		if ( '' === $host ) {
+			return $url;
+		}
+		return (string) preg_replace( '#^(?:https?:)?//' . preg_quote( $host, '#' ) . '(?::\d+)?(?=[/?\#]|$)#i', '', $url );
 	}
 
 	/**
@@ -2278,11 +2334,83 @@ final class Minify_Filters {
 		if ( '' === $handle ) {
 			return false;
 		}
+		// Check the URL delay_script_tag() checks. original_src() is set
+		// only when Minify JS rewrote the URL, so with Minify JS off it was
+		// '' here. A URL exclusion then passed here and failed there, and
+		// the snippets were parked while the script stayed live.
 		$src = self::original_src( $handle );
+		if ( '' === $src ) {
+			$src = self::registered_src( $handle );
+		}
 		if ( self::is_excluded_script( $handle, $src, true ) ) {
 			return false;
 		}
 		return self::is_delay_target( $handle, $src );
+	}
+
+	/**
+	 * A handle's registered URL, made absolute the way WP_Scripts prints it,
+	 * without the version query. '' when the handle has no file.
+	 *
+	 * @param string $handle Script handle.
+	 */
+	private static function registered_src( string $handle ): string {
+		if ( ! function_exists( 'wp_scripts' ) ) {
+			return '';
+		}
+		$scripts = wp_scripts();
+		if ( ! $scripts instanceof \WP_Scripts ) {
+			return '';
+		}
+		$reg = $scripts->registered[ $handle ] ?? null;
+		$src = ( is_object( $reg ) && is_string( $reg->src ) ) ? $reg->src : '';
+		if ( '' !== $src && ! preg_match( '#^(?:https?:)?//#i', $src ) ) {
+			$src = (string) ( $scripts->base_url ?? '' ) . $src;
+		}
+		return $src;
+	}
+
+	/**
+	 * Filter: `script_loader_tag`, after every other xSpeed pass. Un-park a
+	 * handle's before/after snippets when its external tag was not delayed.
+	 *
+	 * park_smart_inline() decides before the tag exists, so a later rule
+	 * that keeps the tag live (an opt-out attribute, a non-executable type,
+	 * the late opt-out revert, another plugin's filter) left the snippets
+	 * parked and the script live. The script then ran without the config
+	 * its `before` snippet sets, which is how Elementor's frontend lost
+	 * elementorFrontendConfig. This filter makes that state impossible.
+	 *
+	 * @param string $tag
+	 * @param string $handle
+	 * @param string $src
+	 */
+	public static function unpark_orphaned_smart_inline( $tag, $handle, $src ): string {
+		if ( ! is_string( $tag ) || '' === $tag || '' === (string) $handle || false === stripos( $tag, 'text/xspeed-delayed' ) ) {
+			return (string) $tag;
+		}
+		// Only the external tag in this string can carry data-xs-src. Its
+		// `src` is gone once delayed, so open_tag_offsets() cannot find it.
+		if ( preg_match( '#<script\b[^>]*(?<![-\w])data-xs-src\s*=#i', $tag ) ) {
+			return $tag;
+		}
+		return (string) preg_replace_callback(
+			'#<script\b([^>]*\sid\s*=\s*(["\'])' . preg_quote( (string) $handle, '#' ) . '-js-(?:before|after)\2[^>]*)>#i',
+			static function ( array $m ): string {
+				$attrs = $m[1];
+				if ( 'text/xspeed-delayed' !== self::extract_type( $attrs ) ) {
+					return $m[0];
+				}
+				$orig  = preg_match( '#\sdata-xs-type\s*=\s*(["\'])([^"\']*)\1#i', $attrs, $t ) ? $t[2] : '';
+				$attrs = (string) preg_replace( self::TYPE_ATTR_RE, '', $attrs );
+				$attrs = (string) preg_replace( '#\sdata-xs-(?:delay|type)\s*=\s*(["\'])[^"\']*\1#i', '', $attrs );
+				if ( '' !== $orig ) {
+					$attrs .= ' type="' . esc_attr( $orig ) . '"';
+				}
+				return '<script' . $attrs . '>';
+			},
+			$tag
+		);
 	}
 
 	/**

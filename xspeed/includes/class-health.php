@@ -475,6 +475,17 @@ final class Health {
 			$out[] = $edge_row;
 		}
 
+		// Whether that edge actually obeys "do not store". Read from the
+		// last background probe only; a cold one schedules a run and shows
+		// nothing this paint. See Edge_Mode_Probe.
+		$mode_row = Edge_Mode_Probe::health_row(
+			Edge_Mode_Probe::cached()['verdict'],
+			defined( 'XCLOUD_CFE_PURGE_API_URL' ) || defined( 'XCLOUD_CFE_PURGE_VERSION' )
+		);
+		if ( null !== $mode_row ) {
+			$out[] = $mode_row;
+		}
+
 		// Cache-poisoning Set-Cookie detection (issue #33): a plugin emitting
 		// Set-Cookie on anonymous pageviews forces CDN/edge BYPASS for all
 		// HTML (Cloudflare never caches a response carrying Set-Cookie). Probe

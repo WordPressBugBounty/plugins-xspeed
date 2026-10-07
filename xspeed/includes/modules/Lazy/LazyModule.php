@@ -76,7 +76,14 @@ final class LazyModule extends Module {
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Lazy-load your own videos', 'xspeed' ),
-				'description' => __( 'Videos uploaded to your site download only when played. Autoplaying videos are left alone.', 'xspeed' ),
+				'description' => __( 'Videos uploaded to your site download only when played. An autoplaying video still plays by itself, but its file waits until the video is near the screen. Add data-skip-lazy to a video to leave it alone.', 'xspeed' ),
+			),
+			'video_after_load'       => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Start autoplay videos after page load', 'xspeed' ),
+				'description' => __( 'An autoplaying video, such as a hero background, waits until the page has finished loading, even when it is on screen from the start. Visitors see the poster first, and the video no longer competes with the page\'s images, styles and scripts. Needs "Lazy-load your own videos".', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'lazy_videos' ),
 			),
 			'lazy_background_images' => array(
 				'type'        => 'bool',
@@ -112,7 +119,7 @@ final class LazyModule extends Module {
 				'default'     => array(),
 				'item_type'   => 'string',
 				'label'       => __( 'Excluded images', 'xspeed' ),
-				'description' => __( 'Images and embeds whose tag contains a line here, such as a class or file name, are never lazy-loaded. Useful for logos and hero images.', 'xspeed' ),
+				'description' => __( 'Images, videos and embeds whose tag contains a line here, such as a class or file name, are never lazy-loaded. Useful for logos and hero images.', 'xspeed' ),
 			),
 		);
 	}
@@ -191,6 +198,20 @@ final class LazyModule extends Module {
 		add_filter( 'post_thumbnail_html',  array( Lazy_Loader::class, 'process_html' ), 999 );
 		add_filter( 'get_avatar',           array( Lazy_Loader::class, 'process_html' ), 999 );
 		add_filter( 'widget_text_content',  array( Lazy_Loader::class, 'process_html' ), 999 );
+
+		/**
+		 * Whether media-library images printed in the footer get srcset
+		 * with sizes="auto" and loading="lazy". Core never filters that
+		 * markup, so a footer popup ships its images at full size.
+		 *
+		 * @param bool $enabled Default true while lazy-loading images is on.
+		 */
+		if ( ! empty( $opts['lazy_images'] ) && apply_filters( 'xspeed_lazy_footer_images', true ) ) {
+			add_action( 'template_redirect', array( \XSpeed\Footer_Images::class, 'reset_state' ) );
+			add_action( 'get_footer', array( \XSpeed\Footer_Images::class, 'start' ), PHP_INT_MAX, 0 );
+			add_action( 'wp_footer', array( \XSpeed\Footer_Images::class, 'start' ), PHP_INT_MIN, 0 );
+			add_action( 'wp_footer', array( \XSpeed\Footer_Images::class, 'finish' ), PHP_INT_MAX, 0 );
+		}
 
 		// The facade's click handler is printed only on pages that actually
 		// rendered a facade — a page with no embeds should not carry the
@@ -318,7 +339,10 @@ final class LazyModule extends Module {
 		 * and touches nothing when it finds no autoplay video. That is a
 		 * better trade than missing the one case the feature exists for.
 		 */
-		wp_print_inline_script_tag( Lazy_Loader::autoplay_script(), array( 'id' => 'xspeed-lazy-autoplay' ) );
+		$settings   = $this->get_settings();
+		$after_load = ! empty( $settings['video_after_load'] );
+		$excluded   = is_array( $settings['excluded_images'] ?? null ) ? $settings['excluded_images'] : array();
+		wp_print_inline_script_tag( Lazy_Loader::autoplay_script( $after_load, $excluded ), array( 'id' => 'xspeed-lazy-autoplay' ) );
 	}
 
 	public function cli_commands(): array {

@@ -12,6 +12,62 @@ defined( 'ABSPATH' ) || exit;
 class Cache {
 
 	/**
+	 * Response header the generated server rules stamp themselves with, so a
+	 * cache hit says which version of the rules served it. See
+	 * rules_marker_expected() for what the value means.
+	 */
+	public const RULES_HEADER = 'X-XSpeed-Rules';
+
+	/**
+	 * Response header carrying the unix time the served HTML was generated.
+	 *
+	 * Free owns it on every path where PHP runs, and emits it from the same
+	 * `filemtime()` of the file it is about to send: the drop-in stamps it in
+	 * advanced-cache.php, and the template_redirect serve path stamps it in
+	 * serve_not_modified(). The nginx and Apache static paths never emit it —
+	 * no PHP runs there, so a consumer reads their `Last-Modified` instead.
+	 *
+	 * An add-on cannot supply this value, and edge_headers_for() strips it
+	 * from the `xspeed_edge_cache_headers` result in every context rather
+	 * than asking add-ons not to try. Nothing on the filter's side of the
+	 * seam knows which file is being served: mark() resolves the filter with
+	 * no file and no mtime, so an add-on has only time(), which is when the
+	 * page was SERVED. A downstream purge verifier compares this stamp with
+	 * the moment it asked for the purge, and a stamp that is always "now"
+	 * makes every purge look like it worked — worse than sending nothing.
+	 */
+	public const BUILT_HEADER = 'X-XSpeed-Built';
+
+	/**
+	 * The headers that can grant an edge a lifetime: `Cache-Control`,
+	 * `CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control`,
+	 * `Surrogate-Control`, `Edge-Control`. Matched on the header NAME.
+	 *
+	 * advanced-cache.php carries a copy of this and of the pattern below,
+	 * because the class is not loaded when the drop-in runs. Change all four
+	 * together; EdgeLifetimeEntryCapTest compares them.
+	 */
+	public const EDGE_LIFETIME_HEADER = '/(?:^|-)control$/i';
+
+	/**
+	 * A lifetime directive inside one of those headers, and its seconds.
+	 * See cap_edge_lifetime().
+	 */
+	public const EDGE_LIFETIME_DIRECTIVE = '/(?<![\w-])(max-age|s-maxage)\s*=\s*"?(\d+)"?/i';
+
+	/** Map of rules hash => the settings fingerprint that produced it. */
+	public const RULES_INPUTS_OPTION = 'xspeed_rules_inputs';
+
+	/**
+	 * User meta holding {hash, at}: the rules version this admin says they
+	 * pasted into the server config. See rules_copied().
+	 */
+	public const RULES_COPIED_META = 'xspeed_nginx_rules_copied';
+
+	/** How many rules versions the map above remembers. */
+	private const RULES_INPUTS_KEPT = 10;
+
+	/**
 	 * Output-buffer nesting level at which we opened our cache buffer, so
 	 * `close_buffer()` can flush ONLY our buffer and never disturb a buffer
 	 * another plugin pushed on top of (or below) ours.
@@ -92,6 +148,29 @@ class Cache {
 	 * @var bool
 	 */
 	private static $render_completed = false;
+
+	/**
+	 * Minifier::purge_stamp() when this request's cache buffer opened.
+	 *
+	 * A render names its minified and combined files while it runs and is
+	 * stored when it ends. A purge that deletes those files in between would
+	 * otherwise leave a stored page linking files that are gone, for the
+	 * whole TTL. The stamp changes whenever such a purge deletes anything, so
+	 * a different value at store time means "do not store this one".
+	 *
+	 * Null when maybe_start_cache() opened no buffer. A direct call (tests,
+	 * add-ons) has nothing to compare against and stores as before.
+	 *
+	 * @var string|null
+	 */
+	private static $asset_stamp_at_open = null;
+
+	/**
+	 * The snapshot above, carried to the deferred (translated) writer.
+	 *
+	 * @var string|null
+	 */
+	private static $deferred_asset_stamp = null;
 
 	/**
 	 * Hooks that get an argument-aware handler instead of a blanket purge.
@@ -216,7 +295,12 @@ class Cache {
 					);
 				}
 			);
-			add_action( $hook, array( 'XSpeed\\Minifier', 'purge_minified' ) );
+			// No purge_minified() here. Minified and combined files are named
+			// by content, so a render after this purge links the same names
+			// when nothing changed and new names when something did. Deleting
+			// them only opened a window where cached and in-flight pages link
+			// files that are gone, and on a network it took every subsite's
+			// files with it.
 		}
 
 		// Updating a plugin, theme or core changes the markup and the assets
@@ -229,9 +313,9 @@ class Cache {
 		// The stale copy is not merely old, it is wrong in a way the user
 		// cannot see the cause of: they update a plugin to get a fix, the
 		// cache keeps serving the pre-fix HTML, and the update looks like it
-		// did nothing. Minified assets do regenerate on their own (their key
-		// includes the source filemtime), which makes it worse rather than
-		// better — the cached pages still link the PREVIOUS hashes.
+		// did nothing. Minified assets do regenerate on their own (they are
+		// named by content), which makes it worse rather than better — the
+		// cached pages still link the PREVIOUS names.
 		//
 		// Purge unconditionally on any completed update. Scoping it to
 		// "plugins that enqueue front-end assets" is not knowable here, and a
@@ -287,6 +371,13 @@ class Cache {
 		// cache for a language-pack-only run. Matches what LiteSpeed binds.
 		// (#298)
 		add_action( 'automatic_updates_complete', array( __CLASS__, 'purge_after_auto_updates' ), 10, 1 );
+		// A Customizer publish changes theme mods, Additional CSS, the site
+		// identity and widget areas, so markup and inline CSS change on every
+		// page. It fires none of the hooks above. theme_mods_* is an ordinary
+		// option, and Additional CSS is a non-viewable `custom_css` post that
+		// the save_post gate rightly ignores. Without this, cached pages kept
+		// the old header, colours and custom CSS for the whole TTL.
+		add_action( 'customize_save_after', array( __CLASS__, 'on_customize_save' ), 10, 0 );
 		// …except the four hooks above that fire on ordinary visitor actions.
 		// Attached bare, purge_all() can't see WHAT changed, so on a store
 		// every order, every product review and every checkout
@@ -301,8 +392,20 @@ class Cache {
 		// VIEWABILITY, not on storage mode — which fixes both modes at once,
 		// and generalises to Flamingo (#229) and Tutor LMS (#231) too.
 		remove_action( 'save_post', array( __CLASS__, 'purge_all' ) );
-		remove_action( 'save_post', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'save_post', array( __CLASS__, 'on_save_post' ), 10, 2 );
+		// Bracket every post save, so a WooCommerce product save that runs
+		// inside one (wp-admin's Update) can tell on_save_post() is about to
+		// clear the whole site for the same product. See purge_product().
+		add_action( 'save_post', array( __CLASS__, 'on_post_save_start' ), 0, 2 );
+		add_action( 'save_post', array( __CLASS__, 'on_post_save_end' ), PHP_INT_MAX, 1 );
+		// The narrow purge runs here, after the REST API has set the terms
+		// (it sets them after `save_post`), with the post as it was before.
+		add_action( 'wp_after_insert_post', array( __CLASS__, 'on_after_insert_post' ), 10, 4 );
+		add_action( 'shutdown', array( __CLASS__, 'flush_pending_saves' ), 1, 0 );
+		add_action( 'update_option_sticky_posts', array( __CLASS__, 'on_sticky_posts_change' ), 10, 2 );
+		// The first sticky post on a site creates the option instead.
+		add_action( 'add_option_sticky_posts', array( __CLASS__, 'on_sticky_posts_added' ), 10, 2 );
+		add_action( 'pre_post_update', array( __CLASS__, 'on_pre_post_update' ), 10, 2 );
 		add_action( 'before_delete_post', array( __CLASS__, 'on_post_removed' ), 10, 2 );
 		add_action( 'trashed_post', array( __CLASS__, 'on_post_removed' ), 10, 2 );
 		// wp_delete_post() hands an attachment to wp_delete_attachment() and
@@ -313,16 +416,13 @@ class Cache {
 		add_action( 'delete_attachment', array( __CLASS__, 'on_post_removed' ), 10, 2 );
 
 		remove_action( 'comment_post', array( __CLASS__, 'purge_all' ) );
-		remove_action( 'comment_post', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'comment_post', array( __CLASS__, 'on_comment_post' ), 10, 3 );
 		add_action( 'wp_set_comment_status', array( __CLASS__, 'on_comment_status' ), 10, 2 );
 
 		remove_action( 'user_register', array( __CLASS__, 'purge_all' ) );
-		remove_action( 'user_register', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'user_register', array( __CLASS__, 'on_user_change' ) );
 
 		remove_action( 'profile_update', array( __CLASS__, 'purge_all' ) );
-		remove_action( 'profile_update', array( 'XSpeed\\Minifier', 'purge_minified' ) );
 		add_action( 'profile_update', array( __CLASS__, 'on_user_change' ) );
 
 		// Product data lives in post meta and lookup tables, NOT in wp_posts,
@@ -340,11 +440,18 @@ class Cache {
 		// page stale.
 		if ( class_exists( 'WooCommerce' ) ) {
 			foreach ( array( 'woocommerce_update_product', 'woocommerce_new_product' ) as $wc_hook ) {
-				add_action( $wc_hook, array( __CLASS__, 'purge_product' ) );
+				add_action( $wc_hook, array( __CLASS__, 'on_product_saved' ) );
 			}
-			// Direct stock writes bypass the CRUD entirely.
-			add_action( 'woocommerce_product_set_stock', array( __CLASS__, 'purge_product_object' ) );
-			add_action( 'woocommerce_variation_set_stock', array( __CLASS__, 'purge_product_object' ) );
+			// wc_update_product_stock() writes the stock with SQL, saves the
+			// product (which fires woocommerce_update_product above), then
+			// fires *_set_stock. The *_before_set_stock actions open that
+			// write, so the *_set_stock that closes it can tell the save
+			// inside it already purged. With `$updating` set it skips the
+			// save, and *_set_stock is then the only purge.
+			add_action( 'woocommerce_product_before_set_stock', array( __CLASS__, 'on_product_stock_write' ) );
+			add_action( 'woocommerce_variation_before_set_stock', array( __CLASS__, 'on_product_stock_write' ) );
+			add_action( 'woocommerce_product_set_stock', array( __CLASS__, 'on_product_stock_set' ) );
+			add_action( 'woocommerce_variation_set_stock', array( __CLASS__, 'on_product_stock_set' ) );
 			add_action( 'woocommerce_product_set_stock_status', array( __CLASS__, 'purge_product' ) );
 			add_action( 'woocommerce_variation_set_stock_status', array( __CLASS__, 'purge_product' ) );
 		}
@@ -382,9 +489,9 @@ class Cache {
 		// lives in the legacy blob (cache_enabled is special and goes
 		// through Cache::toggle anyway).
 
-		// Any settings change — purge caches so changes take effect.
+		// Any settings change — purge caches so changes take effect. Minified
+		// files are named by content, so there is nothing to delete for them.
 		self::purge_all( 'settings change' );
-		Minifier::purge_minified();
 	}
 
 	/**
@@ -450,8 +557,7 @@ class Cache {
 			return;
 		}
 
-		// Guard against re-entry: purge_all() and purge_minified() can write
-		// options of their own (stats, timestamps), and a nested purge would
+		// Guard against re-entry: purge_all() can write options of its own (stats, timestamps), and a nested purge would
 		// both waste work and risk recursing through this same hook.
 		static $purging = false;
 		if ( $purging ) {
@@ -460,7 +566,6 @@ class Cache {
 		$purging = true;
 
 		self::purge_all( 'settings change' );
-		Minifier::purge_minified();
 
 		$purging = false;
 	}
@@ -476,12 +581,35 @@ class Cache {
 	 * responses stay clean. Slugs are fixed per gate — never the matched
 	 * pattern, cookie or user-agent, which would echo request input back.
 	 *
-	 * @param string $value  HIT (php) | MISS | BYPASS.
-	 * @param string $reason Fixed slug naming the gate, for BYPASS only.
+	 * @param string   $value         HIT (php) | MISS | BYPASS.
+	 * @param string   $reason        Fixed slug naming the gate, for BYPASS only.
+	 * @param int|null $lifetime_left On a HIT, the seconds the served entry has
+	 *                                left when it has a lifetime of its own;
+	 *                                null when it follows the site's. See
+	 *                                entry_lifetime_left().
 	 */
-	private static function mark( string $value, string $reason = '' ): void {
+	private static function mark( string $value, string $reason = '', ?int $lifetime_left = null ): void {
 		self::$status_header = $value;
 		self::$bypass_reason = $reason;
+		self::$edge_headers  = array();
+
+		// A served-from-cache response may carry edge/CDN headers an add-on
+		// contributes — `CDN-Cache-Control`, `Cache-Tag` and friends. Only a
+		// HIT resolves them here. A BYPASS never does: the response was
+		// deliberately excluded from our cache, so telling a CDN to hold it
+		// for a month would cache at the edge exactly what we refused to
+		// cache here. A MISS never does either, stored or not: it is the
+		// first render, and the one most likely to be replaced once critical
+		// CSS and unused CSS have been generated. Pinning it at the edge pins
+		// the version xSpeed is about to improve on. The edge caches from the
+		// first HIT instead — one render later, and the right one.
+		//
+		// Resolved before the headers_sent() guard so the decision is
+		// recorded (and observable in tests) even on a request that can no
+		// longer send headers; only the emission below is conditional.
+		if ( 'HIT' === self::edge_status( $value ) ) {
+			self::$edge_headers = self::edge_headers_for( 'HIT' );
+		}
 
 		// Every status, not just a HIT. A page we declined to cache is the
 		// one an edge most needs telling about: it goes out naked today, and
@@ -491,6 +619,12 @@ class Cache {
 		// recorded (and observable in tests) even on a request that can no
 		// longer send headers; only the emission below is conditional.
 		self::$edge_headers = self::edge_headers_for( self::edge_status( $value ), 'request', $reason );
+
+		// The same countdown the drop-in applies to this entry, so the two
+		// PHP serve paths tell the edge the same thing about one page.
+		if ( null !== $lifetime_left && 'HIT' === self::edge_status( $value ) ) {
+			self::$edge_headers = self::cap_edge_lifetime( self::$edge_headers, $lifetime_left );
+		}
 
 		if ( headers_sent() ) {
 			return;
@@ -515,6 +649,334 @@ class Cache {
 	 */
 	private static function edge_status( string $value ): string {
 		return 0 === strpos( $value, 'HIT' ) ? 'HIT' : $value;
+	}
+
+	/**
+	 * Hash a generated rule set so the rules can identify themselves.
+	 *
+	 * @param string[] $lines Every line of the rule set EXCEPT the marker.
+	 */
+	private static function rules_hash( array $lines ): string {
+		return substr( sha1( implode( "\n", $lines ) ), 0, 8 );
+	}
+
+	/**
+	 * Insert the self-describing marker directive into a generated rule set.
+	 *
+	 * The hash is taken over the rule set WITHOUT this line, and that is the
+	 * whole trick: hashing the finished text instead would mean the act of
+	 * adding the marker changed the value the marker advertises, the probe
+	 * would never see a match, and every correctly installed block would
+	 * report itself out of date forever. The one property worth a test of its
+	 * own — RewriteProbeRulesStateTest covers it.
+	 *
+	 * More than one template is allowed because Apache needs the same marker
+	 * twice, under two environment-variable names (see rewrite_block_lines).
+	 * All of them carry the SAME hash, taken over the marker-less rule set, so
+	 * adding the second directive cannot change the value either advertises.
+	 *
+	 * @param string[] $lines     The rule set, with no marker line in it.
+	 * @param string[] $templates sprintf templates for the directives; `%s` is the hash.
+	 * @param int      $at        Index to insert the marker at.
+	 * @return string[]
+	 */
+	private static function with_rules_marker( array $lines, array $templates, int $at ): array {
+		$hash      = self::rules_hash( $lines );
+		$directives = array();
+		foreach ( $templates as $template ) {
+			$directives[] = sprintf( $template, $hash );
+		}
+		array_splice( $lines, $at, 0, $directives );
+		return $lines;
+	}
+
+	/**
+	 * The rules hash the CURRENT settings generate, i.e. what a correctly
+	 * installed rule set would be sending back.
+	 *
+	 * Read out of the generated artifact rather than recomputed, so there is
+	 * exactly one definition of the hash and no way for the generator and the
+	 * expectation to drift apart. Empty on a server whose fast path we do not
+	 * generate rules for.
+	 */
+	public static function rules_marker_expected(): string {
+		$type = Server::type();
+		if ( Server::NGINX === $type ) {
+			return self::extract_rules_marker( (string) self::nginx_snippet() );
+		}
+		if ( Server::APACHE === $type ) {
+			return self::extract_rules_marker( implode( "\n", self::rewrite_block_lines() ) );
+		}
+		return '';
+	}
+
+	/** Pull the marker value out of a generated rule set ('' when absent). */
+	public static function extract_rules_marker( string $source ): string {
+		if ( preg_match( '/' . preg_quote( self::RULES_HEADER, '/' ) . ' "([0-9a-f]{8})"/', $source, $m ) ) {
+			return $m[1];
+		}
+		return '';
+	}
+
+	/**
+	 * Fingerprint of every setting that feeds the generated server rules.
+	 *
+	 * Values are hashed rather than stored: this map is written from a read
+	 * path and has no business becoming a second copy of the user's exclusion
+	 * lists. A per-key hash is enough — the point is to name WHICH setting
+	 * moved between two rule versions, not to reconstruct the old value.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function rules_inputs(): array {
+		$cache_opts  = Settings_Manager::get( 'cache' );
+		$fingerprint = static function ( $value ): string {
+			$flat = array();
+			foreach ( (array) $value as $key => $item ) {
+				$flat[] = $key . '=' . ( is_scalar( $item ) ? (string) $item : '' );
+			}
+			return substr( sha1( implode( "\x1f", $flat ) ), 0, 8 );
+		};
+
+		return array(
+			'excluded_cookies'   => $fingerprint( $cache_opts['excluded_cookies'] ?? array() ),
+			'bypass_user_agents' => $fingerprint( $cache_opts['bypass_user_agents'] ?? array() ),
+			'excluded_urls'      => $fingerprint( $cache_opts['excluded_urls'] ?? array() ),
+			'edge_headers'       => $fingerprint( self::edge_headers_for( 'HIT', 'rules' ) ),
+			'static_dir'         => $fingerprint( array( XSPEED_CACHE_STATIC_DIR ) ),
+		);
+	}
+
+	/**
+	 * Remember which settings produced a rules version.
+	 *
+	 * Without this a stale verdict can only say "stale". With it, the hash the
+	 * server sent back is a key into what the site's settings looked like when
+	 * those rules were generated, so the dashboard can name what changed since
+	 * the user last pasted. Bounded to the last few versions — the map exists
+	 * to explain a recent drift, not to keep a history.
+	 *
+	 * @param array<string,string> $inputs Fingerprint from rules_inputs().
+	 */
+	private static function remember_rules_inputs( string $hash, array $inputs ): void {
+		if ( '' === $hash ) {
+			return;
+		}
+		$map = get_option( self::RULES_INPUTS_OPTION, array() );
+		if ( ! is_array( $map ) ) {
+			$map = array();
+		}
+		if ( isset( $map[ $hash ] ) && $map[ $hash ] === $inputs ) {
+			return;
+		}
+		$map[ $hash ] = $inputs;
+		if ( count( $map ) > self::RULES_INPUTS_KEPT ) {
+			$map = array_slice( $map, -self::RULES_INPUTS_KEPT, null, true );
+		}
+		update_option( self::RULES_INPUTS_OPTION, $map, false );
+	}
+
+	/**
+	 * Which settings changed between the installed rules and the current ones.
+	 *
+	 * Empty when the installed version predates the map (nothing to compare
+	 * against) — the caller then says "out of date" without naming a cause,
+	 * which is honest.
+	 *
+	 * @param array<string,string> $current Fingerprint from rules_inputs().
+	 * @return string[] Setting keys.
+	 */
+	private static function changed_rules_inputs( string $observed, array $current ): array {
+		$map = get_option( self::RULES_INPUTS_OPTION, array() );
+		if ( ! is_array( $map ) || ! isset( $map[ $observed ] ) || ! is_array( $map[ $observed ] ) ) {
+			return array();
+		}
+
+		$was     = $map[ $observed ];
+		$changed = array();
+		foreach ( $current as $key => $value ) {
+			if ( ! array_key_exists( $key, $was ) || $was[ $key ] !== $value ) {
+				$changed[] = $key;
+			}
+		}
+		return $changed;
+	}
+
+	/**
+	 * Whether the rules the server is running are the rules these settings
+	 * generate.
+	 *
+	 * Nothing in WordPress can read a hand-pasted nginx server block, so
+	 * before this the dashboard could only guess — and guessed by telling
+	 * everyone to re-paste after every settings change. The generated rules
+	 * now carry their own hash and the probe reads it back:
+	 *
+	 *   current — the marker matches what these settings generate.
+	 *   stale   — a marker came back, from a different version of the rules.
+	 *   absent  — the probe reached a verdict and saw no marker: either no
+	 *             rules are installed (the request fell through to PHP) or
+	 *             they predate the marker. Either way the fix is the same.
+	 *   unknown — the probe could not tell, or this server has no rule set we
+	 *             generate.
+	 *
+	 * A marker outranks the probe's own `active` verdict: the marker is direct
+	 * evidence of which rules answered, while `active` is inferred from
+	 * response shape.
+	 *
+	 * Scope: the static-cache rules only — nginx_snippet() on nginx, the
+	 * .htaccess block on Apache. full_nginx_server_block() pastes those
+	 * alongside other modules' directives, and a change to one of those does
+	 * NOT move this hash. Hashing the aggregate would mean the marker inside
+	 * the location block had to know the text it is embedded in, and the
+	 * snippet would hash differently depending on which caller asked for it.
+	 * Callers wording this for a human should say "cache rules", not "your
+	 * nginx config".
+	 *
+	 * `copied` is the mirror of what this admin last pasted — see
+	 * rules_copied(). It is always present, null included, because a client
+	 * keys on the key existing to decide whether the server remembers at all.
+	 *
+	 * @param array $probe Raw result from probe_static_rewrite().
+	 * @return array{expected:string,observed:string,state:string,changed:string[],copied:array{hash:string,at:int}|null}
+	 */
+	public static function rules_state( array $probe ): array {
+		$expected = self::rules_marker_expected();
+		$observed = (string) ( $probe['rules'] ?? '' );
+		$copied   = self::rules_copied();
+
+		if ( '' === $expected ) {
+			return array(
+				'expected' => '',
+				'observed' => $observed,
+				'state'    => 'unknown',
+				'changed'  => array(),
+				'copied'   => $copied,
+			);
+		}
+
+		$inputs = self::rules_inputs();
+		self::remember_rules_inputs( $expected, $inputs );
+
+		if ( '' !== $observed ) {
+			return array(
+				'expected' => $expected,
+				'observed' => $observed,
+				'state'    => $observed === $expected ? 'current' : 'stale',
+				'changed'  => $observed === $expected ? array() : self::changed_rules_inputs( $observed, $inputs ),
+				'copied'   => $copied,
+			);
+		}
+
+		// `absent` is a claim about what is installed, so it takes a probe that
+		// completed a round trip and read the response headers. A result that
+		// is still pending, one whose loopback failed, one a CDN answered, and
+		// one that never got off the ground (no host in home_url, no writable
+		// probe dir — neither of which sets `inconclusive`, and both of which
+		// arrive here with no status code) all leave us knowing nothing.
+		if ( empty( $probe['code'] ) || ! empty( $probe['pending'] ) || ! empty( $probe['inconclusive'] ) ) {
+			return array(
+				'expected' => $expected,
+				'observed' => '',
+				'state'    => 'unknown',
+				'changed'  => array(),
+				'copied'   => $copied,
+			);
+		}
+
+		return array(
+			'expected' => $expected,
+			'observed' => '',
+			'state'    => 'absent',
+			'changed'  => array(),
+			'copied'   => $copied,
+		);
+	}
+
+	/**
+	 * Which version of the rules this admin says they pasted into the server.
+	 *
+	 * Their claim, not evidence — the probe is the evidence, and where the
+	 * probe can answer this is ignored. It exists for the `unknown` state: a
+	 * host whose loopback is blocked, or one behind a CDN that answers the
+	 * probe itself, where nothing can read back what is installed. There the
+	 * only thing left to go on is that someone said they had done it, and
+	 * without a record of that the panel asks every admin to paste the block
+	 * again forever.
+	 *
+	 * Per user rather than per site, because it is a claim a person made. A
+	 * second admin on the same site has not pasted anything and should not be
+	 * told the work is done. Null when nobody has claimed this version, when
+	 * the stored value is not a shape we wrote, or when there is no current
+	 * user at all (WP-CLI, cron).
+	 *
+	 * @return array{hash:string,at:int}|null
+	 */
+	public static function rules_copied(): ?array {
+		if ( ! function_exists( 'get_current_user_id' ) || ! function_exists( 'get_user_meta' ) ) {
+			return null;
+		}
+		$user_id = (int) get_current_user_id();
+		if ( $user_id <= 0 ) {
+			return null;
+		}
+
+		$stored = get_user_meta( $user_id, self::RULES_COPIED_META, true );
+		if ( ! is_array( $stored ) ) {
+			return null;
+		}
+
+		$hash = (string) ( $stored['hash'] ?? '' );
+		$at   = (int) ( $stored['at'] ?? 0 );
+		if ( ! self::is_rules_hash( $hash ) || $at <= 0 ) {
+			return null;
+		}
+
+		return array(
+			'hash' => $hash,
+			'at'   => $at,
+		);
+	}
+
+	/**
+	 * Record that this admin pasted the rules whose marker is $hash.
+	 *
+	 * Rejects anything that is not one of our markers rather than storing it,
+	 * so the mirror can only ever hold a value rules_marker_expected() could
+	 * also produce — a stored string that matches nothing would read as "a
+	 * different version is installed" forever.
+	 *
+	 * @param string $hash The 8-hex rules marker the admin copied.
+	 * @return array{hash:string,at:int}|null The stored record, or null if refused.
+	 */
+	public static function remember_rules_copied( string $hash ): ?array {
+		// Trimmed but not case-folded: extract_rules_marker() reads a marker
+		// back in lower case only, so an upper-case claim would never match
+		// anything the probe could observe. Refuse it rather than store a
+		// value that can only ever read as a different version.
+		$hash = trim( $hash );
+		if ( ! self::is_rules_hash( $hash ) ) {
+			return null;
+		}
+		if ( ! function_exists( 'get_current_user_id' ) || ! function_exists( 'update_user_meta' ) ) {
+			return null;
+		}
+		$user_id = (int) get_current_user_id();
+		if ( $user_id <= 0 ) {
+			return null;
+		}
+
+		$record = array(
+			'hash' => $hash,
+			'at'   => time(),
+		);
+		update_user_meta( $user_id, self::RULES_COPIED_META, $record );
+
+		return $record;
+	}
+
+	/** Whether a string is shaped like one of our rules markers. */
+	public static function is_rules_hash( string $hash ): bool {
+		return 1 === preg_match( '/^[0-9a-f]{8}$/', $hash );
 	}
 
 	/** Record a bypass gate and answer "don't cache" in one statement. */
@@ -641,6 +1103,23 @@ class Cache {
 		'location',
 		'x-xspeed-cache',
 		'x-xspeed-edge-hold',
+		// `X-XSpeed-Built` says when THIS PAGE's HTML was generated, which is
+		// what a downstream verifier compares against the moment it asked for
+		// a purge. Free owns it and never takes it from a filter, in any
+		// context — see the BUILT_HEADER docblock.
+		//
+		// Under `bake` a supplied value would be frozen into an artifact and
+		// report when the artifact was written: identical on every page and
+		// never moving. Under `request` it is no better, because the filter
+		// runs from mark() with no file and no mtime in reach, so the only
+		// value anything can produce there is time() — the moment of the
+		// SERVE, not of the build. Both make every purge check pass.
+		//
+		// Free stamps the real value where it has the file: the drop-in and
+		// serve_not_modified(), both from filemtime(). The static serve paths
+		// run no PHP and carry no stamp at all; their `Last-Modified` is read
+		// instead.
+		'x-xspeed-built',
 	);
 
 	/**
@@ -661,8 +1140,24 @@ class Cache {
 	 * has a second benefit: because per_entry_edge_headers() compares `store`
 	 * against `bake`, a `pending` hold that never fires leaves the two
 	 * agreeing, which keeps the page on the static tree.
+	 *
+	 * `query-variant` waits for evidence as well. It is about purges. An edge
+	 * keeps a separate copy for every query string, and a purge of the plain
+	 * URL never reaches them. With no edge in front there are no copies.
 	 */
 	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split' );
+
+	/**
+	 * True only while query_variant_edge_headers() bakes the drop-in's
+	 * answer for a URL no purge names.
+	 *
+	 * A bake has no request to read, so this is how it asks "what if this
+	 * HIT carried a param no purge names?". The drop-in answers that for
+	 * itself, per request. Never true outside that one call.
+	 *
+	 * @var bool
+	 */
+	private static $baking_query_variant = false;
 
 	/**
 	 * Is a module still going to change this page after this response?
@@ -736,12 +1231,115 @@ class Cache {
 	}
 
 	/**
+	 * Is this cached page being served for a URL that no purge names?
+	 *
+	 * Free serves `/post?utm_source=x` from the entry stored for `/post`,
+	 * which is what the ignored-params list is for. An edge does not. It
+	 * keys on the full URL, so every query string becomes its own copy. A
+	 * purge that names `/post` clears one copy and leaves the others for the
+	 * whole edge lifetime. A newsletter link can then serve last month's
+	 * page. So such a HIT is held, and the edge keeps only URLs a purge can
+	 * name. See query_carries_unpurged_param() for which query strings count.
+	 *
+	 * A HIT only. A MISS is already held as `miss`, and a BYPASS never
+	 * reached the cache. And `request` only, because the query string belongs
+	 * to the request, not to the entry. One stored file answers `/post` and
+	 * every variant of it, so a hold written into its sidecar under `store`
+	 * would be replayed by the drop-in for the plain URL as well. A `bake`
+	 * says no unless query_variant_edge_headers() is asking for the drop-in.
+	 *
+	 * @param string $status  `HIT`, `MISS` or `BYPASS`.
+	 * @param string $context `request`, `store` or `bake`.
+	 */
+	private static function serves_query_variant( string $status, string $context ): bool {
+		if ( 'HIT' !== $status ) {
+			return false;
+		}
+		if ( 'bake' === $context ) {
+			return self::$baking_query_variant;
+		}
+
+		return 'request' === $context && self::query_carries_unpurged_param();
+	}
+
+	/**
+	 * Does this request's query string carry a param that keeps its URL out
+	 * of every purge?
+	 *
+	 * Two kinds do. A param the cache key leaves out, which is anything on
+	 * the ignored-params list, judged by query_key_is_ignored() against the
+	 * same setting should_cache() reads. And the search and query-form feed
+	 * params (`s`, FEED_QUERY_PARAMS). Those have entries keyed their own
+	 * way, but they belong to opt-in caches whose URLs no purge names either.
+	 *
+	 * Any other param that reaches a HIT is part of the page's own address,
+	 * which a purge names, so it is not held. A plain-permalink route such
+	 * as `/?page_id=2` is the case this leaves alone.
+	 */
+	private static function query_carries_unpurged_param(): bool {
+		$query_raw = isset( $_SERVER['QUERY_STRING'] ) ? (string) wp_unslash( $_SERVER['QUERY_STRING'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- parsed for its keys only, as should_cache() does; never echoed or stored.
+		if ( '' === trim( $query_raw ) ) {
+			return false;
+		}
+
+		parse_str( $query_raw, $params );
+		$cache_opts = Settings_Manager::get( 'cache' );
+		$ignored    = is_array( $cache_opts['ignored_query_params'] ?? null ) ? $cache_opts['ignored_query_params'] : array();
+		foreach ( array_keys( $params ) as $key ) {
+			$key = (string) $key;
+			if ( 's' === $key || in_array( $key, self::FEED_QUERY_PARAMS, true ) ) {
+				return true;
+			}
+			if ( self::query_key_is_ignored( $key, $ignored ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The edge answer the drop-in sends for a cached page served for a URL
+	 * no purge names, or an empty array when that answer is the same as the
+	 * plain URL's.
+	 *
+	 * The drop-in runs before plugins load and cannot ask edge_headers_for(),
+	 * so this is baked in next to the plain answer. The drop-in applies it
+	 * when a param in the query string matches the ignored-params list it
+	 * already reads (`.ignored-query-params`, written from the same setting
+	 * by sync_query_allowlist()). Search and feed params never reach it,
+	 * because it hands those requests to PHP. The nginx and Apache
+	 * rules need no copy. Both refuse any request with a query string
+	 * (`if ($args)`, `RewriteCond %{QUERY_STRING} ^$`), so a variant always
+	 * reaches PHP.
+	 *
+	 * Empty when the two answers agree. That covers no edge being known,
+	 * a filter vetoing the hold, and a site where every page is held
+	 * already (mobile-split). The drop-in then sends what it sends for the
+	 * plain URL, including any sidecar the page has.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function query_variant_edge_headers(): array {
+		$plain = self::edge_headers_for( 'HIT', 'bake' );
+
+		self::$baking_query_variant = true;
+		try {
+			$variant = self::edge_headers_for( 'HIT', 'bake' );
+		} finally {
+			self::$baking_query_variant = false;
+		}
+
+		return $variant === $plain ? array() : $variant;
+	}
+
+	/**
 	 * Why, if at all, a cache in front of us should refuse to store this.
 	 *
 	 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 	 * @param string $context       `request`, `store` or `bake`.
 	 * @param string $bypass_reason The gate slug, for BYPASS only.
-	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|pending.
+	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|pending|query-variant.
 	 */
 	private static function edge_hold_reason( string $status, string $context, string $bypass_reason ): string {
 		$reason = '';
@@ -781,6 +1379,11 @@ class Cache {
 			$reason = 'pending';
 		} elseif ( 'MISS' === $status ) {
 			$reason = 'miss';
+		} elseif ( self::serves_query_variant( $status, $context ) ) {
+			// Last, so it only adds a hold where there was none. A variant
+			// still waiting for its CSS says `pending`, which is also true,
+			// and the CSS modules are still asked on every HIT as before.
+			$reason = 'query-variant';
 		}
 
 		/**
@@ -788,7 +1391,7 @@ class Cache {
 		 *
 		 * Return '' to veto a hold, or a reason string to force one.
 		 *
-		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|pending.
+		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|pending|query-variant.
 		 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 		 * @param string $context       `request`, `store` or `bake`.
 		 * @param string $bypass_reason The gate slug, for BYPASS only.
@@ -817,9 +1420,7 @@ class Cache {
 	 * nothing about whose data is on the page.
 	 */
 	private static function path_is_a_personal_exclusion( string $bypass_reason ): bool {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- reading the path of the request being served; there is no form here to nonce.
-		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
-		$path = (string) strtok( $uri, '?' );
+		$path = self::request_path();
 		if ( '' === $path ) {
 			return false;
 		}
@@ -854,7 +1455,7 @@ class Cache {
 			)
 		);
 
-		return array() !== $personal && Glob_Matcher::any_match( $personal, $path );
+		return array() !== $personal && self::path_matches_exclusions( $personal, $path );
 	}
 
 	/**
@@ -864,33 +1465,53 @@ class Cache {
 	 * @param string $context       `request` when resolved per request on the
 	 *                              PHP serve path, `store` when resolved for
 	 *                              one entry's sidecar, `bake` when resolved
-	 *                              once and frozen into an artifact.
+	 *                              once and frozen into the drop-in, `rules`
+	 *                              when resolved once for the nginx or Apache
+	 *                              static block.
 	 * @param string $bypass_reason The gate slug, for BYPASS only.
 	 * @return array<string,string>
 	 */
 	public static function edge_headers_for( string $status, string $context = 'request', string $bypass_reason = '' ): array {
+		// `rules` is a bake in every respect but one: the cache-headers
+		// filter is told it is answering for a pasted server rule. Such a
+		// rule serves every static HIT for as long as it stays pasted, and
+		// nothing regenerates it when the site's expiry or a page's own
+		// lifetime (a nonce cap) changes, so a lifetime given there cannot
+		// follow the page. The drop-in is rewritten by auto_heal(); a paste
+		// is not.
+		$filter_context = $context;
+		if ( 'rules' === $context ) {
+			$context = 'bake';
+		}
+
 		$base = array();
 		if ( 'HIT' === $status ) {
 			/**
 			 * Filter: xspeed_edge_cache_headers
 			 *
-			 * Response headers to add to a cached HTML response. A HIT-only
-			 * contract: a lifetime is a promise that this copy is worth
-			 * keeping, and neither a first render nor a page we refused to
-			 * cache is one.
+			 * Response headers to add to a cached HTML response. The lifetime
+			 * is HIT-only: it is a promise that this copy is worth keeping,
+			 * and neither a first render nor a page we refused to cache is
+			 * one. The filter is also asked with `MISS` when a first render
+			 * is held, and only the `Cache-Tag` from that answer is sent, so
+			 * a purge can name a copy an edge stored despite the hold.
 			 *
-			 * The same filter feeds three regimes and `$context` says which.
+			 * The same filter feeds four regimes and `$context` says which.
 			 * On the PHP serve path it runs per request (`request`); at store
-			 * time it runs for one entry (`store`); when the drop-in or a
-			 * server rule is generated it runs once (`bake`) and the result
-			 * answers for every static HIT on the site. Anything per-page — a
-			 * post id in a cache tag, say — must be skipped under `bake`.
+			 * time it runs for one entry (`store`); when the drop-in is
+			 * generated it runs once (`bake`) and the result answers for
+			 * every drop-in HIT on the site; when the nginx or Apache static
+			 * block is generated it runs once (`rules`). Anything per-page — a
+			 * post id in a cache tag, say — must be skipped under `bake` and
+			 * `rules`. A server rule serves every static HIT for as long as it
+			 * stays pasted, so a lifetime here can't follow the page: send
+			 * none under `rules`.
 			 *
 			 * @param array<string,string> $headers Header name => value.
-			 * @param string               $status  Always `HIT` here.
-			 * @param string               $context `request`, `store` or `bake`.
+			 * @param string               $status  `HIT`, or `MISS` when only the tag of a held first render is wanted.
+			 * @param string               $context `request`, `store`, `bake` or `rules`.
 			 */
-			$base = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'HIT', $context ) );
+			$base = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'HIT', $filter_context ) );
 		}
 
 		$reason = self::edge_hold_reason( $status, $context, $bypass_reason );
@@ -929,8 +1550,22 @@ class Cache {
 		// describe the same response and would contradict each other. The
 		// cache tag survives, because a later purge still has to be able to
 		// name whatever the edge picked up on its own terms.
-		if ( isset( $base['Cache-Tag'] ) ) {
-			$hold['Cache-Tag'] = $base['Cache-Tag'];
+		//
+		// On a HIT the tag came with `$base`. A MISS has no `$base`, and that
+		// is the case that mattered most: the first render after any purge.
+		// An edge whose rule overrides the origin's lifetime stores it
+		// despite the hold, and with no tag on it the next tag purge cannot
+		// reach it, so an edit stayed stale for the edge's whole lifetime
+		// (QA, 2026-09-23). So a held MISS asks the same filter for its tag
+		// and keeps the tag alone; the lifetime in the answer is dropped,
+		// because the hold is the instruction for this response.
+		$tag = $base['Cache-Tag'] ?? '';
+		if ( '' === $tag && 'MISS' === $status ) {
+			$tagged = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'MISS', $filter_context ) );
+			$tag    = $tagged['Cache-Tag'] ?? '';
+		}
+		if ( '' !== $tag ) {
+			$hold['Cache-Tag'] = $tag;
 		}
 
 		// Never argue with a stronger answer WordPress already gave. It sends
@@ -971,16 +1606,17 @@ class Cache {
 		// The nginx and Apache blocks are a third path in principle and
 		// almost never in practice: they are only installed when
 		// static_rewrite_allowed() is true, and the one reason a stock site
-		// can hold under `bake` is `mobile-split`, which is exactly what
-		// makes that false. They will carry it where a site forces a hold
-		// through `xspeed_edge_hold_reason`, and otherwise have no hold to
-		// carry.
+		// can hold in their bake is `mobile-split`, which is exactly what
+		// makes that false. `query-variant` is baked for the drop-in alone,
+		// since both blocks refuse a query string. They will carry a hold
+		// where a site forces one through `xspeed_edge_hold_reason`, and
+		// otherwise have none to carry.
 		//
 		// Added AFTER sanitising and banned in NEVER_AN_EDGE_HEADER, so
 		// neither of the two filters above can forge a reason or suppress the
 		// real one.
 		//
-		// Reduced to the slug CHARACTER CLASS, not checked against the five
+		// Reduced to the slug CHARACTER CLASS, not checked against the six
 		// slugs: `xspeed_edge_hold_reason` is documented as able to force a
 		// reason, and a site that forces its own deserves to see it. What is
 		// not negotiable is the shape, because this value reaches an
@@ -1026,17 +1662,125 @@ class Cache {
 	 * and the static-tree guard — and the filters behind it are not required
 	 * to be cheap.
 	 *
+	 * A page with a lifetime of its own also gets its own pairs, whenever
+	 * they grant an edge any lifetime at all. The lifetime is cut to the
+	 * page's (see cap_edge_lifetime()), and the pairs are returned even when
+	 * the cut leaves them equal to the baked ones. Returning them keeps the
+	 * page off the static tree, and it has to: only the two PHP paths can
+	 * count a lifetime down as the copy ages. The web server sends the baked
+	 * value from whatever age the file has reached, so a page capped to its
+	 * nonce would reach the edge with hours of dead nonce still to serve.
+	 *
+	 * write_meta() resolves that lifetime and passes it on the first call.
+	 * The static-tree guards ask afterwards and read the memo. Both store
+	 * paths call write_meta() before their guard.
+	 *
+	 * @param int|null $own_ttl The entry's own lifetime in seconds, when it
+	 *                          differs from the site's (the sidecar `ttl`).
 	 * @return array<string,string> Empty when this page needs no override.
 	 */
-	private static function per_entry_edge_headers(): array {
+	private static function per_entry_edge_headers( ?int $own_ttl = null ): array {
 		if ( is_array( self::$per_entry_edge ) ) {
 			return self::$per_entry_edge;
 		}
-		$baked                = self::edge_headers_for( 'HIT', 'bake' );
-		$request              = self::edge_headers_for( 'HIT', 'store' );
+		$baked   = self::edge_headers_for( 'HIT', 'bake' );
+		$request = self::edge_headers_for( 'HIT', 'store' );
+		if ( null !== $own_ttl && self::grants_edge_lifetime( $request ) ) {
+			self::$per_entry_edge = self::cap_edge_lifetime( $request, $own_ttl );
+			return self::$per_entry_edge;
+		}
 		self::$per_entry_edge = ( $request === $baked ) ? array() : $request;
 
 		return self::$per_entry_edge;
+	}
+
+	/**
+	 * Cut every lifetime an edge header grants down to `$seconds`.
+	 *
+	 * The lifetime in a HIT's pairs comes from `xspeed_edge_cache_headers`
+	 * and describes the site, so it says nothing of a page whose own lifetime
+	 * is shorter: one carrying a nonce (#236), one with a per-post expiry,
+	 * one a `xspeed_cache_max_age` filter shortened. xSpeed rebuilds that page
+	 * on time, and an edge holding it for the site's lifetime goes on serving
+	 * the old copy anyway. Nothing tells the edge when our copy expires,
+	 * because an expiry is not a purge. For a nonce page that is a broken
+	 * form for every visitor until the next purge.
+	 *
+	 * Only shortens. A `max-age` or `s-maxage` already under `$seconds` is
+	 * kept, so a hold's `s-maxage=0` stays 0. Only headers named `*-Control`
+	 * are touched; a `Cache-Tag` that happens to contain the text is not a
+	 * directive.
+	 *
+	 * @param array<string,string> $headers Header name => value.
+	 * @param int                  $seconds The most any of them may grant.
+	 * @return array<string,string>
+	 */
+	public static function cap_edge_lifetime( array $headers, int $seconds ): array {
+		$seconds = max( 0, $seconds );
+		foreach ( $headers as $name => $value ) {
+			if ( ! preg_match( self::EDGE_LIFETIME_HEADER, (string) $name ) ) {
+				continue;
+			}
+			$capped = preg_replace_callback(
+				self::EDGE_LIFETIME_DIRECTIVE,
+				static function ( array $m ) use ( $seconds ): string {
+					return $m[1] . '=' . min( (int) $m[2], $seconds );
+				},
+				(string) $value
+			);
+			if ( is_string( $capped ) ) {
+				$headers[ $name ] = $capped;
+			}
+		}
+
+		return $headers;
+	}
+
+	/**
+	 * Does any `*-Control` header in the set let an edge keep the response?
+	 *
+	 * @param array<string,string> $headers Header name => value.
+	 */
+	private static function grants_edge_lifetime( array $headers ): bool {
+		foreach ( $headers as $name => $value ) {
+			if ( ! preg_match( self::EDGE_LIFETIME_HEADER, (string) $name ) ) {
+				continue;
+			}
+			if ( preg_match_all( self::EDGE_LIFETIME_DIRECTIVE, (string) $value, $m ) ) {
+				foreach ( $m[2] as $seconds ) {
+					if ( (int) $seconds > 0 ) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Seconds a cached entry has left, when it has a lifetime of its own.
+	 *
+	 * Read from the sidecar `ttl`, which write_meta() records only when the
+	 * entry's lifetime differs from the site's. That is the drop-in's rule
+	 * too, so both PHP serve paths count down the same entries. Null for an
+	 * entry that follows the site's lifetime: what the edge is told about
+	 * those is the site's lifetime, unchanged.
+	 *
+	 * @param array<string,mixed> $meta The entry's sidecar, from read_meta().
+	 * @param string              $file The cached file being served.
+	 */
+	private static function entry_lifetime_left( array $meta, string $file ): ?int {
+		$ttl = isset( $meta['ttl'] ) ? (int) $meta['ttl'] : 0;
+		if ( $ttl < 1 ) {
+			return null;
+		}
+		$mtime = file_exists( $file ) ? filemtime( $file ) : false;
+		if ( false === $mtime ) {
+			return null;
+		}
+
+		return max( 0, $ttl - ( time() - (int) $mtime ) );
 	}
 
 	/**
@@ -1089,7 +1833,9 @@ class Cache {
 	 * `REDIRECT_` prefix for the second. `env=XSPEED_STATIC_HIT` is evaluated
 	 * on that second pass, where nothing answers to that name any more, so
 	 * the directive never fires — dropping the headers from precisely the
-	 * responses they exist for.
+	 * responses they exist for. The rules marker rides on the same gate, so
+	 * the probe also read its own marker as missing and called correctly
+	 * installed rules stale.
 	 *
 	 * It cannot be written once: `env=` takes a single name with no
 	 * alternation, and `expr=` — which could express both — is not dependable
@@ -1245,12 +1991,16 @@ class Cache {
 			// (e.g. WP_CACHE not true) — previously streamed the cached
 			// file with NO marker, so a genuine HIT looked like a MISS in
 			// the response headers. Same header + value as the drop-in.
-			self::mark( 'HIT (php)' );
+			//
+			// The sidecar is read first because the HIT's edge lifetime
+			// depends on it: an entry with a lifetime of its own may not be
+			// kept at the edge past it. See entry_lifetime_left().
+			$meta = self::read_meta( $key );
+			self::mark( 'HIT (php)', '', self::entry_lifetime_left( $meta, $file ) );
 			// Replay stored response bits so the HIT matches the original:
 			// a non-HTML Content-Type (cached feeds, sitemaps) and a non-200
 			// status (a cached 404 must serve 404, not 200). No-op for
 			// ordinary pages, which write no .meta.
-			$meta = self::read_meta( $key );
 			if ( ! headers_sent() ) {
 				if ( ! empty( $meta['status'] ) && function_exists( 'http_response_code' ) ) {
 					http_response_code( (int) $meta['status'] );
@@ -1315,6 +2065,7 @@ class Cache {
 		// reviewers and Plugin Check, instead of relying on PHP's implicit
 		// request-end flush. We record our nesting level so close_buffer()
 		// flushes ONLY the buffer we opened.
+		self::$asset_stamp_at_open = class_exists( '\\XSpeed\\Minifier' ) ? Minifier::purge_stamp() : null;
 		ob_start( array( __CLASS__, 'finalize_buffer' ) );
 		self::$buffer_level = ob_get_level();
 
@@ -1419,6 +2170,9 @@ class Cache {
 		$completed              = self::$render_completed;
 		self::$render_completed = false;
 
+		$asset_stamp                = self::$deferred_asset_stamp;
+		self::$deferred_asset_stamp = null;
+
 		if ( null === $key ) {
 			return;
 		}
@@ -1471,6 +2225,12 @@ class Cache {
 			return;
 		}
 
+		// Same guard as finalize_buffer(): the translation plugin's buffer
+		// adds time between render and store, not less.
+		if ( self::assets_purged_since( $asset_stamp ) ) {
+			return;
+		}
+
 		$file = self::cache_file_for( $key );
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context for credentials; this runs on a frontend shutdown where it's unavailable.
 		file_put_contents( $file, $full, LOCK_EX );
@@ -1493,6 +2253,19 @@ class Cache {
 			&& array() === self::per_entry_edge_headers() ) {
 			self::store_static( $full );
 		}
+	}
+
+	/**
+	 * Did a purge delete minified or combined files after $stamp was taken?
+	 *
+	 * @param string|null $stamp Minifier::purge_stamp() when the render began,
+	 *                           or null when no snapshot was taken.
+	 */
+	private static function assets_purged_since( ?string $stamp ): bool {
+		if ( null === $stamp || ! class_exists( '\\XSpeed\\Minifier' ) ) {
+			return false;
+		}
+		return Minifier::purge_stamp() !== $stamp;
 	}
 
 	public static function should_cache() {
@@ -1597,7 +2370,7 @@ class Cache {
 				}
 				// Allow query-form feed params through when feed caching opted
 				// this request in (?feed=rss2 / &withcomments=1 on feeds).
-				if ( $cache_feed && in_array( $key, array( 'feed', 'withcomments', 'withoutcomments' ), true ) ) {
+				if ( $cache_feed && in_array( $key, self::FEED_QUERY_PARAMS, true ) ) {
 					continue;
 				}
 				if ( ! self::query_key_is_ignored( (string) $key, $ignored ) ) {
@@ -1608,11 +2381,10 @@ class Cache {
 			}
 		}
 
-		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
-		$path        = (string) strtok( $request_uri, '?' );
+		$path = self::request_path();
 
 		$excluded_urls = is_array( $cache_opts['excluded_urls'] ?? null ) ? $cache_opts['excluded_urls'] : array();
-		if ( ! $cache_feed && Glob_Matcher::any_match( $excluded_urls, $path ) ) {
+		if ( ! $cache_feed && self::path_matches_exclusions( $excluded_urls, $path ) ) {
 			return self::bypass( 'excluded-url' );
 		}
 
@@ -1762,6 +2534,30 @@ class Cache {
 	}
 
 	/**
+	 * Whether this request's query string is empty or holds only params the
+	 * cache ignores (`ignored_query_params`, utm_* and the like), so the
+	 * page is the one the bare URL serves.
+	 *
+	 * The same test should_cache() applies, without its search and feed
+	 * exceptions: those are keyed apart from the bare URL.
+	 */
+	public static function query_has_only_ignored_params(): bool {
+		$query_raw = isset( $_SERVER['QUERY_STRING'] ) ? wp_unslash( $_SERVER['QUERY_STRING'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- as in should_cache(): only keys are read, via preg_match.
+		if ( '' === trim( (string) $query_raw ) ) {
+			return true;
+		}
+		$cache_opts = Settings_Manager::get( 'cache' );
+		$ignored    = is_array( $cache_opts['ignored_query_params'] ?? null ) ? $cache_opts['ignored_query_params'] : array();
+		parse_str( (string) $query_raw, $params );
+		foreach ( $params as $key => $_ ) {
+			if ( ! self::query_key_is_ignored( (string) $key, $ignored ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Would authoring a cache entry from THIS request file a query-string
 	 * render under the bare URL?
 	 *
@@ -1871,6 +2667,206 @@ class Cache {
 	 */
 	public const NEVER_IGNORED_QUERY_PARAMS = array( 'xspeed_css', 'xspeed_nc' );
 
+	/**
+	 * The params a query-form feed may carry (`/?feed=rss2`) once feed
+	 * caching has opted the request in. should_cache() lets them through,
+	 * and serves_query_variant() holds a HIT that carries one.
+	 */
+	private const FEED_QUERY_PARAMS = array( 'feed', 'withcomments', 'withoutcomments' );
+
+	/**
+	 * The one spelling of a URL path that every cache key is built from.
+	 *
+	 * WordPress stores a non-ASCII slug percent-encoded, so a page called
+	 * `關於我們` is requested as `/%e9%97%9c%e6%96%bc%e6%88%91%e5%80%91/`. The
+	 * same page also arrives as `/%E9%97%9C…/` (what a browser sends for an
+	 * address typed or pasted into it) and as raw UTF-8 bytes. WordPress
+	 * renders the same page for all three, so they get one key: escapes are
+	 * lowercased (WordPress's own spelling, so a permalink comes back
+	 * unchanged) and any byte outside printable ASCII is escaped the same way.
+	 * Null bytes are dropped, as the drop-in does.
+	 *
+	 * Nothing is decoded. `/ab%6Fut/` stays a separate entry from `/about/`.
+	 * Only spellings of the same bytes are merged, because merging spellings
+	 * WordPress may route differently would let one page be served for
+	 * another. A printable-ASCII path with no escapes comes back unchanged,
+	 * so ordinary pages keep the keys they had.
+	 *
+	 * The path used to go through sanitize_text_field(), which deletes every
+	 * `%XX` octet: `/第九屆-當代藝術-tagboat-award-特展/` was keyed as
+	 * `/--tagboat-award-/`, every page whose slug differed only in non-ASCII
+	 * characters shared one entry, and an all-non-ASCII slug became `//`,
+	 * which store_static() wrote over the home page's static file.
+	 *
+	 * The drop-in carries a copy of this transform, because it runs before
+	 * WordPress and this class load. Change both together.
+	 *
+	 * @param string $path A URL path, without the query string.
+	 */
+	public static function normalize_path( string $path ): string {
+		return self::path_with_escape_case( $path, false );
+	}
+
+	/**
+	 * The spellings of one path that a cache in front of the site may hold.
+	 *
+	 * xSpeed keys every escape spelling of a path as one entry
+	 * (normalize_path()). A CDN does not: Cloudflare keeps `/%E9%97%9C…/`,
+	 * the spelling a browser sends, apart from `/%e9%97%9c…/`, the spelling
+	 * of WordPress's own links. A purge that named one left the other
+	 * serving the old page until its edge lifetime ran out.
+	 *
+	 * Returns the path as given, then normalize_path()'s spelling (lower-case
+	 * escapes), then the same with upper-case escapes. Both are built from
+	 * the path the local sweep cleared, so a cache in front is never asked
+	 * about a page xSpeed did not purge. Duplicates drop out, so a path with
+	 * no escapes has one spelling. Trailing-slash forms are the caller's job.
+	 *
+	 * @param string $path A URL path, without the query string.
+	 * @return string[]
+	 */
+	public static function escape_spellings( string $path ): array {
+		return array_values(
+			array_unique(
+				array( $path, self::path_with_escape_case( $path, false ), self::path_with_escape_case( $path, true ) )
+			)
+		);
+	}
+
+	/**
+	 * normalize_path() with the escapes in the case asked for.
+	 *
+	 * @param string $path  A URL path, without the query string.
+	 * @param bool   $upper Upper-case escapes, or lower (the key's spelling).
+	 */
+	private static function path_with_escape_case( string $path, bool $upper ): string {
+		return (string) preg_replace_callback(
+			'/%[0-9a-fA-F]{2}|[^\x21-\x7E]/',
+			static function ( array $m ) use ( $upper ): string {
+				$escape = '%' === $m[0][0] ? $m[0] : sprintf( '%%%02x', ord( $m[0] ) );
+				return $upper ? strtoupper( $escape ) : strtolower( $escape );
+			},
+			str_replace( "\0", '', $path )
+		);
+	}
+
+	/**
+	 * Percent-encode every byte 0x80 and up, lowercase hex.
+	 *
+	 * @param string $value A path or a whole URL.
+	 */
+	private static function encode_non_ascii( string $value ): string {
+		return (string) preg_replace_callback(
+			'/[\x80-\xff]/',
+			static function ( array $m ): string {
+				return '%' . bin2hex( $m[0] );
+			},
+			$value
+		);
+	}
+
+	/**
+	 * Where a URL path lives in the static tree, relative to the host
+	 * directory, with a leading slash and no trailing one ('' for the home
+	 * page). Null when the path must not be written there.
+	 *
+	 * Decoded, because that is what the web server looks up: nginx builds the
+	 * file name from `$uri` and Apache from `%{REQUEST_URI}`, and both hold
+	 * the decoded path. A file stored under the encoded name is never found.
+	 *
+	 * Decoding is only safe for the escapes WordPress itself writes, which
+	 * encode the bytes of non-ASCII letters (0x80 and up). An escaped ASCII
+	 * byte is refused, because the server decodes it before the lookup:
+	 * `%2F` would become a directory, `%2E%2E` a parent, and `%6F` would
+	 * make `/ab%6Fut/` and `/about/` share one file although they are
+	 * separate cache entries. The decoded path must also be valid UTF-8, with
+	 * no control byte, backslash or `%`, no `..` anywhere and no `.`
+	 * segment. A refused page is still cached by the drop-in; it only loses
+	 * the no-PHP path.
+	 *
+	 * @param string $path A URL path, without the query string.
+	 */
+	public static function static_path( string $path ): ?string {
+		if ( '' === $path || false !== strpos( $path, "\0" ) ) {
+			return null;
+		}
+		if ( preg_match_all( '/%([0-9a-fA-F]{2})/', $path, $escapes ) ) {
+			foreach ( $escapes[1] as $hex ) {
+				if ( hexdec( $hex ) < 0x80 ) {
+					return null;
+				}
+			}
+		}
+		$decoded = rawurldecode( $path );
+		if ( 1 !== preg_match( '//u', $decoded ) || preg_match( '/[\x00-\x1f\x7f\\\\%]/', $decoded ) ) {
+			return null;
+		}
+		$decoded = (string) preg_replace( '#/+#', '/', $decoded );
+		if ( false !== strpos( $decoded, '..' ) || preg_match( '#(^|/)\.(/|$)#', $decoded ) ) {
+			return null;
+		}
+		return rtrim( $decoded, '/' );
+	}
+
+	/**
+	 * The current request's path, normalized, without the query string.
+	 *
+	 * @param string $fallback Returned when the server sent no REQUEST_URI.
+	 */
+	private static function request_path( string $fallback = '' ): string {
+		if ( ! isset( $_SERVER['REQUEST_URI'] ) ) {
+			return $fallback;
+		}
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- normalize_path() is the sanitizer. sanitize_text_field() deletes percent-encoded octets and broke every non-ASCII slug (see normalize_path()). The value is hashed, matched, or checked by static_path() before it touches the disk.
+		$uri = (string) wp_unslash( $_SERVER['REQUEST_URI'] );
+		return self::normalize_path( (string) strtok( $uri, '?' ) );
+	}
+
+	/**
+	 * An Excluded URLs entry with its escapes in lower case.
+	 *
+	 * The request path is matched in normalize_path()'s spelling, so an entry
+	 * copied from Chrome's address bar (`/%E8%81%AF…/`) never matched it.
+	 * Only `%XX` sequences change; the rest of the entry, including a `~`
+	 * regex, is left as typed.
+	 *
+	 * @param string $pattern One Excluded URLs entry.
+	 */
+	public static function normalize_exclusion( string $pattern ): string {
+		return (string) preg_replace_callback(
+			'/%[0-9a-fA-F]{2}/',
+			static function ( array $m ): string {
+				return strtolower( $m[0] );
+			},
+			$pattern
+		);
+	}
+
+	/**
+	 * Does an exclusion list match this path, in either spelling?
+	 *
+	 * An admin may paste an exclusion as `/購物車`, as WordPress spells it, or
+	 * as Chrome shows it in upper case. The entry's escapes are lowercased to
+	 * match the path, and the decoded path is tried too, which is also what
+	 * the nginx rule matches (`$uri` is decoded).
+	 *
+	 * @param string[] $patterns Exclusion entries.
+	 * @param string   $path     Output of normalize_path().
+	 */
+	private static function path_matches_exclusions( array $patterns, string $path ): bool {
+		$patterns = array_map(
+			static function ( $pattern ): string {
+				return self::normalize_exclusion( (string) $pattern );
+			},
+			$patterns
+		);
+		if ( Glob_Matcher::any_match( $patterns, $path ) ) {
+			return true;
+		}
+		$decoded = rawurldecode( $path );
+		return $decoded !== $path && Glob_Matcher::any_match( $patterns, $decoded );
+	}
+
 	public static function cache_key() {
 		$host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : 'default';
 
@@ -1882,12 +2878,11 @@ class Cache {
 			return md5( $host . '|404' );
 		}
 
-		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '/';
 		// Strip the query string from the key so /post and /post?utm_*=…
 		// share the same cache entry. should_cache() above already
 		// rejected requests with non-ignored params, so by the time we
 		// build the key the only params left are safe to drop.
-		$uri = (string) strtok( $uri, '?' );
+		$uri = self::request_path( '/' );
 
 		// Optional device bucket: when mobile_separate is on, mobile and
 		// desktop responses live in different cache files so themes that
@@ -2170,8 +3165,7 @@ class Cache {
 	 */
 	public static function current_host_dir(): string {
 		$host = self::current_host();
-		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '/';
-		return self::site_bucket( $host, $uri );
+		return self::site_bucket( $host, self::request_path( '/' ) );
 	}
 
 	/**
@@ -2529,6 +3523,17 @@ class Cache {
 	 * proceed with a normal 200 body. Lets aggregators/browsers skip
 	 * re-downloading an unchanged cached response. (FBS-82407 #5)
 	 *
+	 * Also stamps `X-XSpeed-Built` from the same mtime. This is the PHP serve
+	 * path's build time, and the only place on it that holds the file: mark()
+	 * has already run by the time we get here and resolved the edge-header
+	 * filter without one. Both are emitted, and a purge verifier prefers the
+	 * stamp: `Last-Modified` carries the same integer, but it is a generic
+	 * header that the origin-side cache layer such a verifier exists to
+	 * detect — or any proxy in between — may rewrite to its own store time,
+	 * which would turn a stale origin into a pass. Nothing but xSpeed's own
+	 * serve code writes `X-XSpeed-Built`, so a value older than the purge is
+	 * proof the origin answered with old HTML.
+	 *
 	 * @param string $file Absolute path to the cache .html file.
 	 * @return bool True when a 304 was sent.
 	 */
@@ -2541,6 +3546,10 @@ class Cache {
 		$etag          = '"' . md5( $file . '|' . $mtime ) . '"';
 		header( 'Last-Modified: ' . $last_modified );
 		header( 'ETag: ' . $etag );
+		// Before the 304 branch below, so a conditional request that gets a
+		// bodyless 304 still carries the stamp. A verifier's fetch may well
+		// be conditional, and a 304 with no build time reads as unverifiable.
+		header( self::BUILT_HEADER . ': ' . $mtime );
 
 		$ims = isset( $_SERVER['HTTP_IF_MODIFIED_SINCE'] ) ? trim( sanitize_text_field( wp_unslash( $_SERVER['HTTP_IF_MODIFIED_SINCE'] ) ) ) : '';
 		$inm = isset( $_SERVER['HTTP_IF_NONE_MATCH'] ) ? trim( sanitize_text_field( wp_unslash( $_SERVER['HTTP_IF_NONE_MATCH'] ) ) ) : '';
@@ -2647,6 +3656,11 @@ class Cache {
 		$full              = self::$accumulated;
 		self::$accumulated = '';
 
+		// Consumed here, on every final path, so a later call can never
+		// compare against this request's snapshot.
+		$asset_stamp               = self::$asset_stamp_at_open;
+		self::$asset_stamp_at_open = null;
+
 		if ( strlen( $full ) < 255 ) {
 			return $buffer;
 		}
@@ -2744,6 +3758,14 @@ class Cache {
 		if ( self::query_string_blocks_write() ) {
 			return $buffer;
 		}
+
+		// A purge deleted minified or combined files while this page was
+		// rendering, so it may link names that are gone. Serve it, but do
+		// not store it; the next request renders against the files as they
+		// are now.
+		if ( self::assets_purged_since( $asset_stamp ) ) {
+			return $buffer;
+		}
 		$file = self::cache_file_for( $key );
 
 		// A render-time translation plugin (TranslatePress) wraps our buffer,
@@ -2753,7 +3775,8 @@ class Cache {
 		// shutdown, where the outer buffer has already translated, and let
 		// the pass-through below deliver this request untouched.
 		if ( self::translation_plugin_active() ) {
-			self::$deferred_key = $key;
+			self::$deferred_key         = $key;
+			self::$deferred_asset_stamp = $asset_stamp;
 			// Reaching here means finalize_buffer() ran to completion: the
 			// status gate passed, should_cache() said yes, and PHP handed us
 			// the whole buffer. A wp_die() or exit() mid-render unwinds the
@@ -2768,7 +3791,29 @@ class Cache {
 		}
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context for credentials; cache writes happen on frontend requests where it's unavailable.
-		file_put_contents( $file, $full, LOCK_EX );
+		$stored = file_put_contents( $file, $full, LOCK_EX );
+
+		/*
+		 * No edge headers on a MISS. Not even a stored one.
+		 *
+		 * A MISS is the FIRST render, and it is the render most likely to be
+		 * replaced: critical CSS and unused CSS are generated after the fact
+		 * and applied to later requests, so the copy written here is the
+		 * pre-optimization one. Telling a CDN to hold it pins exactly the
+		 * version xSpeed is about to improve on — reported from a live site,
+		 * where Cloudflare had cached an unoptimized first render.
+		 *
+		 * `CDN-Cache-Control` is why it reaches the edge at all: Cloudflare
+		 * honours it as the CDN-targeted directive whatever its own cache
+		 * rules say, so an origin header is enough to pin HTML for the whole
+		 * TTL even where edge page caching is switched off.
+		 *
+		 * A HIT is the safe moment and the honest one: it means xSpeed is
+		 * serving its stored copy, that copy is what the edge would mirror,
+		 * and a later regeneration purges it — which reaches the edge through
+		 * the purge actions. So the edge caches from the second visitor on,
+		 * one render later than before and the right one.
+		 */
 
 		/**
 		 * Fires after the flat hash cache file ({md5}.html) is written.
@@ -2828,10 +3873,11 @@ class Cache {
 	 * entirely. Caller already minified/finalized $html.
 	 *
 	 * Path safety: $host is restricted to a `[a-zA-Z0-9.\-]` allowlist;
-	 * $uri has its query string stripped, null bytes removed, '..'
-	 * sequences collapsed, and after concatenation we verify the
-	 * resolved real path stays inside XSPEED_CACHE_STATIC_DIR before
-	 * any write. Anything off the happy path returns silently.
+	 * the path goes through static_path(), which decodes it the way the
+	 * web server will and refuses anything that could leave the host
+	 * directory or share a file with another page. After the directory is
+	 * created we verify its real path is inside XSPEED_CACHE_STATIC_DIR
+	 * before any write. Anything off the happy path returns silently.
 	 *
 	 * INVARIANT — the static tree is keyed by `{host}{path}` and NOTHING
 	 * else, and both generated rewrites refuse any request that carries a
@@ -2896,13 +3942,11 @@ class Cache {
 			$keys = array_slice( array_values( array_unique( $found ) ), 0, 10 );
 		}
 
-		$uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
-
 		set_transient(
 			self::STATIC_SKIP_TRANSIENT,
 			array(
 				'reason' => $reason,
-				'url'    => (string) strtok( $uri, '?' ),
+				'url'    => esc_url_raw( self::request_path() ),
 				'keys'   => $keys,
 				'at'     => time(),
 			),
@@ -2971,21 +4015,19 @@ class Cache {
 		}
 
 		$host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
-		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
 		$host = self::static_host_dir( $host );
-		$uri  = str_replace( "\0", '', $uri );
-		$uri  = (string) strtok( $uri, '?' );
+		$uri  = self::request_path();
 		if ( '' === $host || '' === $uri ) {
 			return;
 		}
-		// Collapse any traversal sequences before path resolution.
-		$uri = preg_replace( '#/+#', '/', $uri );
-		if ( false !== strpos( $uri, '..' ) ) {
+		// Decoded the way the web server will decode it, or refused.
+		$rel = self::static_path( $uri );
+		if ( null === $rel ) {
 			return;
 		}
 
 		$base = rtrim( XSPEED_CACHE_STATIC_DIR, '/' );
-		$dir  = $base . '/' . $host . rtrim( $uri, '/' );
+		$dir  = $base . '/' . $host . $rel;
 		$file = $dir . '/index.html';
 
 		// Resolve the parent against the cache root to be sure the
@@ -3000,6 +4042,13 @@ class Cache {
 			wp_mkdir_p( $dir );
 		}
 		if ( ! is_dir( $dir ) ) {
+			return;
+		}
+		// static_path() already refuses every traversal spelling. This
+		// catches a directory in the tree that resolves somewhere else.
+		$dir_real    = realpath( $dir );
+		$static_real = realpath( $base );
+		if ( false === $dir_real || false === $static_real || 0 !== strpos( $dir_real . '/', $static_real . '/' ) ) {
 			return;
 		}
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- Same rationale as the flat-hash cache write above: WP_Filesystem isn't available on frontend requests, and the cache write must happen during shutdown.
@@ -3353,7 +4402,11 @@ class Cache {
 		// REPLACES the baked set with it rather than merging: the two describe
 		// the same response, so merging would leave the baked lifetime in
 		// place beside the hold meant to overrule it.
-		$edge = self::per_entry_edge_headers();
+		//
+		// The lifetime resolved above goes with it, under the same condition
+		// as the `ttl` key: a page that does not follow the site's lifetime
+		// may not be kept at the edge past its own either.
+		$edge = self::per_entry_edge_headers( isset( $meta['ttl'] ) ? $ttl : null );
 		if ( array() !== $edge ) {
 			$meta['edge_headers'] = $edge;
 		}
@@ -3582,6 +4635,16 @@ class Cache {
 		// wiring passed the post ID into $cause, so the log read
 		// "Cache purged (46)" with no indication of what caused it. (#243)
 		$presentation = in_array( $post_type, self::presentation_post_types(), true );
+
+		// Clearing only the affected pages needs the post's terms, and the
+		// REST API sets those after `save_post`. Note the post and purge on
+		// `wp_after_insert_post`; flush_pending_saves() covers a save that
+		// never gets there.
+		if ( ! $presentation && self::narrow_purge_applies( $post_type ) ) {
+			self::$pending_saves[ (int) $post_id ] = true;
+			return;
+		}
+
 		self::purge_all(
 			'post:' . $post_type,
 			null,
@@ -3594,8 +4657,367 @@ class Cache {
 				'urls'   => array(),
 			)
 		);
-		if ( class_exists( '\XSpeed\Minifier' ) ) {
-			Minifier::purge_minified();
+	}
+
+	/**
+	 * Reasons a change that would have cleared only its own pages cleared
+	 * the whole site, published as `fallback` in the purge context.
+	 *
+	 * - THEME_LIST: the change alters a post or comment list the theme draws
+	 *   on pages the rules cannot name.
+	 * - LIMIT: the affected pages are more than Affected_Pages::LIMIT.
+	 * - PENDING: the save never reached `wp_after_insert_post`, so there was
+	 *   no before-copy to work the old address out from.
+	 * - FILTER: `xspeed_purge_affected_pages` returned false.
+	 * - LISTING: the record of pages that run a post list of their own
+	 *   (Listing_Pages) cannot answer: a page of the type went unrecorded at
+	 *   its cap, more than Affected_Pages::LIMIT pages of the type would
+	 *   have to be named, or the index does not read back. Or the pages it
+	 *   named took the list past Affected_Pages::LIMIT.
+	 *
+	 * Every other purge publishes ''. A post type that always purges the
+	 * whole site (a WooCommerce product) is a choice, not a fallback, and
+	 * publishes '' too.
+	 */
+	public const FALLBACK_THEME_LIST = 'theme_list';
+	public const FALLBACK_LIMIT      = 'limit';
+	public const FALLBACK_PENDING    = 'pending';
+	public const FALLBACK_FILTER     = 'filter';
+	public const FALLBACK_LISTING    = 'listing';
+
+	/**
+	 * Posts noted by on_save_post() for a narrow purge, keyed by ID.
+	 *
+	 * @var array<int,bool>
+	 */
+	private static $pending_saves = array();
+
+	/**
+	 * Posts whose save purged their pages in this request, keyed by ID. That
+	 * purge named page 1 of the posts page, so a sticky change made after
+	 * it (the classic editor and Quick Edit stick after saving) has nothing
+	 * left to clear there.
+	 *
+	 * @var array<int,bool>
+	 */
+	private static $saves_purged = array();
+
+	/**
+	 * Purge the pages a save affected, once WordPress has finished saving.
+	 *
+	 * @param int           $post_id     Post ID.
+	 * @param \WP_Post      $post        Post as saved.
+	 * @param bool          $update      Whether an existing post was updated.
+	 * @param \WP_Post|null $post_before Post before the save, null when new.
+	 */
+	public static function on_after_insert_post( $post_id, $post = null, $update = false, $post_before = null ): void { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- hook signature.
+		$post_id = (int) $post_id;
+		if ( ! isset( self::$pending_saves[ $post_id ] ) ) {
+			return;
+		}
+		unset( self::$pending_saves[ $post_id ] );
+		if ( ! $post instanceof \WP_Post ) {
+			$post = get_post( $post_id );
+		}
+		if ( ! $post instanceof \WP_Post ) {
+			return;
+		}
+		$post_before = $post_before instanceof \WP_Post ? $post_before : null;
+		if ( self::repeats_block_editor_save( $post, $post_before ) ) {
+			Affected_Pages::forget( $post_id );
+			return;
+		}
+		self::$saves_purged[ $post_id ] = true;
+		self::purge_post_change( $post, $post_before, 'post:' . $post->post_type );
+	}
+
+	/** Meta WordPress rewrites on every save, which says nothing about the page. */
+	private const SAVE_NOISE_META = array( '_edit_lock', '_edit_last', '_encloseme', '_pingme' );
+
+	/**
+	 * Whether this save repeats the block editor save that just purged.
+	 *
+	 * The block editor saves a post through REST, then, when the screen has
+	 * meta boxes (xSpeed's own Cache Rules box is one), posts them to
+	 * post.php?meta-box-loader=1, which saves the post a second time. Both
+	 * requests purged, so every save sent the same pages to every cache in
+	 * front twice. The REST save notes what it purged for; the meta box
+	 * request skips its purge when nothing a visitor sees has changed since:
+	 * the post's fields, its terms and its meta. A meta box that saved meta
+	 * the page prints (an SEO title, a custom field) still purges.
+	 *
+	 * @param \WP_Post      $post   Post as saved.
+	 * @param \WP_Post|null $before Post before the save.
+	 */
+	private static function repeats_block_editor_save( \WP_Post $post, ?\WP_Post $before ): bool {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only names the request; WordPress verified the save's own nonce.
+		$meta_boxes = isset( $_GET['meta-box-loader'] );
+		$rest       = defined( 'REST_REQUEST' ) && REST_REQUEST;
+		if ( ! $meta_boxes && ! $rest ) {
+			return false;
+		}
+		if ( ! Affected_Pages::is_public( $post ) && ! ( $before instanceof \WP_Post && Affected_Pages::is_public( $before ) ) ) {
+			return false;
+		}
+		$key         = 'xspeed_saved_' . (int) $post->ID;
+		$fingerprint = self::save_fingerprint( $post );
+		if ( $meta_boxes ) {
+			if ( get_transient( $key ) === $fingerprint ) {
+				delete_transient( $key );
+				return true;
+			}
+			return false;
+		}
+		set_transient( $key, $fingerprint, 2 * MINUTE_IN_SECONDS );
+		return false;
+	}
+
+	/**
+	 * A hash of what a save can change that a visitor sees: the post's own
+	 * fields, its terms and its meta.
+	 *
+	 * @param \WP_Post $post Post as saved.
+	 */
+	private static function save_fingerprint( \WP_Post $post ): string {
+		$fields = array();
+		foreach ( array( 'post_type', 'post_status', 'post_date', 'post_title', 'post_name', 'post_content', 'post_excerpt', 'post_parent', 'menu_order', 'post_author', 'post_password', 'comment_status' ) as $field ) {
+			$fields[ $field ] = (string) ( $post->$field ?? '' );
+		}
+		$terms      = array();
+		$taxonomies = get_object_taxonomies( (string) $post->post_type );
+		if ( is_array( $taxonomies ) && array() !== $taxonomies ) {
+			$ids   = wp_get_object_terms( (int) $post->ID, $taxonomies, array( 'fields' => 'tt_ids' ) );
+			$terms = is_array( $ids ) ? array_map( 'intval', $ids ) : array();
+			sort( $terms );
+		}
+		$meta = get_post_meta( (int) $post->ID );
+		$meta = is_array( $meta ) ? array_diff_key( $meta, array_flip( self::SAVE_NOISE_META ) ) : array();
+		ksort( $meta );
+		return md5( (string) wp_json_encode( array( $fields, $terms, $meta ) ) );
+	}
+
+	/**
+	 * A save that never reached `wp_after_insert_post` still purges.
+	 *
+	 * `wp_insert_post()` called with `$fire_after_hooks = false` leaves that
+	 * hook to its caller, and a caller can fail to fire it. Without this, the
+	 * save would purge nothing at all. Site-wide, because there is no
+	 * before-copy to work out the old address from.
+	 */
+	public static function flush_pending_saves(): void {
+		if ( array() === self::$pending_saves ) {
+			return;
+		}
+		$ids                 = array_keys( self::$pending_saves );
+		self::$pending_saves = array();
+		self::purge_all(
+			'post:pending',
+			null,
+			array(
+				'scope'    => 'site',
+				'intent'   => 'content',
+				'urls'     => array(),
+				'fallback' => self::FALLBACK_PENDING,
+			)
+		);
+		foreach ( $ids as $id ) {
+			Affected_Pages::forget( (int) $id );
+		}
+	}
+
+	/**
+	 * Before an update is written: note the post's neighbours, which a new
+	 * date or category takes it away from. Only for a post visitors can see
+	 * now, and only when the save will purge narrowly; that costs four
+	 * queries per update.
+	 *
+	 * @param int   $post_id Post ID.
+	 * @param array $data    Unused: the new values.
+	 */
+	public static function on_pre_post_update( $post_id, $data = array() ): void { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- hook signature.
+		$post = get_post( (int) $post_id );
+		if ( ! $post instanceof \WP_Post || ! Affected_Pages::is_public( $post ) ) {
+			return;
+		}
+		if ( in_array( (string) $post->post_type, self::presentation_post_types(), true ) || ! self::narrow_purge_applies( (string) $post->post_type ) ) {
+			return;
+		}
+		Affected_Pages::remember_old_neighbours( $post );
+	}
+
+	/**
+	 * A post was stuck or unstuck.
+	 *
+	 * A theme list that puts sticky posts first (Twenty Twenty-Five's "More
+	 * posts" under every post) changes on every page that draws it, so the
+	 * whole site goes. The block editor changes stickiness inside the save,
+	 * and the save's own purge sees it then. The classic editor and Quick
+	 * Edit change it after the save has purged, which is why this hook
+	 * purges the posts no save is waiting on.
+	 *
+	 * @param mixed $old_value Sticky post IDs before.
+	 * @param mixed $value     Sticky post IDs after.
+	 */
+	public static function on_sticky_posts_change( $old_value, $value ): void {
+		$blog_page = false;
+		foreach ( Affected_Pages::remember_sticky_change( $old_value, $value ) as $post_id ) {
+			if ( isset( self::$pending_saves[ $post_id ] ) ) {
+				continue;
+			}
+			$post = get_post( $post_id );
+			if ( ! $post instanceof \WP_Post || ! Affected_Pages::is_public( $post ) || ! self::narrow_purge_applies( (string) $post->post_type ) ) {
+				continue;
+			}
+			if ( Affected_Pages::lists_show_sticky( (string) $post->post_type ) ) {
+				self::purge_all(
+					'sticky:' . $post->post_type,
+					null,
+					array(
+						'scope'    => 'site',
+						'intent'   => 'content',
+						'urls'     => array(),
+						'fallback' => self::FALLBACK_THEME_LIST,
+					)
+				);
+				return;
+			}
+			// WordPress's own blog list puts sticky posts first on its first
+			// page, whatever the theme draws, so a post stuck or unstuck by
+			// code, WP-CLI or a plugin moves on that page. A save in this
+			// request already cleared it.
+			if ( 'post' === $post->post_type && ! isset( self::$saves_purged[ $post_id ] ) ) {
+				$blog_page = true;
+			}
+		}
+		if ( $blog_page ) {
+			$url = Affected_Pages::posts_page_url();
+			if ( '' !== $url ) {
+				self::purge_urls( array( $url ), 'sticky:post' );
+			}
+		}
+	}
+
+	/**
+	 * The first post stuck on a site: WordPress creates `sticky_posts`
+	 * instead of updating it, so update_option_sticky_posts never fires.
+	 *
+	 * @param string $option Option name.
+	 * @param mixed  $value  Sticky post IDs.
+	 */
+	public static function on_sticky_posts_added( $option, $value ): void { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundBeforeLastUsed -- hook signature.
+		self::on_sticky_posts_change( array(), $value );
+	}
+
+	/**
+	 * Whether a content change to this post type may clear only the pages
+	 * it affects, before looking at the post itself.
+	 *
+	 * Off when the setting is off, during an import (one full purge runs at
+	 * the end), and for post types whose lists the rules do not know:
+	 * WooCommerce products, whose shop and category pages purge_product()
+	 * already handles.
+	 *
+	 * @param string $post_type Post type.
+	 */
+	private static function narrow_purge_applies( string $post_type ): bool {
+		if ( defined( 'WP_IMPORTING' ) && WP_IMPORTING ) {
+			return false;
+		}
+		$opts = Settings_Manager::get( 'cache' );
+		if ( empty( $opts['purge_affected_only'] ) ) {
+			return false;
+		}
+		/**
+		 * Filter the post types whose saves always purge the whole site.
+		 *
+		 * @param string[] $types Post type slugs.
+		 */
+		$site_wide = (array) apply_filters( 'xspeed_site_wide_purge_post_types', array( 'product', 'product_variation' ) );
+		return ! in_array( $post_type, $site_wide, true );
+	}
+
+	/**
+	 * Purge what a change to one post affects, or the whole site when the
+	 * affected pages cannot be listed safely.
+	 *
+	 * The pages are the ones the rules name (Affected_Pages::for_post())
+	 * and the recorded pages whose own post lists the change may alter
+	 * (Listing_Pages::pages_for()).
+	 *
+	 * Site-wide when this change alters a post list the theme draws on
+	 * pages the rules cannot name (Affected_Pages::lists_changed_by()), when
+	 * the record of listing pages cannot answer, when the list is
+	 * longer than Affected_Pages::LIMIT, or when the filter says so. Nothing
+	 * when the post was not public before or after: no page anyone can see
+	 * changed.
+	 *
+	 * @param \WP_Post      $post   Post as it is now.
+	 * @param \WP_Post|null $before Post before the change.
+	 * @param string        $cause  Purge log cause.
+	 */
+	private static function purge_post_change( \WP_Post $post, ?\WP_Post $before, string $cause ): void {
+		// Checked before any list is consulted. A draft save moves the
+		// draft's date and can match a list of any kind, which would send a
+		// change nobody can see to a site-wide purge.
+		if ( ! Affected_Pages::is_public( $post ) && ! ( $before instanceof \WP_Post && Affected_Pages::is_public( $before ) ) ) {
+			Affected_Pages::forget( (int) $post->ID );
+			return;
+		}
+		$fallback = '';
+		$urls     = null;
+		if ( Affected_Pages::lists_changed_by( $post, $before ) ) {
+			$fallback = self::FALLBACK_THEME_LIST;
+		} else {
+			$urls = Affected_Pages::for_post( $post, $before );
+			// Read before forget(): a plain edit is judged on the terms the
+			// save replaced.
+			$listing = Listing_Pages::enabled() ? Listing_Pages::pages_for( $post, $before ) : array();
+			if ( null === $listing ) {
+				$fallback = self::FALLBACK_LISTING;
+				$urls     = null;
+			} else {
+				// Pages the rules did not name. Nginx Helper's own purge does
+				// not reach them either, so a fallback they cause has to say so.
+				$extra = array_diff( $listing, $urls );
+				$urls  = array_values( array_unique( array_merge( $urls, $listing ) ) );
+				if ( count( $urls ) > Affected_Pages::LIMIT ) {
+					$fallback = array() === $extra ? self::FALLBACK_LIMIT : self::FALLBACK_LISTING;
+					$urls     = null;
+				}
+			}
+		}
+		Affected_Pages::forget( (int) $post->ID );
+
+		if ( is_array( $urls ) ) {
+			/**
+			 * Filter the pages a post change clears.
+			 *
+			 * Return false to purge the whole site instead.
+			 *
+			 * @param string[]|false $urls Absolute URLs.
+			 * @param \WP_Post       $post The post that changed.
+			 */
+			$urls = apply_filters( 'xspeed_purge_affected_pages', $urls, $post );
+			if ( ! is_array( $urls ) ) {
+				$fallback = self::FALLBACK_FILTER;
+			}
+		}
+
+		if ( ! is_array( $urls ) ) {
+			self::purge_all(
+				$cause,
+				null,
+				array(
+					'scope'    => 'site',
+					'intent'   => 'content',
+					'urls'     => array(),
+					'fallback' => $fallback,
+				)
+			);
+			return;
+		}
+		if ( array() !== $urls ) {
+			self::purge_urls( $urls, $cause );
 		}
 	}
 
@@ -3614,6 +5036,37 @@ class Cache {
 		$post_type = is_object( $post ) && isset( $post->post_type )
 			? (string) $post->post_type
 			: (string) get_post_type( $post_id );
+
+		if ( ! in_array( $post_type, self::presentation_post_types(), true ) && self::narrow_purge_applies( $post_type ) ) {
+			$object = $post instanceof \WP_Post ? $post : get_post( (int) $post_id );
+			if ( $object instanceof \WP_Post ) {
+				if ( 'attachment' === $post_type ) {
+					// Its own page and the post it is attached to. Pages that
+					// show the file keep an <img> to a file that is gone either
+					// way: a fresh render prints the same tag.
+					$urls = array();
+					$link = get_permalink( $object );
+					if ( is_string( $link ) && '' !== $link ) {
+						$urls[] = $link;
+					}
+					$parent = $object->post_parent > 0 ? get_post( (int) $object->post_parent ) : null;
+					if ( $parent instanceof \WP_Post && 'publish' === $parent->post_status ) {
+						$parent_link = get_permalink( $parent );
+						if ( is_string( $parent_link ) && '' !== $parent_link ) {
+							$urls[] = $parent_link;
+						}
+					}
+					if ( array() !== $urls ) {
+						self::purge_urls( $urls, 'post-removed:attachment' );
+					}
+					return;
+				}
+				// Still published here: `before_delete_post` runs before the
+				// row goes. Trashing reaches the save path instead.
+				self::purge_post_change( $object, null, 'post-removed:' . $post_type );
+				return;
+			}
+		}
 
 		self::purge_all(
 			'post-removed:' . $post_type,
@@ -3641,13 +5094,25 @@ class Cache {
 		if ( ! is_string( $url ) || '' === $url ) {
 			return;
 		}
+		$post   = function_exists( 'get_post' ) ? get_post( $post_id ) : null;
+		$narrow = $post instanceof \WP_Post && self::narrow_purge_applies( (string) $post->post_type );
+		if ( $narrow && ! Affected_Pages::site_lists_comments() ) {
+			$urls = Affected_Pages::for_comment( $post );
+			if ( array() !== $urls ) {
+				self::purge_urls( $urls, 'comment-status:' . (string) $status );
+			}
+			return;
+		}
 		self::purge_all(
 			'comment-status:' . (string) $status,
 			null,
 			array(
-				'scope'  => 'site',
-				'intent' => 'content',
-				'urls'   => array(),
+				'scope'    => 'site',
+				'intent'   => 'content',
+				'urls'     => array(),
+				// Narrow purges apply to this post, so the site-wide purge is
+				// for a recent-comments list on pages the rules cannot name.
+				'fallback' => $narrow ? self::FALLBACK_THEME_LIST : '',
 			)
 		);
 	}
@@ -3672,6 +5137,17 @@ class Cache {
 		}
 		$post_id = is_array( $data ) && isset( $data['comment_post_ID'] ) ? (int) $data['comment_post_ID'] : 0;
 		if ( $post_id < 1 ) {
+			return;
+		}
+		// With narrow purges on, the comment pages and comment feeds go too.
+		// No site-wide fallback here: a visitor's comment must never be able
+		// to clear the whole site (#243).
+		$post = function_exists( 'get_post' ) ? get_post( $post_id ) : null;
+		if ( $post instanceof \WP_Post && self::narrow_purge_applies( (string) $post->post_type ) ) {
+			$urls = Affected_Pages::for_comment( $post );
+			if ( array() !== $urls ) {
+				self::purge_urls( $urls, 'comment' );
+			}
 			return;
 		}
 		$url = get_permalink( $post_id );
@@ -3736,6 +5212,16 @@ class Cache {
 			$product_id = $parent;
 		}
 
+		// wp-admin's Update saves the product through WooCommerce inside the
+		// post's own save_post, and Cache::on_save_post() then clears the
+		// whole site for it, since products are in
+		// xspeed_site_wide_purge_post_types. Sending these pages first only
+		// purged them twice. A price or stock change made without a post
+		// save (an order, the REST API, `$product->save()`) still purges here.
+		if ( self::site_wide_save_under_way( $product_id ) ) {
+			return;
+		}
+
 		$urls = array();
 
 		$permalink = get_permalink( $product_id );
@@ -3790,19 +5276,175 @@ class Cache {
 		 */
 		$urls = (array) apply_filters( 'xspeed_purge_product_urls', $urls, $product_id );
 
-		foreach ( array_unique( array_filter( $urls ) ) as $url ) {
-			self::purge_url( (string) $url, 'product' );
+		$targets = array();
+		foreach ( $urls as $url ) {
+			if ( is_scalar( $url ) && '' !== (string) $url ) {
+				$targets[] = (string) $url;
+			}
 		}
+		if ( array() === $targets ) {
+			return;
+		}
+
+		// One batch, as a post save sends: one purge-log row and one event
+		// naming every page, each in the spelling WordPress links to. A
+		// purge_url() per page published every page in both spellings,
+		// which doubled the calls to Nginx Helper, and wrote no purge-log
+		// row when xSpeed's own page cache was off and no file went.
+		// purge_urls() leaves the object cache alone, which matters here:
+		// this runs on every stock change at checkout.
+		self::purge_urls( array_values( array_unique( $targets ) ), 'product', 'content' );
+	}
+
+	/**
+	 * Posts whose save_post is running in this request, keyed by ID, with
+	 * the post as saved. Set before any other save_post listener and cleared
+	 * after the last one.
+	 *
+	 * @var array<int,\WP_Post|null>
+	 */
+	private static $saves_under_way = array();
+
+	/**
+	 * A post save has started.
+	 *
+	 * @param int           $post_id Post ID.
+	 * @param \WP_Post|null $post    Post as saved.
+	 */
+	public static function on_post_save_start( $post_id, $post = null ): void {
+		self::$saves_under_way[ (int) $post_id ] = is_object( $post ) ? $post : null;
+	}
+
+	/**
+	 * A post save has finished.
+	 *
+	 * @param int $post_id Post ID.
+	 */
+	public static function on_post_save_end( $post_id ): void {
+		unset( self::$saves_under_way[ (int) $post_id ] );
+	}
+
+	/**
+	 * Whether a save_post for this post is running now and will end in
+	 * on_save_post() clearing the whole site: the same checks it makes.
+	 *
+	 * @param int $post_id Post ID.
+	 */
+	private static function site_wide_save_under_way( int $post_id ): bool {
+		if ( ! array_key_exists( $post_id, self::$saves_under_way ) ) {
+			return false;
+		}
+		$post = self::$saves_under_way[ $post_id ];
+		if ( ! self::post_change_is_cacheable_content( $post_id, $post, 'save' ) ) {
+			return false;
+		}
+		$post_type = is_object( $post ) && isset( $post->post_type )
+			? (string) $post->post_type
+			: (string) get_post_type( $post_id );
+		if ( in_array( $post_type, self::presentation_post_types(), true ) ) {
+			return true;
+		}
+		return ! self::narrow_purge_applies( $post_type );
+	}
+
+	/** Test seam: forget the post saves in progress. */
+	public static function reset_saves_under_way(): void {
+		self::$saves_under_way = array();
 	}
 
 	/**
 	 * Adapter for the WooCommerce stock actions that pass a product OBJECT
 	 * where the status actions pass an ID.
 	 *
+	 * No longer wired to a hook (on_product_stock_set() is); kept because
+	 * it is public.
+	 *
 	 * @param object $product WC_Product (or variation).
 	 */
 	public static function purge_product_object( $product ): void {
 		self::purge_product( $product );
+	}
+
+	/**
+	 * Stock writes wc_update_product_stock() has opened in this request,
+	 * keyed by product ID: true once the save inside the write has purged.
+	 *
+	 * Entries are removed when the write's *_set_stock arrives, so this
+	 * holds only writes still in progress.
+	 *
+	 * @var array<int,bool>
+	 */
+	private static $stock_writes = array();
+
+	/**
+	 * A CRUD save of a product: purge its pages.
+	 *
+	 * Inside a wc_update_product_stock() write, this is the save that write
+	 * makes, so note that the write's pages are already purged.
+	 *
+	 * @param int|object $product Product ID (what WooCommerce passes) or WC_Product.
+	 */
+	public static function on_product_saved( $product ): void {
+		$product_id = self::product_id_of( $product );
+		if ( isset( self::$stock_writes[ $product_id ] ) ) {
+			self::$stock_writes[ $product_id ] = true;
+		}
+		self::purge_product( $product );
+	}
+
+	/**
+	 * wc_update_product_stock() is about to write a product's stock.
+	 *
+	 * @param object $product WC_Product (or variation) whose stock changes.
+	 */
+	public static function on_product_stock_write( $product ): void {
+		$product_id = self::product_id_of( $product );
+		if ( $product_id > 0 ) {
+			self::$stock_writes[ $product_id ] = false;
+		}
+	}
+
+	/**
+	 * A product's stock changed: purge its pages, unless the save inside
+	 * the same wc_update_product_stock() call already did.
+	 *
+	 * That save fires woocommerce_update_product for the same product a
+	 * moment earlier, with the stock already written, so purging again
+	 * here cleared the same pages twice in one call. Only that pairing is
+	 * skipped: the flag is set by the save inside this write and cleared
+	 * here, so the next write, a status change or a later save in the same
+	 * request purges as usual, and so does a write made with `$updating`
+	 * set, which skips the save. A *_set_stock that arrives without
+	 * *_before_set_stock (WooCommerce's data store fires one mid-save when
+	 * a CRUD save changes the quantity) is not part of a write and purges.
+	 *
+	 * @param object $product WC_Product (or variation).
+	 */
+	public static function on_product_stock_set( $product ): void {
+		$product_id = self::product_id_of( $product );
+		$purged     = ! empty( self::$stock_writes[ $product_id ] );
+		unset( self::$stock_writes[ $product_id ] );
+		if ( $purged ) {
+			return;
+		}
+		self::purge_product( $product );
+	}
+
+	/** Test seam: forget the stock writes in progress. */
+	public static function reset_stock_writes(): void {
+		self::$stock_writes = array();
+	}
+
+	/**
+	 * The ID of a product passed as an ID or as a WC_Product.
+	 *
+	 * @param int|object $product Product ID or WC_Product.
+	 */
+	private static function product_id_of( $product ): int {
+		if ( is_object( $product ) ) {
+			return method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0;
+		}
+		return is_numeric( $product ) ? (int) $product : 0;
 	}
 
 	/**
@@ -3855,6 +5497,10 @@ class Cache {
 		if ( ! function_exists( 'do_action' ) ) {
 			return;
 		}
+		// Every event carries `fallback`, so one handler can read both the
+		// per-URL and the full-purge shape. '' unless a narrow purge fell
+		// back to the whole site.
+		$context['fallback'] = isset( $context['fallback'] ) && is_string( $context['fallback'] ) ? $context['fallback'] : '';
 		$target = $hook . '|' . ( isset( $context['url'] ) ? (string) $context['url'] : '' )
 			. '|' . ( isset( $context['host'] ) ? (string) $context['host'] : '' );
 		if ( isset( self::$purge_events_in_flight[ $target ] ) ) {
@@ -3879,6 +5525,17 @@ class Cache {
 			// the server keeps serving stale HTML. Shipped behaviour must not
 			// be hostage to a listener's bug.
 			self::forward_to_server_caches( $context );
+		} catch ( \Throwable $e ) {
+			self::log_purge_listener_error( $hook, $e );
+		}
+
+		// The edge xCloud provides, through its purge plugin. Direct for the
+		// same reason, and in its own try so a failure here cannot cost the
+		// host page caches above or the public action below.
+		try {
+			if ( class_exists( __NAMESPACE__ . '\\Managed_Edge_Purge' ) ) {
+				Managed_Edge_Purge::forward( $context );
+			}
 		} catch ( \Throwable $e ) {
 			self::log_purge_listener_error( $hook, $e );
 		}
@@ -4010,10 +5667,14 @@ class Cache {
 		}
 	}
 
-	/** Test seam: clear the in-flight set left behind by an aborted dispatch. */
+	/**
+	 * Test seam: clear the in-flight set left behind by an aborted dispatch,
+	 * and the record of which saves purged in this request.
+	 */
 	public static function reset_purge_events(): void {
 		self::$purge_events_in_flight = array();
 		self::$purge_event_sequence   = 0;
+		self::$saves_purged           = array();
 	}
 
 	/**
@@ -4076,6 +5737,10 @@ class Cache {
 		if ( '' === trim( $url ) ) {
 			return 0;
 		}
+		// parse_url() can turn raw UTF-8 into underscores (it depends on the
+		// host's C library and locale), so a pasted `/關於我們/` is encoded
+		// first. normalize_path() below gives the same result either way.
+		$url   = self::encode_non_ascii( $url );
 		$parts = function_exists( 'wp_parse_url' ) ? wp_parse_url( $url ) : parse_url( $url ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- fallback for early-boot contexts only.
 		if ( ! is_array( $parts ) ) {
 			return 0;
@@ -4144,13 +5809,18 @@ class Cache {
 		if ( false !== strpos( $path, '..' ) ) {
 			return 0;
 		}
+		// Same spelling cache_key() hashes, so a permalink, the same URL with
+		// `%E7` capitals, and a pasted `/關於我們/` all find the entry. The
+		// purge event below keeps the caller's spelling and adds the others
+		// (see escape_spellings()).
+		$key_path = self::normalize_path( $path );
 
 		// The cache key preserves REQUEST_URI's trailing-slash form, so
 		// purge both. Root stays a single '/'.
-		$forms = array( $path );
-		if ( '/' !== $path ) {
-			$forms[] = rtrim( $path, '/' );
-			$forms[] = rtrim( $path, '/' ) . '/';
+		$forms = array( $key_path );
+		if ( '/' !== $key_path ) {
+			$forms[] = rtrim( $key_path, '/' );
+			$forms[] = rtrim( $key_path, '/' ) . '/';
 		}
 		$forms = array_unique( $forms );
 
@@ -4188,10 +5858,13 @@ class Cache {
 		}
 
 		// Static tree (served directly by the nginx/.htaccess rewrite).
-		if ( defined( 'XSPEED_CACHE_STATIC_DIR' ) ) {
+		// The static tree stores decoded names (see static_path()). A path
+		// static_path() refuses was never written there.
+		$rel = self::static_path( $key_path );
+		if ( defined( 'XSPEED_CACHE_STATIC_DIR' ) && null !== $rel ) {
 			// Same transform the write used — `localhost:8080` files under
 			// `localhost8080`, so the bare host found nothing here either.
-			$dir  = rtrim( XSPEED_CACHE_STATIC_DIR, '/' ) . '/' . self::static_host_dir( $host ) . ( '/' === $path ? '' : rtrim( $path, '/' ) );
+			$dir  = rtrim( XSPEED_CACHE_STATIC_DIR, '/' ) . '/' . self::static_host_dir( $host ) . $rel;
 			$file = $dir . '/index.html';
 			if ( is_file( $file ) ) {
 				wp_delete_file( $file );
@@ -4204,7 +5877,30 @@ class Cache {
 			}
 		}
 
-		if ( $count > 0 ) {
+		/*
+		 * The per-URL purge event is published by `dispatch_purge_event()`
+		 * below, NOT here.
+		 *
+		 * This branch used to publish it itself, with a raw `do_action` and a
+		 * `{scope,url,urls,cause,count}` payload. #348 then landed the purge
+		 * contract on dev: a canonical URL, `removed` rather than `count`,
+		 * `intent`, per-listener isolation, and an in-flight guard so a
+		 * listener that purges its own layer cannot re-enter the event.
+		 *
+		 * Keeping both meant every per-URL purge fired TWICE, in two payload
+		 * shapes, and the raw call bypassed the guard — so a listener that
+		 * called back into `purge_url()` recursed until the process ran out
+		 * of memory. `CachePurgeEventContractTest::
+		 * test_a_listener_re_purging_the_same_url_does_not_recurse` is what
+		 * caught it, and it arrived from dev with the contract it defends.
+		 *
+		 * The contract wins: it is a superset of what this published, and it
+		 * is what the LiteSpeed and nginx adapters are written against.
+		 */
+
+		// purge_url_reported() writes this row itself once the event has
+		// gone out, so it can name the caches the purge was sent to.
+		if ( $count > 0 && null === self::$url_batch && null === self::$reported_url_purge ) {
 			Cache_Inventory::invalidate();
 			Activity_Log::record(
 				'cache_purge_url',
@@ -4253,30 +5949,294 @@ class Cache {
 		 *     @type int    $removed Number of cache files removed.
 		 *     @type string $scope   Actionable adapter scope: `urls`.
 		 *     @type string $intent  Why responses changed: `content`.
-		 *     @type string[] $urls  Exact response URLs to invalidate.
+		 *     @type string[] $urls  Exact response URLs to invalidate: the
+		 *                            canonical URL first, then the same URL
+		 *                            with the other trailing-slash spelling
+		 *                            (none for the root). A path with
+		 *                            percent-escapes adds the same pair with
+		 *                            the escapes in lower case and in upper
+		 *                            case, where those differ from it.
+		 *     @type string $fallback Always '' on this event. Present so both
+		 *                            purge events share one shape; see
+		 *                            `xspeed_after_purge`.
 		 * }
 		 */
-		$canonical_url = self::canonical_purge_url(
-			$host,
-			$path,
-			isset( $parts['query'] ) ? (string) $parts['query'] : '',
-			isset( $parts['scheme'] ) ? strtolower( (string) $parts['scheme'] ) : ''
-		);
+		$query         = isset( $parts['query'] ) ? (string) $parts['query'] : '';
+		$url_scheme    = isset( $parts['scheme'] ) ? strtolower( (string) $parts['scheme'] ) : '';
+		$canonical_url = self::canonical_purge_url( $host, $path, $query, $url_scheme );
+		// Every spelling the local sweep above cleared, because a cache in
+		// front keys each one on its own. Visitors reach a page as `/about/`
+		// while a caller often passes `/about` (or the reverse), and a
+		// non-ASCII page as `/%E9%97%9C…/` while get_permalink() passes
+		// `/%e9%97%9c…/`. Publishing one spelling left the edge serving the
+		// other, usually the one visitors actually use.
+		$event_urls = array();
+		foreach ( self::escape_spellings( $path ) as $spelling ) {
+			$event_urls[] = self::canonical_purge_url( $host, $spelling, $query, $url_scheme );
+			if ( '/' === $spelling ) {
+				continue;
+			}
+			$other = '/' === substr( $spelling, -1 ) ? rtrim( $spelling, '/' ) : $spelling . '/';
+			if ( '' !== $other ) {
+				$event_urls[] = self::canonical_purge_url( $host, $other, $query, $url_scheme );
+			}
+		}
+		// Inside purge_urls(): the batch publishes one event for every URL,
+		// in the trailing-slash form it was given. The local sweep above still
+		// took both forms. Escape spellings are still added, because the other
+		// escape case does not redirect: a cache in front keeps the browser's
+		// `%E9…` copy apart from the permalink's `%e9…` one.
+		if ( null !== self::$url_batch ) {
+			if ( '' === self::$url_batch['url'] ) {
+				self::$url_batch['url']  = $canonical_url;
+				self::$url_batch['host'] = $host;
+				self::$url_batch['path'] = $path;
+			}
+			self::$url_batch['removed'] += $count;
+			foreach ( self::escape_spellings( $path ) as $spelling ) {
+				self::$url_batch['urls'][ self::canonical_purge_url( $host, $spelling, $query, $url_scheme ) ] = true;
+			}
+			return $count;
+		}
+
 		self::dispatch_purge_event(
 			'xspeed_after_purge_url',
 			array(
-				'url'     => $canonical_url,
-				'host'    => $host,
-				'path'    => $path,
-				'cause'   => $cause,
-				'removed' => $count,
-				'scope'   => 'urls',
-				'intent'  => 'content',
-				'urls'    => array( $canonical_url ),
+				'url'      => $canonical_url,
+				'host'     => $host,
+				'path'     => $path,
+				'cause'    => $cause,
+				'removed'  => $count,
+				'scope'    => 'urls',
+				'intent'   => 'content',
+				'urls'     => array_values( array_unique( $event_urls ) ),
+				'fallback' => '',
 			)
 		);
 
 		return $count;
+	}
+
+	/**
+	 * The batch purge_urls() is collecting, or null outside one.
+	 *
+	 * @var array{url:string,host:string,path:string,removed:int,urls:array<string,bool>}|null
+	 */
+	private static $url_batch = null;
+
+	/**
+	 * The caches in front of PHP that took a purge while a report is open,
+	 * keyed by label, or null when no report is open.
+	 *
+	 * @var array<string,bool>|null
+	 */
+	private static $forward_report = null;
+
+	/**
+	 * Note that a purge was handed to a cache in front of PHP: a server
+	 * cache, a host cache, a CDN or an edge.
+	 *
+	 * The built-in adapters call this when they accept a purge, whether
+	 * they send it now or queue it for the end of the request. A third-party
+	 * adapter listening on `xspeed_after_purge_url` may call it too, so an
+	 * operator's purge names it. Does nothing unless a caller opened a
+	 * report with purge_url_reported().
+	 *
+	 * @param string $layer Name to show, such as "Nginx Helper".
+	 */
+	public static function note_purge_forwarded( string $layer ): void {
+		if ( null === self::$forward_report || '' === trim( $layer ) ) {
+			return;
+		}
+		self::$forward_report[ $layer ] = true;
+	}
+
+	/**
+	 * Run a purge and collect the caches in front of PHP it was sent to.
+	 *
+	 * @param callable $purge The purge to run.
+	 * @return array{result:mixed,forwarded:string[]}
+	 */
+	public static function report_forwarding( callable $purge ): array {
+		$outer                = self::$forward_report;
+		self::$forward_report = array();
+		try {
+			$result = $purge();
+		} finally {
+			$forwarded            = array_keys( (array) self::$forward_report );
+			self::$forward_report = null === $outer ? null : $outer + (array) self::$forward_report;
+		}
+		return array(
+			'result'    => $result,
+			'forwarded' => $forwarded,
+		);
+	}
+
+	/**
+	 * Set while purge_url_reported() runs, so purge_url() leaves the
+	 * purge-log row to it. Null otherwise.
+	 *
+	 * @var bool|null
+	 */
+	private static $reported_url_purge = null;
+
+	/**
+	 * Purge one URL for an operator, and say where the purge went.
+	 *
+	 * purge_url() writes a purge-log row only when it removed a local file,
+	 * because Pro's beacons call it on visitor requests. On a site whose
+	 * pages are held only by a server cache (xSpeed's page cache off, nginx
+	 * in front) an operator's purge then removed nothing locally, was sent
+	 * to the server cache, and left no row and an "already cold" answer.
+	 * This adds the row in that case. The CLI, the MCP tool (which runs the
+	 * CLI) and the admin "Purge this URL" link use it.
+	 *
+	 * @param string $url   Absolute URL or site-relative path.
+	 * @param string $cause Who asked, for the purge log.
+	 * @return array{removed:int,forwarded:string[]} Files removed here, and
+	 *                                               the caches the purge was sent to.
+	 */
+	public static function purge_url_reported( string $url, string $cause ): array {
+		$outer                    = self::$reported_url_purge;
+		self::$reported_url_purge = true;
+		try {
+			$run = self::report_forwarding(
+				static function () use ( $url, $cause ): int {
+					return self::purge_url( $url, $cause );
+				}
+			);
+		} finally {
+			self::$reported_url_purge = $outer;
+		}
+		$removed   = (int) $run['result'];
+		$forwarded = $run['forwarded'];
+
+		if ( $removed > 0 ) {
+			Cache_Inventory::invalidate();
+			$message = array() === $forwarded
+				? sprintf(
+					/* translators: 1: cause of the purge, 2: URL or path, 3: number of files removed. */
+					__( 'Purged one URL (%1$s) — %2$s, %3$d file(s) removed', 'xspeed' ),
+					$cause,
+					$url,
+					$removed
+				)
+				: sprintf(
+					/* translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to. */
+					__( 'Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s', 'xspeed' ),
+					$cause,
+					$url,
+					$removed,
+					implode( ', ', $forwarded )
+				);
+			Activity_Log::record( 'cache_purge_url', $message, Activity_Log::INFO );
+		} elseif ( array() !== $forwarded ) {
+			Activity_Log::record(
+				'cache_purge_url',
+				sprintf(
+					/* translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to. */
+					__( 'Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s', 'xspeed' ),
+					$cause,
+					$url,
+					implode( ', ', $forwarded )
+				),
+				Activity_Log::INFO
+			);
+		}
+
+		return array(
+			'removed'   => $removed,
+			'forwarded' => $forwarded,
+		);
+	}
+
+	/**
+	 * Purge several URLs as one purge: each URL's local copy goes as in
+	 * purge_url(), then ONE `xspeed_after_purge_url` event carries every URL.
+	 *
+	 * One event rather than one per URL, so the purge log gets one line, an
+	 * edge gets one batch, and a listener that counts purges counts one. The
+	 * event is the same contract purge_url() publishes: `scope` is `urls`,
+	 * `url` is the first URL, `urls` is all of them.
+	 *
+	 * Unlike purge_url(), `urls` holds each URL in the spelling it was given
+	 * and not the other trailing-slash spelling too. Callers pass WordPress's
+	 * own links (get_permalink(), get_term_link() and the like), which are
+	 * the spelling visitors reach; the other spelling redirects to it, so a
+	 * cache in front holds nothing stale under it. Both spellings doubled the
+	 * list: a typical save named 34 pages as 67 URLs, past xCloud's 50-URL
+	 * batch and the Hub's 30 per call. xSpeed's own sweep still removes both
+	 * spellings of each. The escape spellings (escape_spellings()) are still
+	 * listed, because `%E9…` does not redirect to `%e9…`; they add URLs only
+	 * for a path with percent-escapes.
+	 *
+	 * The object cache is left alone, as purge_url() leaves it. WordPress
+	 * already drops a post's own entries when the post, its terms or its
+	 * comments change (clean_post_cache() and the like), so a flush here
+	 * cleared nothing stale. What it did do: an approved visitor comment
+	 * emptied Redis or Memcached for the whole site, as often as a visitor
+	 * cared to comment. With a persistent object cache, transients live
+	 * there too, so a flush could also drop work a purge listener had just
+	 * queued in one. purge_all() still flushes.
+	 *
+	 * @param string[] $urls   Absolute URLs or site-relative paths.
+	 * @param string   $cause  Who asked, for the purge log.
+	 * @param string   $intent Why responses changed: `content` by default.
+	 * @return int Cache files removed.
+	 */
+	public static function purge_urls( array $urls, string $cause = 'manual', string $intent = 'content' ): int {
+		$outer           = self::$url_batch;
+		self::$url_batch = array(
+			'url'     => '',
+			'host'    => '',
+			'path'    => '',
+			'removed' => 0,
+			'urls'    => array(),
+		);
+		try {
+			foreach ( array_unique( array_filter( $urls, 'is_string' ) ) as $url ) {
+				self::purge_url( $url, $cause );
+			}
+		} finally {
+			$batch           = self::$url_batch;
+			self::$url_batch = $outer;
+		}
+		if ( '' === $batch['url'] ) {
+			return 0;
+		}
+
+		Cache_Inventory::invalidate();
+		self::update_stats( array( 'last_purge' => time() ) );
+		// Same type as one URL's purge, so the purge log and the dashboard's
+		// drill-down list it with the others.
+		Activity_Log::record(
+			'cache_purge_url',
+			sprintf(
+				/* translators: 1: number of pages, 2: cause of the purge, 3: number of files removed. */
+				_n( 'Purged %1$d page (%2$s), %3$d file(s) removed', 'Purged %1$d pages (%2$s), %3$d file(s) removed', count( $urls ), 'xspeed' ),
+				count( $urls ),
+				$cause,
+				$batch['removed']
+			),
+			Activity_Log::INFO
+		);
+
+		self::dispatch_purge_event(
+			'xspeed_after_purge_url',
+			array(
+				'url'      => $batch['url'],
+				'host'     => $batch['host'],
+				'path'     => $batch['path'],
+				'cause'    => $cause,
+				'removed'  => $batch['removed'],
+				'scope'    => 'urls',
+				'intent'   => $intent,
+				'urls'     => array_keys( $batch['urls'] ),
+				'fallback' => '',
+			)
+		);
+
+		return $batch['removed'];
 	}
 
 	/** Host this site's purge is scoped to, for the purge-event context. */
@@ -4469,13 +6429,20 @@ class Cache {
 		$rest   = Rest_Cache::purge();
 		$count += $rest;
 
-		// Minified + combined CSS/JS (cache/xspeed/min/ and min/combined/).
-		// purge_all is a full filesystem sweep and must clear these too, even
-		// when the Minify module is currently disabled — orphaned min/ files
-		// from a feature the user later turned off must still be removed, and
-		// a stale combined-<hash>.css that the regenerated page no longer
-		// references otherwise 404s and breaks the frontend. (FBS-83114/83116)
-		$assets = class_exists( '\\XSpeed\\Minifier' ) ? Minifier::purge_minified() : 0;
+		// Minified + combined CSS/JS (cache/xspeed/min/ and min/combined/)
+		// go only on a NETWORK-wide sweep.
+		//
+		// They are named by content, so a site purge gains nothing by deleting
+		// them: the next render links the same names for unchanged sources
+		// and new names for changed ones. Deleting them did cost something.
+		// A page rendered just before the purge and stored just after linked
+		// files that were gone (unstyled until the TTL), and min/ is shared
+		// by every blog, so one subsite's purge broke every other subsite's
+		// cached pages. Orphans are Cache_GC's job; a network purge, an
+		// update, the explicit assets purge and deactivation still clear the
+		// tree, and the purge stamp stops a render in flight from being
+		// stored against deleted files.
+		$assets = ( $network_wide && class_exists( '\\XSpeed\\Minifier' ) ) ? Minifier::purge_minified() : 0;
 
 		return array(
 			'pages'  => $count - $rest,
@@ -4555,6 +6522,8 @@ class Cache {
 			$urls = array();
 		}
 
+		$fallback = isset( $invalidation['fallback'] ) && is_string( $invalidation['fallback'] ) ? $invalidation['fallback'] : '';
+
 		$removed = self::purge_local( $host );
 		$count   = $removed['pages'] + $removed['rest'];
 
@@ -4607,21 +6576,35 @@ class Cache {
 		 *     @type string $scope   Adapter action: urls/site/network/none.
 		 *     @type string $intent  content/presentation/complete or a caller-defined intent.
 		 *     @type string[] $urls  Exact targets when scope is urls.
+		 *     @type string $fallback Why a change that would have cleared
+		 *                            only its own pages cleared the whole site
+		 *                            instead: `theme_list`, `limit`, `pending`
+		 *                            or `filter`. Empty for every other purge.
+		 *                            See the purge-event contract in
+		 *                            docs/guides/hooks-and-filters.md.
 		 * }
 		 */
 		self::dispatch_purge_event(
 			'xspeed_after_purge',
 			array(
-				'url'     => null,
-				'host'    => null === $host ? self::current_purge_host() : (string) $host,
-				'path'    => null,
-				'cause'   => $cause,
-				'removed' => $count,
-				'scope'   => $adapter_scope,
-				'intent'  => $intent,
-				'urls'    => $urls,
+				'url'      => null,
+				'host'     => null === $host ? self::current_purge_host() : (string) $host,
+				'path'     => null,
+				'cause'    => $cause,
+				'removed'  => $count,
+				'scope'    => $adapter_scope,
+				'intent'   => $intent,
+				'urls'     => $urls,
+				'fallback' => $fallback,
 			)
 		);
+
+		/*
+		 * The generic event is published by the `dispatch_purge_event()` call
+		 * directly above, NOT here. Same supersession as in `purge_url()`:
+		 * this branch's raw `do_action` with a `count` payload predates #348's
+		 * contract, and keeping both made a full purge publish twice.
+		 */
 
 		// The list behind the "Cached pages" card is memoized for a minute;
 		// a purge has to drop it or the drill-down shows pages that no
@@ -4993,8 +6976,8 @@ class Cache {
 	 * @return void
 	 */
 	private static function purge_for_upgrade(): void {
+		// Network-wide, so purge_local() also clears min/.
 		self::purge_all( 'upgrade', '*' );
-		Minifier::purge_minified();
 	}
 
 	/**
@@ -5330,33 +7313,7 @@ class Cache {
 				return $count;
 
 			case 'assets':
-				if ( class_exists( '\\XSpeed\\Minifier' ) ) {
-					Minifier::purge_minified();
-				}
-				// Deleting min/ without clearing the pages that link it left
-				// every cached page pointing at files that no longer exist.
-				// WordPress answers the missing asset by 301-ing to its
-				// pretty-permalink form and serving the 404 TEMPLATE as
-				// `HTTP 200 text/html`, which the browser accepts as a
-				// stylesheet and parses to zero rules — no console error, no
-				// network failure, no 4xx anywhere in devtools. The pages
-				// stayed broken for the rest of the TTL (7 days on
-				// Aggressive, up to 30), and the admin who clicked could not
-				// see it: they are logged in, so their own requests bypass
-				// the page cache and re-render, regenerating the assets as a
-				// side effect. Only anonymous visitors were served the stale
-				// HTML. (#244)
-				//
-				// The assets are the pages' dependency, so invalidating them
-				// invalidates the pages. Same invariant Cache_GC enforces
-				// with is_referenced(): never leave a cached page pointing at
-				// an asset that is gone.
-				$count = self::purge_pages();
-				self::update_stats( array( 'last_purge' => time() ) );
-				Cache_Inventory::invalidate();
-				self::record_partial_purge( 'assets', $cause, $count );
-				self::announce_purge( $cause, $count );
-				return $count;
+				return self::purge_assets( $cause );
 
 			case 'object':
 				if ( function_exists( 'wp_cache_flush' ) ) {
@@ -5374,6 +7331,119 @@ class Cache {
 			default:
 				return self::purge_type_unhandled( $type, $cause );
 		}
+	}
+
+	/**
+	 * Purge this site's pages after a Customizer publish.
+	 *
+	 * A presentation change: every page's markup or inline CSS may differ, so
+	 * the whole site bucket goes, as for a template or global-styles edit.
+	 * min/ stays, because its files are named by content; this blog's
+	 * manifests are dropped so the next render re-reads every source rather
+	 * than trusting a signature. Bound with no arguments, because the hook
+	 * passes the WP_Customize_Manager, which purge_all() would take as its
+	 * cause.
+	 */
+	public static function on_customize_save(): void {
+		self::purge_all(
+			'customizer',
+			null,
+			array(
+				'scope'  => 'site',
+				'intent' => 'presentation',
+				'urls'   => array(),
+			)
+		);
+		if ( class_exists( '\\XSpeed\\Minifier' ) ) {
+			Minifier::purge_manifests( Asset_Manifest::blog_id() );
+		}
+	}
+
+	/**
+	 * Purge minified and combined CSS/JS, and the pages that link them.
+	 *
+	 * Scope follows who shares what:
+	 *
+	 *   - Single site: min/ is deleted outright.
+	 *   - One site of a network: min/ is shared by every blog, so only this
+	 *     blog's manifests go. Its next render re-reads each source and
+	 *     rebuilds only what changed; no other blog loses a file it links.
+	 *     Outputs nothing links any more are left to Cache_GC.
+	 *   - $network: min/ and every blog's pages, network-wide.
+	 *
+	 * Deleting min/ without clearing the pages that link it left every
+	 * cached page pointing at files that no longer exist. WordPress answers
+	 * the missing asset by 301-ing to its pretty-permalink form and serving
+	 * the 404 TEMPLATE as `HTTP 200 text/html`, which the browser accepts as
+	 * a stylesheet and parses to zero rules — no console error, no network
+	 * failure, no 4xx anywhere in devtools. The pages stayed broken for the
+	 * rest of the TTL, and the admin who clicked could not see it: they are
+	 * logged in, so their own requests bypass the page cache. (#244) So the
+	 * pages go too, and when files were actually deleted the edge is told
+	 * through `xspeed_after_purge_all`, or it keeps serving HTML that links
+	 * them.
+	 *
+	 * The public `xspeed_after_purge` event carries intent `assets`: rendered
+	 * markup did not change, only asset files did. A listener that keeps
+	 * measurements of rendered pages (selectors, layout) can keep them.
+	 *
+	 * @param string $cause   Who asked.
+	 * @param bool   $network Purge every blog's pages and all of min/.
+	 * @return int Page entries removed.
+	 */
+	public static function purge_assets( string $cause, bool $network = false ): int {
+		$deleted = 0;
+		$rest    = 0;
+		if ( $network ) {
+			// purge_local('*') clears min/ itself on a network-wide sweep.
+			$removed = self::purge_local( '*' );
+			$count   = (int) $removed['pages'];
+			$rest    = (int) $removed['rest'];
+			$deleted = (int) $removed['assets'];
+		} else {
+			if ( class_exists( '\\XSpeed\\Minifier' ) && is_multisite() ) {
+				Minifier::purge_manifests( Asset_Manifest::blog_id() );
+			} elseif ( class_exists( '\\XSpeed\\Minifier' ) ) {
+				$deleted = Minifier::purge_minified();
+			}
+			$count = self::purge_pages();
+		}
+
+		self::update_stats( array( 'last_purge' => time() ) );
+		Cache_Inventory::invalidate();
+		self::record_partial_purge( 'assets', $cause, $count + $rest );
+
+		if ( $deleted > 0 || $network ) {
+			try {
+				self::do_action_isolated( 'xspeed_after_purge_all', $cause );
+			} catch ( \Throwable $e ) {
+				self::log_purge_listener_error( 'xspeed_after_purge_all', $e );
+			}
+		}
+
+		if ( ! $network ) {
+			self::announce_purge( $cause, $count, 'site', 'assets' );
+		} elseif ( function_exists( 'do_action' ) ) {
+			try {
+				self::dispatch_purge_event(
+					'xspeed_after_purge',
+					array(
+						'url'     => null,
+						'host'    => '*',
+						'path'    => null,
+						'cause'   => $cause,
+						'removed' => $count + $rest,
+						'scope'   => 'network',
+						'intent'  => 'assets',
+						'urls'    => array(),
+					)
+				);
+			} catch ( \Throwable $e ) {
+				self::log_purge_listener_error( 'xspeed_after_purge', $e );
+			}
+		}
+
+		return $count + $rest;
 	}
 
 	/**
@@ -5541,6 +7611,40 @@ class Cache {
 			);
 
 		Activity_Log::record( 'cache_purged', $message, Activity_Log::INFO );
+
+		/*
+		 * A partial purge is still a purge, and an edge in front of this site
+		 * has to hear about it.
+		 *
+		 * "Purge Page / Static Cache" is always visible in the admin bar and
+		 * clears every cached page for this site — the flat tree AND the
+		 * static tree the generated nginx/Apache rules serve directly. It
+		 * announced none of that: not `xspeed_after_purge_all`, which only
+		 * purge_all() fires, and not the scoped actions. A CDN told to hold
+		 * those pages went on serving the ones xSpeed had just deleted, for
+		 * whatever lifetime it was given.
+		 *
+		 * Scope is `site` only for the two types that clear rendered HTML.
+		 * An object-cache flush or a REST purge removes nothing an edge is
+		 * holding, and announcing those as a site purge would have a CDN
+		 * drop its whole cache every time a scheduled flush ran — worse than
+		 * the silence this replaces. A type registered by another plugin
+		 * through `xspeed_purge_types` is unknown here, so it says nothing
+		 * rather than guessing.
+		 *
+		 * Not gated on `$count`, for the reason spelled out in purge_url():
+		 * an empty local tree is not evidence that the edge is empty, and
+		 * "Purge Page / Static Cache" with nothing left locally is precisely
+		 * what someone clicks when the page they are looking at is stale.
+		 * Answering that with silence made the button appear broken.
+		 *
+		 * That announcement is now `announce_purge()`'s, called beside this
+		 * by the same callers (`page`, `assets`, `REST responses`). This
+		 * function went back to being what its name says: a log entry. It
+		 * used to publish as well, which double-fired every partial purge and
+		 * — worse — announced `scope: none` for types #348's contract
+		 * requires to stay silent about.
+		 */
 	}
 
 	/**
@@ -5859,17 +7963,66 @@ class Cache {
 		if ( ! is_resource( $lock ) ) {
 			return self::blocked_toggle_state( __( 'Could not lock page-cache ownership. Try again.', 'xspeed' ) );
 		}
+		$changed = false;
 		try {
 			Page_Cache_Detector::invalidate();
 			$fresh = Page_Cache_Detector::inspect()['revision'];
 			if ( ! hash_equals( (string) $expected, (string) $fresh ) ) {
 				return self::blocked_toggle_state( __( 'Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again.', 'xspeed' ) );
 			}
-			$state = self::toggle_unlocked( (bool) $enable, $consented );
+			$before  = self::page_cache_fingerprint();
+			$state   = self::toggle_unlocked( (bool) $enable, $consented );
+			$changed = empty( $state['blocked'] ) && self::page_cache_fingerprint() !== $before;
 			return $state;
 		} finally {
 			flock( $lock, LOCK_UN );
 			fclose( $lock );
+
+			/*
+			 * Announce the change to anything caching in front of us.
+			 *
+			 * Turning the page cache on or off changes what every URL on this
+			 * site returns, and a CDN holding renders made under the old state
+			 * goes on serving them for their whole lifetime. Nothing told it.
+			 * OFF is the less obvious half and matters as much: the edge
+			 * otherwise keeps serving pages from a cache the site no longer
+			 * has.
+			 *
+			 * Only when something actually changed. A refused toggle wrote
+			 * nothing — that is the whole point of the refusal — and purging
+			 * after it would announce a change that did not happen. Nor does a
+			 * toggle that found the cache already in the state it asked for:
+			 * auto_heal() re-enables on every admin_init, and gating on "not
+			 * refused" alone made every wp-admin page load empty the page
+			 * cache and purge the edge (QA, 2026-09-23). The fingerprint is
+			 * compared instead, so restoring a stripped drop-in still counts.
+			 *
+			 * After the writes and OUTSIDE the lock. Before them, a purge
+			 * would repopulate from the state we are in the middle of leaving,
+			 * which is how a "purge didn't work" report is born; inside them,
+			 * it would hold single-occupancy ownership for the length of a
+			 * filesystem sweep.
+			 */
+			if ( $changed ) {
+				/*
+				 * On shutdown, not inline. `purge_all()` sweeps the cache
+				 * directory and fires the purge actions, and a listener on
+				 * those can make an HTTP call to an edge — so running it here
+				 * would make the toggle as slow as the sweep and couple its
+				 * response to a third party. The Cloudflare Enterprise purge
+				 * queue already defers for the same reason.
+				 *
+				 * Still after the writes: shutdown runs at the end of THIS
+				 * request, with the new state on disk.
+				 */
+				add_action(
+					'shutdown',
+					static function () {
+						self::purge_all( 'page cache toggled' );
+					},
+					20
+				);
+			}
 		}
 	}
 
@@ -5879,6 +8032,23 @@ class Cache {
 	 *                        foreign drop-in may be taken over. False on the
 	 *                        unattended paths, which stand down instead.
 	 */
+	/**
+	 * What the page cache looks like on disk and in wp-config, as one string.
+	 *
+	 * `toggle()` compares it before and after its writes to tell a real ON/OFF
+	 * flip, or a repaired drop-in, from a call that found everything already
+	 * as asked. Only the latter must not announce a purge.
+	 */
+	private static function page_cache_fingerprint(): string {
+		$dropin = self::read_file( WP_CONTENT_DIR . '/advanced-cache.php' );
+		return md5(
+			( null === $dropin ? "\0none" : md5( $dropin ) )
+			. '|' . self::wp_cache_define_state()
+			. '|' . ( self::rewrite_installed() ? '1' : '0' )
+			. '|' . ( self::page_cache_operational() ? '1' : '0' )
+		);
+	}
+
 	private static function toggle_unlocked( bool $enable, bool $consented = true ) {
 		$enable = (bool) $enable;
 
@@ -6434,9 +8604,20 @@ class Cache {
 	 */
 	public static function hits_log_dir(): string {
 		if ( function_exists( 'wp_upload_dir' ) ) {
+			// One drop-in serves the whole network, so its hit log has one
+			// home: the main site's uploads. Resolved per blog, the path
+			// baked into the drop-in changed with whichever blog's admin
+			// last ran auto_heal(), and each rewrite read as a page-cache
+			// change and purged the site and the edge (QA, 2026-09-23).
+			// A subsite's uploads are `<main uploads>/sites/<id>`, so the
+			// suffix comes off rather than switching blogs to ask.
 			$uploads = wp_upload_dir( null, false );
 			if ( is_array( $uploads ) && empty( $uploads['error'] ) && ! empty( $uploads['basedir'] ) ) {
-				return rtrim( (string) $uploads['basedir'], '/' ) . '/xspeed';
+				$base = rtrim( (string) $uploads['basedir'], '/' );
+				if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+					$base = (string) preg_replace( '#/sites/\d+$#', '', $base );
+				}
+				return $base . '/xspeed';
 			}
 		}
 		return XSPEED_CACHE_DIR;
@@ -6917,14 +9098,22 @@ class Cache {
 	 * requiring one would report every correctly-configured nginx site as
 	 * broken.
 	 *
+	 * Carries `rules` through as well. The dashboard bootstrap builds its own
+	 * payload and so had it; every other caller — POST /cache/recheck-rewrite,
+	 * `wp xspeed cache recheck-rewrite`, the recheck_rewrite_rules MCP tool —
+	 * came through here and got four keys, so the one surface a user reaches
+	 * AFTER pasting the block could not tell them whether the block took. An
+	 * agent driving the same fix could not read it at all.
+	 *
 	 * @param array $probe Raw result from probe_static_rewrite().
-	 * @return array{active:bool,inconclusive:bool,reason:string,block_reason:string}
+	 * @return array{active:bool,inconclusive:bool,reason:string,block_reason:string,rules:array}
 	 */
 	public static function qualify_rewrite_probe( array $probe ): array {
 		$active       = (bool) ( $probe['active'] ?? false );
 		$inconclusive = (bool) ( $probe['inconclusive'] ?? false );
 		$reason       = (string) ( $probe['reason'] ?? '' );
 		$block_reason = self::static_rewrite_block_reason();
+		$rules        = self::rules_state( $probe );
 
 		// Same observed-refusal check Health makes. This is the shared path for
 		// `wp xspeed cache recheck-rewrite` and POST /cache/recheck-rewrite —
@@ -6960,6 +9149,7 @@ class Cache {
 				'inconclusive' => false,
 				'reason'       => 'Page caching is off, so there is no cache for the web server to serve.',
 				'block_reason' => '',
+				'rules'        => $rules,
 			);
 		}
 
@@ -6977,6 +9167,7 @@ class Cache {
 			'inconclusive' => $inconclusive,
 			'reason'       => $reason,
 			'block_reason' => $block_reason,
+			'rules'        => $rules,
 		);
 	}
 
@@ -7482,11 +9673,26 @@ class Cache {
 		// the moment the setting is turned off and static files reappear,
 		// until somebody regenerates and re-pastes. A rule that can only be
 		// served once its premise is false is guaranteed to be stale.
-		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'bake' ) : array() as $name => $value ) {
+		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'rules' ) : array() as $name => $value ) {
 			$lines[] = '    add_header ' . $name . ' "' . self::quote_directive_value( $value ) . '" always;';
 		}
 		$lines[] = '}';
-		return implode( "\n", $lines );
+
+		// Stamp the block with a hash of itself. This is the only way to find
+		// out what a user actually pasted: the block lives in a server config
+		// WordPress cannot read, so until now the dashboard could not tell an
+		// up-to-date paste from one made three settings changes ago, and
+		// covered for that by telling everyone to re-paste after every save.
+		// A hit through this location now carries the version that served it
+		// and probe_static_rewrite() reads it back. See rules_state().
+		return implode(
+			"\n",
+			self::with_rules_marker(
+				$lines,
+				array( '    add_header ' . self::RULES_HEADER . ' "%s" always;' ),
+				count( $lines ) - 1
+			)
+		);
 	}
 
 	/**
@@ -7799,6 +10005,12 @@ class Cache {
 			// covers `/` and `/blog` alike. (Confirmed on OpenLiteSpeed
 			// 1.8: `.` → homepage served by PHP drop-in; `^` → served
 			// directly from the static file.)
+			// `E=` tags the request the rewrite just served from the cache
+			// tree. The edge headers below key off it instead of the file
+			// name: <FilesMatch "\.html$"> in a document-root .htaccess
+			// matches EVERY .html on the site — a hand-uploaded /promo.html,
+			// a static export — and telling a CDN to hold those for the page
+			// TTL would pin files xSpeed never wrote and cannot purge.
 			'  RewriteRule ^ ' . $rel . '/%{HTTP_HOST}%1/index.html [E=XSPEED_STATIC_HIT:1,L]',
 			'</IfModule>',
 			// Mark the statically-served response as a cache HIT.
@@ -7831,13 +10043,16 @@ class Cache {
 		// are resolved when the block is GENERATED rather than per request.
 		//
 		// `env=` rather than the `<FilesMatch>` scoping above, because these
-		// must ride only on responses the rewrite produced. The marker header
-		// stays filename-scoped: it is inert, and narrowing it would change a
-		// header QA reads.
+		// must ride only on responses the rewrite produced. The X-XSpeed-Cache
+		// marker stays filename-scoped: it is inert, and narrowing it would
+		// change a header QA reads.
+		//
 		// Same reasoning as the nginx snippet: a bake hold can only come from
-		// mobile-split, and mobile-split is what turns this path off.
+		// mobile-split, and mobile-split is what turns this path off, so a
+		// hold baked here could only ever be served once its own premise had
+		// stopped being true.
 		$edge_lines = array();
-		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'bake' ) : array() as $edge_name => $edge_value ) {
+		foreach ( self::static_rewrite_allowed() ? self::edge_headers_for( 'HIT', 'rules' ) : array() as $edge_name => $edge_value ) {
 			$edge_lines = array_merge(
 				$edge_lines,
 				self::static_hit_directives(
@@ -7846,7 +10061,25 @@ class Cache {
 			);
 		}
 
-		return array_merge( $block, $edge_lines, array( '</IfModule>' ) );
+		$block = array_merge( $block, $edge_lines, array( '</IfModule>' ) );
+
+		// Same self-describing marker as the nginx snippet. Apache's block is
+		// written by us rather than pasted by hand, so it should never be out
+		// of date — but "should" is what refresh_rewrite_if_installed() not
+		// running looks like from the outside, and the probe can now say so
+		// instead of assuming. `env=` keeps it on responses the rewrite
+		// produced, so a hand-uploaded .html never claims to be our cache.
+		//
+		// Spliced in after the edge headers so the hash covers them: a
+		// changed edge answer has to make an installed block report itself
+		// stale, and a marker computed before they were appended would not
+		// move. The splice point steps back over them and `</IfModule>` to
+		// land inside `<FilesMatch>`, beside the X-XSpeed-Cache marker.
+		return self::with_rules_marker(
+			$block,
+			self::static_hit_directives( '    Header always set ' . self::RULES_HEADER . ' "%s"' ),
+			count( $block ) - count( $edge_lines ) - 2
+		);
 	}
 
 	/**
@@ -7988,6 +10221,15 @@ class Cache {
 		$has_etag = '' !== (string) wp_remote_retrieve_header( $resp, 'etag' )
 				 || '' !== (string) wp_remote_retrieve_header( $resp, 'last-modified' );
 		$match    = trim( $body ) === $nonce;
+		// Which version of our generated rules answered, if any. Only the
+		// static path can set this — it is baked into the rules themselves —
+		// so its presence is direct evidence about what is installed, and its
+		// absence on a conclusive probe is evidence too. See rules_state().
+		// Validated to the shape we generate, so a proxy or another plugin
+		// sending something else under this name cannot be mistaken for a
+		// rules version and reported as "out of date".
+		$rules_raw = trim( (string) wp_remote_retrieve_header( $resp, strtolower( self::RULES_HEADER ) ) );
+		$rules     = preg_match( '/^[0-9a-f]{8}\z/', $rules_raw ) ? $rules_raw : '';
 
 		// "Active" = the web server served our raw nonce bytes back
 		// AND emitted the static-serve markers (ETag / Last-Modified)
@@ -8028,6 +10270,7 @@ class Cache {
 			'reason'       => $reason,
 			'code'         => $code,
 			'php'          => $ua_php,
+			'rules'        => $rules,
 		);
 		set_transient( 'xspeed_rewrite_probe', $result, 5 * MINUTE_IN_SECONDS );
 		return $result;
@@ -8726,6 +10969,15 @@ class Cache {
 			$source_contents
 		);
 
+		// And the answer for the same HIT served for a URL with an ignored
+		// param in it, which the drop-in sends instead of the one above. An
+		// empty array means the two agree. See query_variant_edge_headers().
+		$source_contents = str_replace(
+			"'@@XSPEED_EDGE_QUERY_HOLD@@'",
+			self::edge_headers_literal( self::query_variant_edge_headers() ),
+			$source_contents
+		);
+
 		if ( file_exists( $target ) ) {
 			$existing = $wp_filesystem->get_contents( $target );
 			if ( is_string( $existing ) && $existing === $source_contents ) {
@@ -8733,7 +10985,46 @@ class Cache {
 			}
 		}
 
-		return (bool) $wp_filesystem->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+		$written = (bool) $wp_filesystem->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+		if ( $written ) {
+			self::forget_compiled_dropin( $target );
+		}
+		return $written;
+	}
+
+	/**
+	 * Callable that drops a script's compiled copy. Replaced by tests only;
+	 * opcache_invalidate() is a PHP internal that cannot be stubbed.
+	 *
+	 * @var callable|null
+	 */
+	private static $opcache_invalidate = null;
+
+	/**
+	 * Make PHP compile the new drop-in on the next request.
+	 *
+	 * opcache keeps the compiled drop-in and checks the file's timestamp at
+	 * most every `opcache.revalidate_freq` seconds (60 on lenzora.site), or
+	 * never with `validate_timestamps` off. So a re-bake, such as the one
+	 * that follows a change to "CDN or proxy in front", kept serving the old
+	 * edge headers for up to a minute, or until PHP restarted.
+	 *
+	 * This reaches the opcache of the PHP process doing the write, which is
+	 * the web server's own when the bake runs in a page or REST request. A
+	 * WP-CLI bake has its own opcache, so the web server still waits for its
+	 * next timestamp check there.
+	 *
+	 * @param string $target Absolute path of the drop-in just written.
+	 */
+	private static function forget_compiled_dropin( string $target ): void {
+		$invalidate = self::$opcache_invalidate;
+		if ( null === $invalidate ) {
+			if ( ! function_exists( 'opcache_invalidate' ) ) {
+				return;
+			}
+			$invalidate = 'opcache_invalidate';
+		}
+		@call_user_func( $invalidate, $target, true ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- opcache may be disabled or restricted (opcache.restrict_api); nothing to do either way.
 	}
 
 	public static function remove_dropin() {

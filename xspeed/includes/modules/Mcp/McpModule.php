@@ -45,6 +45,12 @@ defined( 'ABSPATH' ) || exit;
 
 final class McpModule extends Module {
 
+	/**
+	 * The stylesheet of the standalone consent pages: the OAuth authorize
+	 * screen here and the Hub connect screen (Mcp_Hub_Connect).
+	 */
+	public const CONSENT_CSS = 'body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}.card{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:440px;padding:32px;box-shadow:0 10px 40px rgba(0,0,0,.4)}h1{font-size:20px;margin:0 0 4px}.sub{color:#94a3b8;font-size:13px;margin:0 0 24px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #334155;font-size:13px}.row span:first-child{color:#94a3b8}.row span:last-child{font-weight:600;text-align:right;max-width:60%;word-break:break-word}.actions{display:flex;gap:12px;margin-top:24px}button{flex:1;padding:12px;border-radius:10px;border:0;font-size:14px;font-weight:600;cursor:pointer}.approve{background:#f5cd47;color:#1b2533}.deny{background:transparent;color:#94a3b8;border:1px solid #334155}';
+
 	public const SLUG    = 'mcp';
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.0.0';
@@ -65,6 +71,7 @@ final class McpModule extends Module {
 		'^xspeed/mcp/([a-f0-9]{64})/?$',
 		'^xspeed/mcp/?$',
 		'^xspeed/mcp/attach/?$',
+		'^xspeed/mcp/connect-info/?$',
 		// OAuth discovery. RFC 9728 §3.1 / RFC 8414 §3.1 put the
 		// `.well-known` segment BEFORE the resource/issuer path, and both of
 		// our identifiers are /xspeed/mcp — so this pair of URLs, and only
@@ -144,6 +151,9 @@ final class McpModule extends Module {
 	/** Query var flagging the pretty /xspeed/mcp/attach callback. */
 	private const ATTACH_QUERY_VAR = 'xspeed_mcp_attach';
 
+	/** Query var flagging the pretty /xspeed/mcp/connect-info document (xspeed-hub#307). */
+	private const CONNECT_INFO_QUERY_VAR = 'xspeed_mcp_connect_info';
+
 	public function ui_metadata(): array {
 		return array(
 			'label'        => __( 'MCP Server', 'xspeed' ),
@@ -161,6 +171,29 @@ final class McpModule extends Module {
 	 */
 	public function settings_schema(): array {
 		return array();
+	}
+
+	/**
+	 * The pairing state, declared so a settings write cannot delete it.
+	 *
+	 * `Mcp_Pairing` keeps its credentials in this module's settings option,
+	 * and the schema above is empty — so `Settings_Manager::get()` strips
+	 * every one of these keys, and an `update()` for this slug then writes
+	 * that stripped array back. The connection token, the scopes and the
+	 * connected flag all disappear in a single save, and the only visible
+	 * result is a site that has silently lost MCP access while the Hub still
+	 * lists it as attached.
+	 *
+	 * Nothing offers a settings form for this module, which is why it went
+	 * unnoticed, but `update()` takes its slug from data on three paths that
+	 * do not: a recommendation action, an optimize plan, and the MCP
+	 * `update_settings` tool. `preserved_keys()` is the mechanism for exactly
+	 * this — out-of-schema keys a schema-driven save must carry through.
+	 *
+	 * @return string[]
+	 */
+	public function preserved_keys(): array {
+		return array( 'site_token', 'connection_token', 'connected', 'connected_at', 'scopes' );
 	}
 
 	/**
@@ -218,6 +251,10 @@ final class McpModule extends Module {
 		// nonce and mark this admin attached — no server-to-server callback
 		// needed, so it works for local/firewalled sites too.
 		add_action( 'admin_init', array( $this, 'maybe_handle_hub_return' ) );
+		// The Hub connect consent page (xspeed-hub#307). Priority 1: it emits a
+		// standalone page and exits before anything else on admin_init runs.
+		add_action( 'admin_init', array( Mcp_Hub_Connect::class, 'maybe_handle_page' ), 1 );
+		add_action( 'admin_menu', array( Mcp_Hub_Connect::class, 'register_page' ) );
 
 		// An attached admin who is DELETED (or removed from the blog) never
 		// runs disconnect(), so the site-level attached mirror would report
@@ -263,10 +300,11 @@ final class McpModule extends Module {
 
 		// Verify OUR own signed nonce (proves the round-trip went through the
 		// Hub with a token we minted), then record the connection.
+		// Signature only: the Hub has already spent this nonce on the attach
+		// callback, and recording the link needs no credential.
 		if ( '' !== $nonce ) {
-			$verified = Mcp_Hub::verify_attach_nonce( $nonce );
-			if ( null !== $verified ) {
-				$uid = isset( $verified['user_id'] ) ? (int) $verified['user_id'] : get_current_user_id();
+			$uid = Mcp_Hub::check_attach_nonce( $nonce );
+			if ( null !== $uid ) {
 				Mcp_Hub::mark_attached( $email, $uid ?: null );
 			}
 		}
@@ -331,6 +369,9 @@ final class McpModule extends Module {
 		// /wp-json). Placed BEFORE the token rule would never match "attach"
 		// (that rule requires 64 hex chars), so ordering is safe.
 		add_rewrite_rule( '^xspeed/mcp/attach/?$', 'index.php?' . self::ATTACH_QUERY_VAR . '=1', 'top' );
+		// The Hub connect document, outside /wp-json for the same reason: a
+		// site whose security plugin refuses anonymous REST still answers it.
+		add_rewrite_rule( '^xspeed/mcp/connect-info/?$', 'index.php?' . self::CONNECT_INFO_QUERY_VAR . '=1', 'top' );
 
 		// OAuth discovery documents. RFC 9728 §3.1 / RFC 8414 §3.1 place the
 		// `.well-known` segment BEFORE the resource/issuer path, and both of
@@ -553,7 +594,7 @@ final class McpModule extends Module {
 			return false;
 		}
 
-		foreach ( array( self::QUERY_VAR, self::TOKEN_QUERY_VAR, self::WELLKNOWN_QUERY_VAR, self::AUTHORIZE_QUERY_VAR, self::ATTACH_QUERY_VAR ) as $var ) {
+		foreach ( array( self::QUERY_VAR, self::TOKEN_QUERY_VAR, self::WELLKNOWN_QUERY_VAR, self::AUTHORIZE_QUERY_VAR, self::ATTACH_QUERY_VAR, self::CONNECT_INFO_QUERY_VAR ) as $var ) {
 			if ( false !== strpos( $target, $var . '=' ) ) {
 				return true;
 			}
@@ -612,6 +653,7 @@ final class McpModule extends Module {
 		$vars[] = self::WELLKNOWN_QUERY_VAR;
 		$vars[] = self::AUTHORIZE_QUERY_VAR;
 		$vars[] = self::ATTACH_QUERY_VAR;
+		$vars[] = self::CONNECT_INFO_QUERY_VAR;
 		return $vars;
 	}
 
@@ -760,13 +802,28 @@ final class McpModule extends Module {
 			exit;
 		}
 
+		// Pretty Hub connect document: /xspeed/mcp/connect-info (xspeed-hub#307).
+		if ( ! empty( $wp->query_vars[ self::CONNECT_INFO_QUERY_VAR ] ) ) {
+			header( 'Content-Type: application/json; charset=utf-8' );
+			header( 'Cache-Control: no-store' );
+			status_header( 200 );
+			echo wp_json_encode( Mcp_Hub_Connect::connect_info() );
+			exit;
+		}
+
 		// Pretty attach-callback: /xspeed/mcp/attach. The hub POSTs the signed
 		// nonce; we verify it and return this site's URL + token. Auth is the
 		// nonce itself (admin-minted, HMAC-signed), so no credential needed.
 		if ( ! empty( $wp->query_vars[ self::ATTACH_QUERY_VAR ] ) ) {
-			$body  = json_decode( (string) file_get_contents( 'php://input' ), true );
-			$nonce = is_array( $body ) && isset( $body['nonce'] ) ? (string) $body['nonce'] : '';
-			$result = Mcp_Hub::verify_attach_nonce( $nonce );
+			$body   = json_decode( (string) file_get_contents( 'php://input' ), true );
+			$body   = is_array( $body ) ? $body : array();
+			$field  = static fn( string $k ): string => isset( $body[ $k ] ) && is_string( $body[ $k ] ) ? $body[ $k ] : '';
+			$result = self::attach_result( $field( 'nonce' ), $field( 'code' ), $field( 'code_verifier' ) );
+			// A Hub-started connect lands the browser on the Hub, not here, so
+			// this call is the only place the per-user link can be recorded.
+			if ( null !== $result && '' !== $field( 'code' ) ) {
+				Mcp_Hub::mark_attached( sanitize_email( $field( 'account_email' ) ), (int) $result['user_id'] ?: null );
+			}
 			header( 'Content-Type: application/json; charset=utf-8' );
 			header( 'Cache-Control: no-store' );
 			if ( null === $result ) {
@@ -987,6 +1044,24 @@ final class McpModule extends Module {
 				'methods'             => 'POST',
 				'callback'            => array( $this, 'rest_hub_disconnect' ),
 				'permission_callback' => array( $this, 'admin_permission' ),
+				'args'                => array(
+					'acknowledge' => array(
+						'type'        => 'boolean',
+						'default'     => false,
+						'description' => 'Continue even though Mcp_Hub::disconnect_blockers() reported a reason not to. The caller has shown those reasons to a human.',
+					),
+				),
+			)
+		);
+		// Hub connect discovery (xspeed-hub#307): public, so the Hub can ask
+		// before sending anyone to the consent page. Names no secret.
+		register_rest_route(
+			self::NS,
+			'/hub/connect-info',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'rest_hub_connect_info' ),
+				'permission_callback' => '__return_true',
 			)
 		);
 		// OAuth-attach callback: the hub calls this with the signed nonce the
@@ -1000,10 +1075,22 @@ final class McpModule extends Module {
 				'callback'            => array( $this, 'rest_hub_attach_callback' ),
 				'permission_callback' => '__return_true',
 				'args'                => array(
-					'nonce' => array(
+					// One of: the signed nonce (plugin-started attach), or a
+					// code plus its PKCE verifier (Hub-started connect, #307).
+					'nonce'         => array(
 						'type'        => 'string',
-						'required'    => true,
+						'required'    => false,
 						'description' => 'The signed attach nonce the plugin issued.',
+					),
+					'code'          => array(
+						'type'        => 'string',
+						'required'    => false,
+						'description' => 'The single-use code from the Hub connect consent page.',
+					),
+					'code_verifier' => array(
+						'type'        => 'string',
+						'required'    => false,
+						'description' => 'The PKCE verifier for that code.',
 					),
 				),
 			)
@@ -1291,14 +1378,59 @@ final class McpModule extends Module {
 	}
 
 	/**
-	 * POST /mcp/hub/disconnect — clear the local hub-link bookkeeping.
+	 * POST /mcp/hub/disconnect — tell the hub to drop this admin's link and
+	 * clear the local bookkeeping.
 	 *
-	 * @param \WP_REST_Request $request Unused.
-	 * @return \WP_REST_Response
+	 * Answers 409 while something reports a reason not to disconnect and the
+	 * request did not send `acknowledge`. The blockers travel in the error
+	 * data so a non-UI client gets the same reason a human would read.
+	 *
+	 * @param \WP_REST_Request $request Carries the optional `acknowledge` flag.
+	 * @return \WP_REST_Response|\WP_Error
 	 */
 	public function rest_hub_disconnect( \WP_REST_Request $request ) {
-		unset( $request );
-		return rest_ensure_response( Mcp_Hub::disconnect() );
+		$result = Mcp_Hub::disconnect( (bool) $request->get_param( 'acknowledge' ) );
+
+		if ( ! empty( $result['blocked'] ) ) {
+			$blockers = isset( $result['blockers'] ) && is_array( $result['blockers'] )
+				? $result['blockers']
+				: array();
+			$reasons  = trim( implode( ' ', array_column( $blockers, 'message' ) ) );
+
+			return new \WP_Error(
+				'xspeed_hub_disconnect_blocked',
+				'' !== $reasons
+					? $reasons
+					: __( 'Disconnecting is blocked while this site depends on the hub connection.', 'xspeed' ),
+				array(
+					'status'   => 409,
+					'blockers' => $blockers,
+				)
+			);
+		}
+
+		return rest_ensure_response( $result );
+	}
+
+	/** GET /hub/connect-info — whether this site supports connecting from the Hub. */
+	public function rest_hub_connect_info(): \WP_REST_Response {
+		return rest_ensure_response( Mcp_Hub_Connect::connect_info() );
+	}
+
+	/**
+	 * Check an attach callback: a nonce (plugin-started) or a code with its
+	 * PKCE verifier (Hub-started, xspeed-hub#307). Null when neither holds.
+	 *
+	 * @return array{site_url:string,site_token:string,user_id:int}|null
+	 */
+	private static function attach_result( string $nonce, string $code, string $verifier ): ?array {
+		if ( '' !== $nonce ) {
+			return Mcp_Hub::verify_attach_nonce( $nonce );
+		}
+		if ( '' !== $code ) {
+			return Mcp_Hub_Connect::redeem_code( $code, $verifier );
+		}
+		return null;
 	}
 
 	/**
@@ -1311,8 +1443,11 @@ final class McpModule extends Module {
 	 * @return \WP_REST_Response|\WP_Error
 	 */
 	public function rest_hub_attach_callback( \WP_REST_Request $request ) {
-		$nonce  = (string) $request->get_param( 'nonce' );
-		$result = Mcp_Hub::verify_attach_nonce( $nonce );
+		$result = self::attach_result(
+			(string) $request->get_param( 'nonce' ),
+			(string) $request->get_param( 'code' ),
+			(string) $request->get_param( 'code_verifier' )
+		);
 		if ( null === $result ) {
 			return new \WP_Error(
 				'xspeed_attach_invalid',
@@ -1651,16 +1786,7 @@ final class McpModule extends Module {
 		header( 'Cache-Control: no-store' );
 
 		echo '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . esc_html__( 'Authorize AI access', 'xspeed' ) . '</title>';
-		echo '<style>'
-			. 'body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}'
-			. '.card{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:440px;padding:32px;box-shadow:0 10px 40px rgba(0,0,0,.4)}'
-			. 'h1{font-size:20px;margin:0 0 4px}.sub{color:#94a3b8;font-size:13px;margin:0 0 24px}'
-			. '.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #334155;font-size:13px}'
-			. '.row span:first-child{color:#94a3b8}.row span:last-child{font-weight:600;text-align:right;max-width:60%;word-break:break-word}'
-			. '.actions{display:flex;gap:12px;margin-top:24px}'
-			. 'button{flex:1;padding:12px;border-radius:10px;border:0;font-size:14px;font-weight:600;cursor:pointer}'
-			. '.approve{background:#f5cd47;color:#1b2533}.deny{background:transparent;color:#94a3b8;border:1px solid #334155}'
-			. '</style></head><body><div class="card">';
+		echo '<style>' . self::CONSENT_CSS . '</style></head><body><div class="card">'; // phpcs:ignore WordPress.Security.EscapeOutput -- static stylesheet constant.
 		echo '<h1>' . esc_html__( 'Connect to xSpeed', 'xspeed' ) . '</h1>';
 		/* translators: %s: AI client name. */
 		echo '<p class="sub">' . esc_html( sprintf( __( '%s wants to manage the cache on this site.', 'xspeed' ), $client ) ) . '</p>';

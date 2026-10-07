@@ -103,15 +103,34 @@ final class Scan {
 	}
 
 	/**
+	 * Which Lighthouse runs a scan may spend. `both` is the engine's default:
+	 * the desktop run graded as the headline, the mobile run graded alongside
+	 * it. A single device costs half the engine's quota and becomes the
+	 * headline. Anything else is sent as `both`.
+	 */
+	const STRATEGIES = array( 'both', 'desktop', 'mobile' );
+
+	/** Coerce a caller's strategy to one the engine knows. */
+	public static function strategy( string $value ): string {
+		$value = strtolower( trim( $value ) );
+		return in_array( $value, self::STRATEGIES, true ) ? $value : 'both';
+	}
+
+	/**
 	 * Start a scan. Returns the scan id to poll, or a WP_Error.
 	 *
 	 * `$fresh` forces a new run; without it the engine may hand back a
 	 * recent cached report for the same URL, which is what you want for a
 	 * first look and not what you want after a change.
 	 *
+	 * `$strategy` picks the Lighthouse runs (see STRATEGIES). The engine
+	 * grades the desktop run as the headline and the mobile run beside it,
+	 * so `both` is right for a report a person reads; a site that only
+	 * wants the run Google ranks on asks for `mobile` and spends half.
+	 *
 	 * @return array{scan_id:string,report_url:string,cached:bool}|\WP_Error
 	 */
-	public static function start( string $url = '', bool $fresh = false ) {
+	public static function start( string $url = '', bool $fresh = false, string $strategy = 'both' ) {
 		$url = '' !== $url ? $url : home_url( '/' );
 
 		// The engine probes this URL from the outside, so a host it cannot
@@ -146,8 +165,9 @@ final class Scan {
 				'headers' => array( 'Content-Type' => 'application/json' ),
 				'body'    => wp_json_encode(
 					array(
-						'url'   => $url,
-						'fresh' => $fresh,
+						'url'        => $url,
+						'fresh'      => $fresh,
+						'strategy'   => self::strategy( $strategy ),
 						// Sent ahead of engine support: an unknown field is
 						// ignored today and becomes meaningful the moment
 						// the flag lands, with no plugin release needed.
@@ -314,7 +334,39 @@ final class Scan {
 	/** The last completed report, or null. */
 	public static function latest(): ?array {
 		$r = get_option( self::RESULT_OPTION );
-		return is_array( $r ) && isset( $r['score'] ) ? $r : null;
+		if ( ! is_array( $r ) || ! isset( $r['score'] ) ) {
+			return null;
+		}
+		return self::with_devices( $r );
+	}
+
+	/**
+	 * Give a stored record the per-device Lighthouse shape every reader now
+	 * expects, whenever it was written.
+	 *
+	 * A record written BEFORE the engine graded desktop as the headline has
+	 * no `device` and its `lighthouse` is the mobile run — that was the only
+	 * run PSI made by default. A record written after has `device` set and
+	 * carries both devices explicitly. So `device` is what decides how to
+	 * read `lighthouse`, and nothing else has to know the difference.
+	 *
+	 * Deliberately does NOT invent a missing device: a desktop-only scan
+	 * never measured mobile, and showing the desktop number under a mobile
+	 * label is exactly what this replaced.
+	 */
+	private static function with_devices( array $r ): array {
+		$m = isset( $r['measured'] ) && is_array( $r['measured'] ) ? $r['measured'] : array();
+		if ( ! array_key_exists( 'lighthouse_mobile', $m ) ) {
+			$m['lighthouse_mobile'] = '' === (string) ( $r['device'] ?? '' )
+				? ( $m['lighthouse'] ?? null )   // pre-change record: it was mobile
+				: null;                          // post-change: mobile simply wasn't run
+		}
+		if ( ! array_key_exists( 'lighthouse_desktop', $m ) ) {
+			$m['lighthouse_desktop'] = null;
+		}
+		$r['measured'] = $m;
+		$r['device']   = (string) ( $r['device'] ?? '' );
+		return $r;
 	}
 
 	public static function report_url( string $scan_id ): string {
@@ -394,10 +446,23 @@ final class Scan {
 			// the difference between a low score and an incomplete one.
 			'partial'    => ! empty( $body['partial'] ),
 			'dimensions' => $dims,
+			// Which device the headline grade is for: `desktop` (the default
+			// `both` run grades desktop as the headline), `mobile`, or ''
+			// from an engine that predates the strategy option.
+			'device'     => isset( $body['device'] ) ? (string) $body['device'] : '',
 			'measured'   => array(
 				// Lighthouse is reported alongside, never AS, the score.
+				//
+				// `lighthouse` is the GRADED run's score, and which device
+				// that is changed when the engine started grading desktop as
+				// the headline. Read the two per-device fields instead; this
+				// one stays only so a stored record keeps its shape, and
+				// `latest()` back-fills it for records written before the
+				// change. Reading it AS the mobile score is the bug this
+				// comment exists to prevent (it printed desktop as mobile).
 				'lighthouse'         => self::num( $measured['lighthouse'] ?? null ),
 				'lighthouse_desktop' => self::num( $measured['lighthouseDesktop'] ?? null ),
+				'lighthouse_mobile'  => self::num( $measured['lighthouseMobile'] ?? null ),
 				'ttfb_ms'            => self::num( $measured['ttfbMs'] ?? null ),
 				'lcp_ms'             => self::num( $measured['lcpMs'] ?? null ),
 				'cls'                => self::num( $measured['cls'] ?? null ),

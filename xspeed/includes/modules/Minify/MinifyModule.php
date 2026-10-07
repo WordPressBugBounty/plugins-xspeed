@@ -19,6 +19,7 @@ namespace XSpeed\Modules\Minify;
 
 defined( 'ABSPATH' ) || exit;
 
+use XSpeed\Cache;
 use XSpeed\Minifier as LegacyMinifier;
 use XSpeed\Minify_Filters;
 use XSpeed\Module;
@@ -349,12 +350,40 @@ final class MinifyModule extends Module {
 		}
 
 		if ( 'purge' === $action ) {
-			LegacyMinifier::purge_minified();
-			\WP_CLI::success( 'Minify cache purged.' );
+			// Deleting the files alone left every cached page linking names
+			// that were gone. The assets purge takes the pages with it and
+			// tells the edge. On a network, a bare `wp xspeed minify purge`
+			// is a network purge (min/ is shared by every blog); with --url
+			// it is that site's assets purge.
+			$network = is_multisite() && ! self::cli_url_given();
+			$count   = $network
+				? Cache::purge_assets( 'cli', true )
+				: Cache::purge_type( 'assets', 'cli' );
+			\WP_CLI::success(
+				sprintf(
+					'Minify cache purged; %d cached page(s) removed%s.',
+					$count,
+					$network ? ' across the network' : ''
+				)
+			);
 			return;
 		}
 
 		\WP_CLI::error( "Unknown action: $action" );
+	}
+
+	/**
+	 * Whether this command was pointed at one site with --url.
+	 *
+	 * Only a real WP-CLI run has global config to read. The MCP bridge runs
+	 * the command inside a request for one site, which is the same thing as
+	 * --url, so anything without WP-CLI's config reads as site-scoped.
+	 */
+	private static function cli_url_given(): bool {
+		if ( ! class_exists( '\\WP_CLI' ) || ! method_exists( '\\WP_CLI', 'get_config' ) ) {
+			return true;
+		}
+		return '' !== (string) \WP_CLI::get_config( 'url' );
 	}
 
 	/**

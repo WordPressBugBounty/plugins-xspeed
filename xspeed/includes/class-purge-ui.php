@@ -289,7 +289,8 @@ final class Purge_Ui {
 			wp_die( esc_html__( 'That URL is not on this site.', 'xspeed' ), 400 );
 		}
 
-		self::record_result( $url, Cache::purge_url( $url, __( 'admin', 'xspeed' ) ), 1 );
+		$purge = Cache::purge_url_reported( $url, __( 'admin', 'xspeed' ) );
+		self::record_result( $url, $purge['removed'], 1, false, $purge['forwarded'] );
 
 		wp_safe_redirect( self::redirect_target( wp_get_referer() ) );
 		exit;
@@ -335,7 +336,7 @@ final class Purge_Ui {
 	 * result, and short-lived because it is only ever meant to survive one
 	 * redirect.
 	 */
-	private static function record_result( string $url, int $count, int $urls = 1 ): void {
+	private static function record_result( string $url, int $count, int $urls = 1, bool $whole_site = false, array $forwarded = array() ): void {
 		$user_id = get_current_user_id();
 		if ( $user_id <= 0 ) {
 			return;
@@ -343,9 +344,11 @@ final class Purge_Ui {
 		set_transient(
 			self::NOTICE_KEY . $user_id,
 			array(
-				'url'   => $url,
-				'count' => $count,
-				'urls'  => $urls,
+				'url'        => $url,
+				'count'      => $count,
+				'urls'       => $urls,
+				'whole_site' => $whole_site,
+				'forwarded'  => array_values( array_map( 'strval', $forwarded ) ),
 			),
 			MINUTE_IN_SECONDS
 		);
@@ -355,7 +358,7 @@ final class Purge_Ui {
 	 * Read the pending result and clear it. Consumed once: whichever surface
 	 * renders first owns it, and a reload afterwards shows nothing.
 	 *
-	 * @return array{url:string,count:int,urls:int}|null
+	 * @return array{url:string,count:int,urls:int,whole_site:bool,forwarded?:string[]}|null
 	 */
 	private static function take_result(): ?array {
 		$result = self::peek_result();
@@ -371,7 +374,7 @@ final class Purge_Ui {
 	 * Read the pending result WITHOUT clearing it, so a caller that turns out
 	 * not to be the right place to show it can leave it for the next screen.
 	 *
-	 * @return array{url:string,count:int,urls:int}|null
+	 * @return array{url:string,count:int,urls:int,whole_site:bool,forwarded?:string[]}|null
 	 */
 	private static function peek_result(): ?array {
 		$user_id = get_current_user_id();
@@ -384,9 +387,11 @@ final class Purge_Ui {
 		}
 
 		return array(
-			'url'   => (string) $result['url'],
-			'count' => (int) ( $result['count'] ?? 0 ),
-			'urls'  => max( 1, (int) ( $result['urls'] ?? 1 ) ),
+			'url'        => (string) $result['url'],
+			'count'      => (int) ( $result['count'] ?? 0 ),
+			'urls'       => max( 1, (int) ( $result['urls'] ?? 1 ) ),
+			'whole_site' => ! empty( $result['whole_site'] ),
+			'forwarded'  => isset( $result['forwarded'] ) && is_array( $result['forwarded'] ) ? array_values( array_map( 'strval', $result['forwarded'] ) ) : array(),
 		);
 	}
 
@@ -399,11 +404,26 @@ final class Purge_Ui {
 	 * cacheable, and calling that "cleared" sends people looking for a bug
 	 * in the wrong place.
 	 *
-	 * @param array{url:string,count:int,urls:int} $result
+	 * @param array{url:string,count:int,urls:int,whole_site:bool,forwarded?:string[]} $result
 	 */
 	private static function message( array $result ): string {
 		$path = (string) wp_parse_url( $result['url'], PHP_URL_PATH );
 		$path = '' === $path ? '/' : $path;
+
+		if ( ! empty( $result['whole_site'] ) ) {
+			return sprintf(
+				/* translators: 1: URL path of the post, 2: number of pages that list it, 3: number of files removed. */
+				_n(
+					'xSpeed: %1$s is listed on %2$d pages, too many to clear one by one, so the whole site cache was cleared (%3$d file).',
+					'xSpeed: %1$s is listed on %2$d pages, too many to clear one by one, so the whole site cache was cleared (%3$d files).',
+					$result['count'],
+					'xspeed'
+				),
+				$path,
+				$result['urls'],
+				$result['count']
+			);
+		}
 
 		// A post purge also clears the pages that list it, so say so — a user
 		// who asked for one page and sees "12 files" should not have to guess
@@ -421,6 +441,16 @@ final class Purge_Ui {
 				$result['urls'] - 1
 			)
 			: $path;
+
+		$forwarded = self::forwarded_of( $result );
+		if ( $result['count'] < 1 && '' !== $forwarded ) {
+			return sprintf(
+				/* translators: 1: what was purged, 2: caches in front of the site, comma-separated. */
+				__( 'xSpeed: sent the purge for %1$s to %2$s. xSpeed\'s own cache held no copy.', 'xspeed' ),
+				$scope,
+				$forwarded
+			);
+		}
 
 		if ( $result['count'] < 1 ) {
 			return sprintf(
@@ -454,9 +484,29 @@ final class Purge_Ui {
 		}
 		printf(
 			'<div class="notice notice-%1$s is-dismissible"><p>%2$s</p></div>',
-			$result['count'] > 0 ? 'success' : 'info',
+			self::cleared_anything( $result ) ? 'success' : 'info',
 			esc_html( self::message( $result ) )
 		);
+	}
+
+	/**
+	 * Whether the purge cleared anything anywhere: a local file, or a
+	 * cache in front of the site that took it.
+	 *
+	 * @param array<string,mixed> $result
+	 */
+	private static function cleared_anything( array $result ): bool {
+		return $result['count'] > 0 || '' !== self::forwarded_of( $result );
+	}
+
+	/**
+	 * The caches a purge was sent to, comma-separated, or ''.
+	 *
+	 * @param array<string,mixed> $result
+	 */
+	private static function forwarded_of( array $result ): string {
+		$forwarded = isset( $result['forwarded'] ) && is_array( $result['forwarded'] ) ? $result['forwarded'] : array();
+		return implode( ', ', array_filter( array_map( 'strval', $forwarded ) ) );
 	}
 
 	/**
@@ -493,7 +543,7 @@ final class Purge_Ui {
 			array(
 				'id'    => 'xspeed-purge',
 				'title' => $node->title . ' · ' . (
-					$result['count'] > 0
+					self::cleared_anything( $result )
 						? esc_html__( 'cleared', 'xspeed' )
 						: esc_html__( 'was not cached', 'xspeed' )
 				),
@@ -562,105 +612,60 @@ final class Purge_Ui {
 	/**
 	 * Every URL that goes stale when one post changes.
 	 *
-	 * The set follows WP Rocket's `rocket_get_purge_urls()`, which is the
-	 * closest thing this problem has to a settled answer: the post itself,
-	 * the blog page or the post-type archive it appears on, the four
-	 * adjacent posts whose prev/next links now name a different neighbour,
-	 * the author archive, every ancestor, and the homepage.
+	 * The same list the automatic purge on save clears, from
+	 * Affected_Pages, so "Purge this post" and a save never disagree. It
+	 * covers the post, the home page and blog page, its post-type archive,
+	 * every public term it is in with parent terms, the author and date
+	 * archives, every page of each, the feeds, the four adjacent posts and
+	 * any ancestors. (An earlier version left terms out on the grounds that
+	 * WP Rocket does; current WP Rocket purges terms, parents and their
+	 * pagination too.)
 	 *
-	 * Term archives are deliberately NOT in the set — Rocket leaves them out
-	 * too. A post can carry dozens of terms, and purging every one of them
-	 * turns a one-post edit back into the broad sweep this feature exists to
-	 * avoid.
+	 * The `xspeed_post_purge_urls` filter is applied inside the builder.
 	 *
 	 * @return string[] Absolute URLs, de-duplicated.
 	 */
 	public static function post_purge_urls( \WP_Post $post ): array {
-		$urls = array();
-
-		$permalink = self::permalink_of( (int) $post->ID );
-		if ( '' !== $permalink ) {
-			$urls[] = $permalink;
-		}
-
-		// The blog page for posts; the post-type archive for anything else.
-		if ( 'post' === $post->post_type ) {
-			$page_for_posts = (int) get_option( 'page_for_posts' );
-			if ( $page_for_posts > 0 ) {
-				$urls[] = (string) get_permalink( $page_for_posts );
-			}
-		} else {
-			$archive = get_post_type_archive_link( $post->post_type );
-			if ( is_string( $archive ) && '' !== $archive ) {
-				$urls[] = $archive;
-			}
-		}
-
-		// The neighbours whose own prev/next links now point somewhere else.
-		// Read in the post's own context: get_adjacent_post() works off the
-		// global $post, which on an admin screen is not the one being purged.
-		$urls = array_merge( $urls, self::adjacent_post_urls( $post ) );
-
-		$author = get_author_posts_url( (int) $post->post_author );
-		if ( is_string( $author ) && '' !== $author ) {
-			$urls[] = $author;
-		}
-
-		foreach ( get_post_ancestors( $post ) as $ancestor_id ) {
-			$link = self::permalink_of( (int) $ancestor_id );
-			if ( '' !== $link ) {
-				$urls[] = $link;
-			}
-		}
-
-		$urls[] = home_url( '/' );
-
-		/**
-		 * Filter the URLs cleared when one post is purged.
-		 *
-		 * @param string[] $urls Absolute URLs.
-		 * @param \WP_Post $post The post being purged.
-		 */
-		$urls = (array) apply_filters( 'xspeed_post_purge_urls', $urls, $post );
-
-		$urls = array_filter( $urls, static fn( $url ) => is_string( $url ) && '' !== $url );
-
-		return array_values( array_unique( $urls ) );
+		return Affected_Pages::for_post( $post );
 	}
 
 	/**
-	 * Permalinks of the four posts adjacent to this one: previous and next,
-	 * each in the whole timeline and within a shared term.
+	 * Clear one post's pages, or the whole site when they are more than a
+	 * save would name one by one (Affected_Pages::LIMIT).
 	 *
-	 * @return string[]
+	 * The same limit as the automatic purge on save. Over it, every page
+	 * would go to each cache in front one at a time: on a 5,000-post blog
+	 * the list was 1,022 URLs, each a blocking request to Nginx Helper.
+	 *
+	 * @return array{count:int,urls:int,whole_site:bool} Files removed, pages named, and whether the whole site went instead.
 	 */
-	private static function adjacent_post_urls( \WP_Post $post ): array {
-		$urls = array();
-
-		// get_adjacent_post() reads the global $post. Swap it for the one
-		// being purged and put it back, or on an edit screen we would collect
-		// the neighbours of whatever WordPress happened to have loaded.
-		$previous_global = $GLOBALS['post'] ?? null;
-		$GLOBALS['post'] = $post; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- restored below.
-
-		foreach ( array( array( false, true ), array( true, true ), array( false, false ), array( true, false ) ) as $args ) {
-			list( $same_term, $previous ) = $args;
-			$adjacent                     = get_adjacent_post( $same_term, '', $previous );
-			if ( $adjacent instanceof \WP_Post ) {
-				$link = self::permalink_of( (int) $adjacent->ID );
-				if ( '' !== $link ) {
-					$urls[] = $link;
-				}
-			}
+	public static function purge_post( \WP_Post $post ): array {
+		// Count only what we actually act on. The set is filterable, so an
+		// off-site URL added through xspeed_post_purge_urls is skipped here;
+		// reporting it as cleared would inflate the notice.
+		$local = array_values( array_filter( self::post_purge_urls( $post ), array( self::class, 'is_local_url' ) ) );
+		if ( count( $local ) > Affected_Pages::LIMIT ) {
+			$count = Cache::purge_all(
+				__( 'admin', 'xspeed' ),
+				null,
+				array(
+					'scope'    => 'site',
+					'intent'   => 'content',
+					'urls'     => array(),
+					'fallback' => Cache::FALLBACK_LIMIT,
+				)
+			);
+			return array(
+				'count'      => (int) $count,
+				'urls'       => count( $local ),
+				'whole_site' => true,
+			);
 		}
-
-		if ( null === $previous_global ) {
-			unset( $GLOBALS['post'] );
-		} else {
-			$GLOBALS['post'] = $previous_global; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- restoring.
-		}
-
-		return $urls;
+		return array(
+			'count'      => array() === $local ? 0 : Cache::purge_urls( $local, __( 'admin', 'xspeed' ) ),
+			'urls'       => count( $local ),
+			'whole_site' => false,
+		);
 	}
 
 	/**
@@ -684,20 +689,14 @@ final class Purge_Ui {
 			wp_die( esc_html__( 'That post does not exist.', 'xspeed' ), 400 );
 		}
 
-		$count   = 0;
-		$cleared = 0;
-		foreach ( self::post_purge_urls( $post ) as $url ) {
-			// Count only what we actually acted on. The set is filterable, so
-			// an off-site URL added through xspeed_post_purge_urls is skipped
-			// here — reporting it as cleared would inflate the notice.
-			if ( ! self::is_local_url( $url ) ) {
-				continue;
+		$run    = Cache::report_forwarding(
+			static function () use ( $post ): array {
+				return self::purge_post( $post );
 			}
-			++$cleared;
-			$count += Cache::purge_url( $url, __( 'admin', 'xspeed' ) );
-		}
+		);
+		$result = $run['result'];
 
-		self::record_result( self::permalink_of( $post_id ), $count, $cleared );
+		self::record_result( self::permalink_of( $post_id ), $result['count'], $result['urls'], $result['whole_site'], $run['forwarded'] );
 
 		wp_safe_redirect( self::redirect_target( wp_get_referer() ) );
 		exit;
@@ -710,7 +709,7 @@ final class Purge_Ui {
 	 * built from the request that purged it, and the host on the request
 	 * showing the notice is the same one by construction.
 	 *
-	 * @param array{url:string,count:int,urls:int} $result
+	 * @param array{url:string,count:int,urls:int,whole_site:bool,forwarded?:string[]} $result
 	 */
 	private static function result_is_about_this_request( array $result ): bool {
 		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- compared, never output or stored.

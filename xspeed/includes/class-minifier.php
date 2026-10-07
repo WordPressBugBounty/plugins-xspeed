@@ -105,6 +105,9 @@ class Minifier {
 			// for every inline script WordPress prints, so it also covers
 			// pages the cache buffer never filters.
 			add_filter( 'wp_inline_script_attributes', array( Minify_Filters::class, 'park_smart_inline' ), 30, 2 );
+			// A snippet never stays parked behind a live script. Runs after
+			// the late opt-out revert, which can un-delay the tag.
+			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'unpark_orphaned_smart_inline' ), Minify_Filters::late_opt_out_priority() + 1, 3 );
 			add_action( 'wp_footer',         array( Minify_Filters::class, 'print_delay_bootstrap' ), 1000 );
 			// script_loader_tag only fires for wp_enqueue_script()'d assets.
 			// Analytics / pixel / chat-widget tags printed straight into
@@ -345,16 +348,35 @@ class Minifier {
 			return $src;
 		}
 
-		// Build a cache filename keyed on path + mtime so edits invalidate.
-		$mtime = filemtime( $path );
-		$key   = md5( $path . '|' . $mtime );
-		$cache = self::cache_path( $key, $type );
+		// Nowhere to write means nothing to serve. Without this gate an
+		// unwritable min/ cost a full minification on EVERY render, each one
+		// thrown away when the write failed.
+		if ( ! self::min_dir_writable() ) {
+			return $src;
+		}
 
-		if ( ! file_exists( $cache ) ) {
-			$ok = self::minify_file( $path, $cache, $type );
-			if ( ! $ok ) {
-				return $src;
+		// The file is named after its minified CONTENT, found through a
+		// per-source manifest that is validated by stat() alone on the hot
+		// path. See Asset_Manifest for the rules. The old name was
+		// md5(path|mtime): an in-place edit that kept the mtime served new
+		// bytes under a URL cached for a year, an @import child's edit
+		// changed nothing, and a touch with no change orphaned every cached
+		// page that linked the old name.
+		$key = Asset_Manifest::key_for(
+			$type,
+			$path,
+			static function ( string $source ) use ( $type ): array {
+				return 'css' === $type ? Asset_Manifest::css_dependencies( $source ) : array();
+			},
+			static function ( string $source ) use ( $type ) {
+				return self::build( $source, $type );
+			},
+			static function ( string $key ) use ( $type ): bool {
+				return file_exists( self::cache_path( $key, $type ) );
 			}
+		);
+		if ( null === $key ) {
+			return $src;
 		}
 
 		// Return a URL to the cached file. Built from known constants — never
@@ -363,51 +385,108 @@ class Minifier {
 		return self::min_url() . '/' . $key . '.' . $type;
 	}
 
-	private static function minify_file( $source_path, $target_path, $type ) {
-		if ( ! class_exists( '\\MatthiasMullie\\Minify\\CSS' ) ) {
-			return false;
-		}
+	/**
+	 * Whether min/ can be written, asked once per request.
+	 *
+	 * @var bool|null
+	 */
+	private static $writable = null;
 
-		// Path-traversal guard: refuse to write anywhere outside our cache
-		// dir, even if a malicious filter ever produced a poisoned key.
-		$cache_root = self::min_dir();
-		self::ensure_dir( $cache_root );
-		$real_root  = realpath( $cache_root );
-		$real_dir   = realpath( dirname( $target_path ) );
-		if ( ! $real_root || ! $real_dir || 0 !== strpos( $real_dir, $real_root ) ) {
-			return false;
+	/**
+	 * Minifications run by this process.
+	 *
+	 * @var int
+	 */
+	private static $builds = 0;
+
+	/** Forget the per-request answers. Tests only. */
+	public static function reset_request_state(): void {
+		self::$writable = null;
+		self::$builds   = 0;
+	}
+
+	/** How many sources this process has minified. Tests and diagnostics. */
+	public static function builds(): int {
+		return self::$builds;
+	}
+
+	/** Can minified files be written this request? */
+	public static function min_dir_writable(): bool {
+		if ( null === self::$writable ) {
+			$dir = self::min_dir();
+			self::ensure_dir( $dir );
+			self::$writable = is_dir( $dir ) && wp_is_writable( $dir );
+		}
+		return self::$writable;
+	}
+
+	/**
+	 * Minify a source into min/<md5 of output>.<type> and return the key.
+	 *
+	 * The output is built in memory and published with an atomic rename, so a
+	 * concurrent render never links a half-written file. When a file with the
+	 * same content already exists nothing is written: same bytes, same name.
+	 *
+	 * @param string $source Absolute source path.
+	 * @param string $type   'css' or 'js'.
+	 * @return string|null|false Key; null when the source cannot be minified;
+	 *                           false when the output could not be written.
+	 */
+	private static function build( string $source, string $type ) {
+		++self::$builds;
+		$minified = self::minify_to_string( $source, $type );
+		if ( null === $minified ) {
+			return null;
+		}
+		$key    = md5( $minified );
+		$target = self::cache_path( $key, $type );
+		if ( file_exists( $target ) ) {
+			return $key;
+		}
+		return Asset_Manifest::write_atomic( $target, $minified ) ? $key : false;
+	}
+
+	/**
+	 * Minified bytes of a source, or null on failure.
+	 *
+	 * @param string $source_path Absolute source path.
+	 * @param string $type        'css' or 'js'.
+	 */
+	private static function minify_to_string( string $source_path, string $type ): ?string {
+		if ( ! class_exists( '\\MatthiasMullie\\Minify\\CSS' ) ) {
+			return null;
 		}
 
 		try {
 			if ( 'css' === $type ) {
-				// Passing the TARGET path makes matthiasmullie/minify rebase every
-				// relative url(...) / @import against the minified file's location.
-				// Without it, a stylesheet moved from e.g.
-				// .../font-awesome/css/all.css to cache/xspeed/min/<key>.css keeps
-				// its original url(../webfonts/…) — which then resolves against the
-				// cache dir and 404s (missing FontAwesome/eicons/WooCommerce fonts).
+				// execute() with a path inside min/ rebases every relative
+				// url(...) / @import against the minified file's location,
+				// which is what minify( $target ) did before without writing.
+				// Every output lives in the same directory, so any name there
+				// rebases identically. Without the rebase a stylesheet moved
+				// from e.g. .../font-awesome/css/all.css to
+				// cache/xspeed/min/<key>.css keeps its original
+				// url(../webfonts/…), which then resolves against the cache
+				// dir and 404s (missing FontAwesome/eicons/WooCommerce fonts).
 				$minifier = new \MatthiasMullie\Minify\CSS( $source_path );
-				$minified = $minifier->minify( $target_path );
-				return '' !== $minified && file_exists( $target_path );
+				$minified = (string) $minifier->execute( self::min_dir() . '/rebase.css' );
+				return '' !== $minified ? $minified : null;
 			}
 
 			$minifier = new \MatthiasMullie\Minify\JS( $source_path );
-			$minified = $minifier->minify();
+			$minified = (string) $minifier->minify();
 
 			// Sanity check: paren/brace/bracket/backtick balance must be preserved.
 			// matthiasmullie/minify can silently truncate mid-template-literal on
 			// complex modern JS — bail rather than ship a broken file.
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- WP_Filesystem requires admin context; minification runs on frontend page renders. Source already validated as readable on line 121.
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- WP_Filesystem requires admin context; minification runs on frontend page renders. Source already validated as readable by the caller.
 			$source = file_get_contents( $source_path );
-			if ( false === $source || ! self::balanced( $source, $minified ) ) {
-				return false;
+			if ( false === $source || '' === $minified || ! self::balanced( $source, $minified ) ) {
+				return null;
 			}
-
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context; minification runs on frontend page renders.
-			$bytes = file_put_contents( $target_path, $minified );
-			return false !== $bytes && file_exists( $target_path );
+			return $minified;
 		} catch ( \Throwable $e ) {
-			return false;
+			return null;
 		}
 	}
 
@@ -439,7 +518,7 @@ class Minifier {
 	 *    type is treated as non-JS on purpose: guessing wrong breaks the page,
 	 *    while skipping only forgoes a few bytes.
 	 *  - `<script src="...">` — the body is empty; the file path already goes
-	 *    through minify_file().
+	 *    through rewrite_asset().
 	 *
 	 * Every result is checked with balanced(), the same structural guard the
 	 * file path uses, so a body the library truncates is shipped as-is rather
@@ -698,13 +777,70 @@ class Minifier {
 	}
 
 	/**
-	 * Clear every minified / combined asset.
+	 * Delete every minified and combined asset, network-wide.
+	 *
+	 * Output files are named by content, so an ordinary purge has no reason
+	 * to delete them: a page rendered after it links the same names. Only a
+	 * network purge, an update, an explicit assets purge and deactivation
+	 * come here. Deleting is still a race against renders in flight, which
+	 * may already hold the names of files about to vanish; the purge stamp
+	 * bumped here lets the page cache refuse to store those renders.
 	 *
 	 * @return int Files removed. Most callers are `add_action` callbacks and
 	 *             ignore it; `wp xspeed purge` reports it as a line item.
 	 */
 	public static function purge_minified() {
-		return self::rmtree_files( self::min_dir() );
+		$removed = self::rmtree_files( self::min_dir() );
+		if ( $removed > 0 ) {
+			self::bump_purge_stamp();
+		}
+		return $removed;
+	}
+
+	/**
+	 * Delete one blog's manifests, leaving every output file in place.
+	 *
+	 * What a subsite's assets purge can safely do on a network whose blogs
+	 * share min/: the next render of each source re-reads its bytes and
+	 * rebuilds only if they changed, and no other blog's cached page loses a
+	 * file it links. Outputs nothing links any more are left to Cache_GC.
+	 *
+	 * @param int $blog_id Blog whose manifests to drop.
+	 * @return int Manifests removed.
+	 */
+	public static function purge_manifests( int $blog_id ): int {
+		$dir     = Asset_Manifest::dir( $blog_id );
+		$removed = self::rmtree_files( $dir );
+		@rmdir( $dir ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir, WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort cleanup of our own cache subdir; WP_Filesystem is unavailable on the frontend purge path.
+		return $removed;
+	}
+
+	/** File holding the purge stamp. Network-wide, like min/ itself. */
+	public static function purge_stamp_path(): string {
+		return rtrim( (string) XSPEED_CACHE_DIR, '/' ) . '/min-purge.stamp';
+	}
+
+	/**
+	 * Token that changes every time purge_minified() deletes something.
+	 *
+	 * The page cache reads it when a render starts and again before storing
+	 * the page. A different value means files the page may link were deleted
+	 * in between, so the page is served but not cached.
+	 *
+	 * @return string '' when no purge has ever deleted anything.
+	 */
+	public static function purge_stamp(): string {
+		$stamp = @file_get_contents( self::purge_stamp_path() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- absent until the first purge; tiny cache sidecar read on the front end, where WP_Filesystem is unavailable.
+		return is_string( $stamp ) ? trim( $stamp ) : '';
+	}
+
+	/** Replace the purge stamp with a new random token. */
+	private static function bump_purge_stamp(): void {
+		$path = self::purge_stamp_path();
+		if ( ! is_dir( dirname( $path ) ) ) {
+			return;
+		}
+		Asset_Manifest::write_atomic( $path, bin2hex( random_bytes( 8 ) ) );
 	}
 
 	/**

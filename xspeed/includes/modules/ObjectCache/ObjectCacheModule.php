@@ -20,6 +20,7 @@ defined( 'ABSPATH' ) || exit;
 
 use XSpeed\Module;
 use XSpeed\Object_Cache;
+use XSpeed\Object_Cache_Takeover;
 
 final class ObjectCacheModule extends Module {
 
@@ -660,7 +661,7 @@ final class ObjectCacheModule extends Module {
 		 * WP-CLI, so the panel kept saying "Redis ready" over a cache that
 		 * stored nothing. (#398)
 		 */
-		$detect  = Object_Cache::detect();
+		$detect  = Object_Cache::detect( true );
 		$failure = self::live_write_failure();
 		if ( null !== $failure ) {
 			$detect['write_probe'] = $failure;
@@ -749,10 +750,20 @@ final class ObjectCacheModule extends Module {
 	public function rest_enable( \WP_REST_Request $request ) {
 		// Persist any settings sent with the enable call first, then act on them.
 		$body = $request->get_json_params();
+		// `takeover` is an action, not a setting: take it out before the body
+		// is saved as the settings row. Sent in the body rather than the query
+		// string because on plain permalinks the REST base already carries
+		// `?rest_route=`. (#686)
+		$takeover = is_array( $body ) && ! empty( $body['takeover'] )
+			? rest_sanitize_boolean( $body['takeover'] )
+			: rest_sanitize_boolean( $request->get_param( 'takeover' ) );
+		if ( is_array( $body ) ) {
+			unset( $body['takeover'] );
+		}
 		if ( is_array( $body ) && ! empty( $body ) ) {
 			\XSpeed\Settings_Manager::update( self::SLUG, $body );
 		}
-		$result = Object_Cache::enable( $this->get_settings() );
+		$result = Object_Cache::enable( $this->get_settings(), array( 'takeover' => $takeover ) );
 
 		if ( $result['ok'] && class_exists( '\\XSpeed\\Activity_Log' ) ) {
 			\XSpeed\Activity_Log::record(
@@ -765,7 +776,9 @@ final class ObjectCacheModule extends Module {
 	}
 
 	public function rest_disable( \WP_REST_Request $request ) {
-		$result = Object_Cache::disable();
+		$result = Object_Cache::disable(
+			array( 'restore' => rest_sanitize_boolean( $request->get_param( 'restore' ) ) )
+		);
 		if ( $result['ok'] && class_exists( '\\XSpeed\\Activity_Log' ) ) {
 			\XSpeed\Activity_Log::record(
 				'object_cache_disabled',
@@ -799,6 +812,18 @@ final class ObjectCacheModule extends Module {
 						'type'     => 'positional',
 						'name'     => 'value',
 						'optional' => true,
+					),
+					array(
+						'type'        => 'flag',
+						'name'        => 'takeover',
+						'description' => 'With enable: switch from the plugin that owns object-cache.php (backs it up, turns that plugin off, installs xSpeed, undoes everything on failure).',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'flag',
+						'name'        => 'restore',
+						'description' => 'With disable: put back the plugin xSpeed switched from.',
+						'optional'    => true,
 					),
 				),
 			),
@@ -957,11 +982,26 @@ final class ObjectCacheModule extends Module {
 				$t['ok'] ? \WP_CLI::success( $t['message'] ) : \WP_CLI::error( $t['message'] );
 				return;
 			case 'enable':
-				$r = Object_Cache::enable( $this->get_settings() );
+				$r = Object_Cache::enable(
+					$this->get_settings(),
+					array( 'takeover' => ! empty( $assoc['takeover'] ) )
+				);
+				if ( ! $r['ok'] && ! empty( $r['needs_takeover'] ) && Object_Cache_Takeover::STRATEGY_REFUSE !== ( $r['owner']['strategy'] ?? '' ) ) {
+					// This handler also answers MCP (through Cli_Bridge), where
+					// the switch is an argument, not a flag.
+					\WP_CLI::error( $r['message'] . ' To switch, run again with --takeover (MCP: takeover: true).' );
+				}
 				$r['ok'] ? \WP_CLI::success( $r['message'] ) : \WP_CLI::error( $r['message'] );
 				return;
 			case 'disable':
-				$r = Object_Cache::disable();
+				$r = Object_Cache::disable( array( 'restore' => ! empty( $assoc['restore'] ) ) );
+				// Disabling worked; a restore that could not complete is a
+				// warning, not a failed command.
+				if ( $r['ok'] && false === ( $r['restored'] ?? null ) ) {
+					\WP_CLI::warning( $r['message'] );
+					\WP_CLI::success( 'Object cache disabled.' );
+					return;
+				}
 				$r['ok'] ? \WP_CLI::success( $r['message'] ) : \WP_CLI::error( $r['message'] );
 				return;
 			default:

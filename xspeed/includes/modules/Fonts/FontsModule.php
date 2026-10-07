@@ -45,7 +45,7 @@ final class FontsModule extends Module {
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Show text while fonts load', 'xspeed' ),
-				'description' => __( 'Google Fonts text shows at once in a standard font, then switches when the web font arrives.', 'xspeed' ),
+				'description' => __( 'Text in Google Fonts, and in fonts added to WordPress itself, shows at once in a standard font, then switches when the web font arrives.', 'xspeed' ),
 			),
 			'preload_fonts'     => array(
 				'type'        => 'list',
@@ -95,6 +95,25 @@ final class FontsModule extends Module {
 
 		if ( ! empty( $opts['font_display_swap'] ) ) {
 			add_filter( 'style_loader_tag', array( __CLASS__, 'inject_display_swap' ), 10, 2 );
+
+			// Fonts added through the Font Library or theme.json are printed
+			// by core with font-display: fallback, and core offers no filter
+			// for it. Fallback hides the text for up to 100ms while the font
+			// loads; when that text is the LCP, the hero paints after the
+			// font instead of at first paint. Measured on a live text hero:
+			// LCP landed ~85ms after FCP with fallback and on FCP with swap,
+			// CLS unchanged, and PageSpeed mobile moved between 81 and 90
+			// depending on which side of that window the font fell. So core's
+			// own printer runs with swap as the default. Only an exact
+			// priority-50 hook is replaced: anything that already moved or
+			// removed it is left alone.
+			if ( function_exists( 'wp_print_font_faces' )
+				&& class_exists( '\WP_Font_Face_Resolver' )
+				&& 50 === has_action( 'wp_head', 'wp_print_font_faces' )
+			) {
+				remove_action( 'wp_head', 'wp_print_font_faces', 50 );
+				add_action( 'wp_head', array( __CLASS__, 'print_font_faces_swap' ), 50 );
+			}
 		}
 
 		if ( ! empty( $opts['preload_fonts'] ) ) {
@@ -161,6 +180,44 @@ final class FontsModule extends Module {
 		$new_href  = $href . $separator . 'display=swap';
 
 		return str_replace( $href, $new_href, $tag );
+	}
+
+	/**
+	 * Print core's font faces as wp_print_font_faces() does, with swap as
+	 * the font-display default.
+	 */
+	public static function print_font_faces_swap(): void {
+		$fonts = \WP_Font_Face_Resolver::get_fonts_from_theme_json();
+		if ( empty( $fonts ) ) {
+			return;
+		}
+		// WordPress 6.4+. Only hooked when the function exists (see
+		// boot_on_init()), called by name so a 6.0 floor stays compatible.
+		call_user_func( 'wp_print_font_faces', self::default_display_swap( $fonts ) );
+	}
+
+	/**
+	 * Give every font face without its own font-display a swap one.
+	 *
+	 * The resolver only sets font-display when a theme.json fontFace
+	 * declares fontDisplay, so a face that has one was chosen on purpose
+	 * and keeps it. Public + static so the test suite can drive it.
+	 *
+	 * @param array<int|string,mixed> $fonts Font families, each a list of faces.
+	 * @return array<int|string,mixed>
+	 */
+	public static function default_display_swap( array $fonts ): array {
+		foreach ( $fonts as $family => $faces ) {
+			if ( ! is_array( $faces ) ) {
+				continue;
+			}
+			foreach ( $faces as $i => $face ) {
+				if ( is_array( $face ) && ! isset( $face['font-display'] ) ) {
+					$fonts[ $family ][ $i ]['font-display'] = 'swap';
+				}
+			}
+		}
+		return $fonts;
 	}
 
 	/**

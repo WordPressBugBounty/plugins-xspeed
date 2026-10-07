@@ -715,7 +715,12 @@ JS;
 
 	private static function rewrite_video( array $m ): string {
 		$tag = $m[0];
-		if ( false !== stripos( $tag, 'data-skip-lazy' ) ) {
+		// data-no-lazy is the other common opt-out spelling; the restorer
+		// honours both for players that build their <video> from script.
+		if ( false !== stripos( $tag, 'data-skip-lazy' ) || false !== stripos( $tag, 'data-no-lazy' ) ) {
+			return $tag;
+		}
+		if ( self::is_excluded( $tag, self::opts() ) ) {
 			return $tag;
 		}
 		/*
@@ -777,7 +782,12 @@ JS;
 		if ( false !== stripos( $tag, 'data-skip-lazy' ) ) {
 			return $element;
 		}
-		if ( preg_match( '#\sautoplay(?=[\s/>=])#i', $tag ) ) {
+		// The lazy pass runs first and renames `autoplay` to
+		// data-xspeed-autoplay when it defers the source, so check both.
+		// Checking only the attribute turned every deferred autoplay video
+		// with a poster (a Kadence row background, a hero) into a play
+		// button.
+		if ( preg_match( '#\s(?:data-xspeed-)?autoplay(?=[\s/>=])#i', $tag ) ) {
 			return $element;
 		}
 		if ( self::is_excluded( $tag, self::opts() ) ) {
@@ -982,11 +992,36 @@ JS;
 	 * Dependency-free and tiny, matching Video_Facade::facade_script(). The
 	 * rootMargin starts the fetch slightly before the element is visible so
 	 * playback begins without a visible stall.
+	 *
+	 * @param bool $after_load Hold autoplay videos until `load` even when they
+	 *                         are on screen from the start (video_after_load).
+	 *                         A hero video otherwise starts downloading with
+	 *                         the page and competes with everything the first
+	 *                         paint needs; lab tools also count its bytes
+	 *                         toward LCP because the request starts before it.
+	 * @param string[] $excluded Excluded Images patterns. The server pass
+	 *                         leaves a matching <video> alone, but it is still
+	 *                         a video[autoplay] to adopt(), so the script has
+	 *                         to know them too, and they are the only route
+	 *                         for a video a player builds in script.
 	 */
-	public static function autoplay_script(): string {
-		return <<<'JS'
+	public static function autoplay_script( bool $after_load = false, array $excluded = array() ): string {
+		$script = <<<'JS'
 (function(){
 var S='video[data-xspeed-src],video[data-xspeed-defer-sources]';
+var AL=0,Q=[],X=[];
+// Autoplay the author asked for, whether the server pass has renamed it yet
+// or not. A player that builds its video in script sets the real attribute.
+function ap(v){return v.hasAttribute('autoplay')||v.hasAttribute('data-xspeed-autoplay');}
+// Matched like the server pass: a case-insensitive substring of the opening
+// tag, plus the source being set, which is not in the tag yet when a player
+// assigns it.
+function excl(v,val){
+if(!X.length)return false;
+var t=(v.outerHTML.split('>')[0]+' '+(val||'')).toLowerCase();
+for(var i=0;i<X.length;i++){if(t.indexOf(X[i])>=0)return true;}
+return false;
+}
 
 /*
  * Intercept the ASSIGNMENT, because observing the DOM is always too late.
@@ -1013,6 +1048,9 @@ var hold=function(el,val){
 if(el.tagName!=='VIDEO')return false;
 if(el.getAttribute('data-xspeed-loaded'))return false; // released: let it through
 if(!val)return false;
+if(el.hasAttribute('data-skip-lazy')||el.hasAttribute('data-no-lazy')||excl(el,val))return false;
+// Already on screen: a player is loading it because it is visible (#548).
+if(el.isConnected&&near(el)&&!(AL&&document.readyState!=='complete'&&ap(el)))return false;
 el.setAttribute('data-xspeed-src',String(val));
 el.setAttribute('data-xspeed-adopted','1');
 return true;
@@ -1034,20 +1072,29 @@ return SA.call(this,n,v);
 }catch(e){}
 function go(v){
 if(v.getAttribute('data-xspeed-loaded'))return;
+// video_after_load: an autoplay video that is on screen before `load` waits
+// for it. readyState is already 'complete' inside the load handler, so the
+// replay below goes straight through.
+// A video built in script keeps its real autoplay attribute when hold()
+// takes its source, so check both spellings.
+if(AL&&document.readyState!=='complete'&&ap(v)){if(Q.indexOf(v)<0)Q.push(v);return;}
 v.setAttribute('data-xspeed-loaded','1');
-var s=v.getAttribute('data-xspeed-src');
-if(s){v.setAttribute('src',s);v.removeAttribute('data-xspeed-src');}
+var r=0,s=v.getAttribute('data-xspeed-src');
+if(s){v.setAttribute('src',s);v.removeAttribute('data-xspeed-src');r=1;}
 if(v.getAttribute('data-xspeed-defer-sources')){
 var c=v.querySelectorAll('source[data-xspeed-src]');
-for(var i=0;i<c.length;i++){c[i].setAttribute('src',c[i].getAttribute('data-xspeed-src'));c[i].removeAttribute('data-xspeed-src');}
+for(var i=0;i<c.length;i++){c[i].setAttribute('src',c[i].getAttribute('data-xspeed-src'));c[i].removeAttribute('data-xspeed-src');r=1;}
 v.removeAttribute('data-xspeed-defer-sources');
 }
 
 if(v.getAttribute('data-xspeed-autoplay')){v.setAttribute('autoplay','');v.removeAttribute('data-xspeed-autoplay');}
 v.removeAttribute('preload');
 // load() picks up the sources we just restored; without it a <video>
-// that has already failed to resolve a source will not retry.
-if(v.load)v.load();
+// that has already failed to resolve a source will not retry. Only when
+// something was restored: a player that set its own src on the element
+// meanwhile (Elementor's background video) is already fetching it, and
+// load() would abort that request and start it again.
+if(v.load&&(r||!v.getAttribute('src')))v.load();
 }
 // A multi-format <video> carries no src of its own — the <source> children
 // do, and those sit outside the opening tag PHP rewrote. Strip them here,
@@ -1078,6 +1125,14 @@ var a=document.querySelectorAll('video[autoplay]:not([data-xspeed-loaded]):not([
 for(var i=0;i<a.length;i++){
 var v=a[i];
 v.setAttribute('data-xspeed-adopted','1');
+// The author's opt-outs and Excluded Images, same as the server pass.
+if(v.hasAttribute('data-skip-lazy')||v.hasAttribute('data-no-lazy')||excl(v))continue;
+// A visible video already in or near the viewport is being started because
+// it is visible — a player with its own lazy loader sets autoplay or preload
+// at exactly that moment (Essential Blocks 6.4.7+). Taking its source then
+// aborted the request and rejected play(). Hold it only when the site asked
+// for autoplay to wait until load and load has not happened yet. (#548)
+if(near(v)&&!(AL&&document.readyState!=='complete'&&ap(v)))continue;
 var auto=v.hasAttribute('autoplay');
 var s=v.getAttribute('src');
 if(s){v.setAttribute('data-xspeed-src',s);v.removeAttribute('src');}
@@ -1090,6 +1145,10 @@ if(c.length)v.setAttribute('data-xspeed-defer-sources','1');
 if(auto){v.removeAttribute('autoplay');v.setAttribute('data-xspeed-autoplay','1');}
 v.setAttribute('preload','none');
 if(v.load)v.load();
+// Watch it now, not on the next full scan: a page whose DOM never goes
+// quiet (typed headings, counters, chat widgets) could otherwise keep a
+// held video blank long after it scrolled into view. (#548)
+watch(v);
 }
 }
 // A background video (data-xspeed-wait) that reaches the viewport is parked
@@ -1104,32 +1163,60 @@ P=[];
 }
 for(var k=0;k<E.length;k++)addEventListener(E[k],interacted,{capture:true,passive:true});
 function reach(v){if(!I&&v.getAttribute('data-xspeed-wait'))P.push(v);else go(v);}
+// In or within 200px of the viewport, and laid out (a hidden popup's video
+// measures 0x0 at the top of the page and must not count as visible).
+function near(v){
+var r=v.getBoundingClientRect();
+if(!r.width&&!r.height)return false;
+var h=window.innerHeight||document.documentElement.clientHeight;
+return r.bottom>-200&&r.top<h+200;
+}
+// One observer for every held video, created on first use.
+var o;
+function io(){
+if(o!==undefined)return o;
+o=('IntersectionObserver'in window)?new IntersectionObserver(function(es){
+for(var i=0;i<es.length;i++){if(es[i].isIntersecting){o.unobserve(es[i].target);reach(es[i].target);}}
+},{rootMargin:'200px'}):null;
+return o;
+}
+function watch(v){var ob=io();if(ob)ob.observe(v);else reach(v);}
 function scan(){
 strip();
 adopt();
 var v=document.querySelectorAll(S);
-if(!('IntersectionObserver'in window)){for(var i=0;i<v.length;i++)reach(v[i]);return;}
-var o=new IntersectionObserver(function(es){
-for(var i=0;i<es.length;i++){if(es[i].isIntersecting){reach(es[i].target);o.unobserve(es[i].target);}}
-},{rootMargin:'200px'});
-for(var j=0;j<v.length;j++)o.observe(v[j]);
+for(var j=0;j<v.length;j++)watch(v[j]);
 }
 if(document.readyState!=='loading')scan();else document.addEventListener('DOMContentLoaded',scan);
 // Players that build their <video> after load (page-builder video blocks)
-// must be caught the INSTANT the element lands. A debounce loses the race:
-// the browser begins fetching as soon as a src is set, so by the time a
-// timer fires the bytes are already committed. adopt() is idempotent and
+// must be caught the INSTANT the element lands. A timer loses the race: the
+// browser begins fetching as soon as a src is set. adopt() is idempotent and
 // cheap (one guarded querySelectorAll), so run it synchronously on every
-// mutation and only debounce the fuller scan that attaches observers.
+// mutation. The fuller scan is THROTTLED, not debounced: a debounce reset by
+// every mutation never fired on a page that keeps changing. (#548)
 if(window.MutationObserver){
-var t;
+var t=0;
 new MutationObserver(function(){
 adopt();
-clearTimeout(t);t=setTimeout(scan,200);
+if(!t)t=setTimeout(function(){t=0;scan();},200);
 }).observe(document.documentElement,{childList:true,subtree:true});
 }
+if(AL)window.addEventListener('load',function(){
+var d=0;function rel(){if(d)return;d=1;var q=Q;Q=[];for(var i=0;i<q.length;i++)go(q[i]);}
+if(window.requestAnimationFrame)requestAnimationFrame(function(){requestAnimationFrame(rel);});
+setTimeout(rel,1500);
+});
 })();
 JS;
+		$patterns = array();
+		foreach ( $excluded as $pattern ) {
+			$pattern = strtolower( trim( (string) $pattern ) );
+			if ( '' !== $pattern ) {
+				$patterns[] = $pattern;
+			}
+		}
+		$vars = 'var AL=' . ( $after_load ? '1' : '0' ) . ',Q=[],X=' . wp_json_encode( array_values( array_unique( $patterns ) ), JSON_HEX_TAG | JSON_HEX_AMP ) . ';';
+		return str_replace( 'var AL=0,Q=[],X=[];', $vars, $script );
 	}
 
 	private static function set_attr( string $tag, string $name, string $value, bool $only_if_missing = false ): string {

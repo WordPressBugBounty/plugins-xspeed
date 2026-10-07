@@ -210,6 +210,7 @@ final class Server_Caches {
 					define( 'LSWCP_EMPTYCACHE', true );
 				}
 				\LiteSpeed\Purge::purge_all_lscache( 'xSpeed response invalidation' );
+				self::note_forwarded( 'LiteSpeed Cache' );
 			}
 			return;
 		}
@@ -226,6 +227,9 @@ final class Server_Caches {
 		}
 		foreach ( array_values( array_unique( $targets ) ) as $target ) {
 			do_action( 'litespeed_purge_url', $target );
+		}
+		if ( array() !== $targets ) {
+			self::note_forwarded( 'LiteSpeed Cache' );
 		}
 	}
 
@@ -264,7 +268,10 @@ final class Server_Caches {
 	 *
 	 * The trade that stays: Nginx Helper purges the post, the homepage and
 	 * the post's archives. An ordinary page that lists recent posts is none of
-	 * those, and keeps its old list until the server TTL expires. The
+	 * those, and keeps its old list until the server TTL expires. When xSpeed
+	 * knows that happened, because a narrow purge fell back to the whole site
+	 * for a list the theme draws everywhere, the context says so in
+	 * `fallback` and the zone is cleared (fallback_needs_whole_zone()). The
 	 * `xspeed_nginx_helper_defer_content_purge` filter returns to clearing
 	 * the whole zone on every content purge outside an import, for a site that
 	 * needs those pages current.
@@ -297,11 +304,27 @@ final class Server_Caches {
 			? $context['scope']
 			: ( '' !== $url ? 'urls' : 'site' );
 
-		// `urls` is a per-URL purge, which this integration does not do yet —
-		// see Host_Page_Caches. Standing down is the honest answer: the
-		// alternative, treating a one-page purge as a reason to clear the
-		// whole install, is the bug this method exists to fix.
-		if ( 'urls' === $scope || 'none' === $scope ) {
+		if ( 'none' === $scope ) {
+			return;
+		}
+
+		// Named pages go to Nginx Helper's own per-URL purge, whether or not
+		// its automatic purging is on. Its own rules clear the post, the home
+		// page and the post's archives, but no archive page past the first and
+		// no neighbouring post, so leaving a narrow purge to it would leave
+		// those stale. Only this site's URLs: with the `get_request` method
+		// Nginx Helper keeps the path and swaps in its own host. Collected
+		// and sent once, at shutdown (flush_nginx_helper()).
+		if ( 'urls' === $scope ) {
+			if ( self::is_importing() || ! Host_Page_Caches::nginx_helper_is_fastcgi() ) {
+				return;
+			}
+			$urls = isset( $context['urls'] ) && is_array( $context['urls'] ) ? $context['urls'] : array( $url );
+			foreach ( $urls as $target ) {
+				if ( is_string( $target ) && '' !== $target && self::is_this_site( $target ) ) {
+					self::queue_nginx_url( $target );
+				}
+			}
 			return;
 		}
 
@@ -323,16 +346,18 @@ final class Server_Caches {
 			 *
 			 * Defaults to true when Nginx Helper's automatic purging is on,
 			 * since it has already purged the post, the homepage and the
-			 * post's archives. Return false to clear the whole zone instead,
-			 * for a site whose pages list posts somewhere Nginx Helper does
-			 * not purge.
+			 * post's archives. Defaults to false when `fallback` in the
+			 * context says pages outside those changed (`theme_list`,
+			 * `pending`, `filter`, `listing`). Return false to clear the
+			 * whole zone instead, for a site whose pages list posts
+			 * somewhere Nginx Helper does not purge.
 			 *
 			 * @param bool                $defer   Whether to leave it to Nginx Helper.
 			 * @param array<string,mixed> $context Public purge context.
 			 */
 			$defer = (bool) apply_filters(
 				'xspeed_nginx_helper_defer_content_purge',
-				Host_Page_Caches::nginx_helper_purges_changes(),
+				Host_Page_Caches::nginx_helper_purges_changes() && ! self::fallback_needs_whole_zone( $context ),
 				$context
 			);
 			if ( $defer ) {
@@ -359,7 +384,223 @@ final class Server_Caches {
 		// the pages the purge was actually for still being served. Pro's
 		// Multisite::purge_site() runs inside switch_to_blog() and reaches
 		// here with that blog's host.
-		Host_Page_Caches::purge_nginx_helper();
+		self::purge_nginx_zone();
+	}
+
+	/**
+	 * Most URLs sent to Nginx Helper one by one in a request. Past this the
+	 * zone is cleared once instead. A typical save names about 35 pages.
+	 */
+	private const NGINX_URL_LIMIT = 100;
+
+	/**
+	 * Seconds of per-URL purging after which the rest of the batch becomes
+	 * one zone purge. Nginx Helper's `get_request` method sends a blocking
+	 * GET per URL with WordPress's 5-second default timeout.
+	 */
+	private const NGINX_URL_SECONDS = 3.0;
+
+	/**
+	 * This request's nginx work, sent once at shutdown.
+	 *
+	 * `urls` is keyed by URL, so a page that two saves in one request both
+	 * name (a bulk edit, where every post shares the home page and the
+	 * archives) is sent once. `overflow` means more than the limit arrived.
+	 * `zone_done` means the zone was cleared earlier in this request, and
+	 * `zone_again` that another clear was asked for after it.
+	 *
+	 * @var array{urls:array<string,bool>,overflow:bool,zone_done:bool,zone_again:bool,armed:bool}
+	 */
+	private static $nginx = array(
+		'urls'       => array(),
+		'overflow'   => false,
+		'zone_done'  => false,
+		'zone_again' => false,
+		'armed'      => false,
+	);
+
+	/** Test seam: forget this request's nginx work. */
+	public static function reset(): void {
+		self::$nginx = array(
+			'urls'       => array(),
+			'overflow'   => false,
+			'zone_done'  => false,
+			'zone_again' => false,
+			'armed'      => false,
+		);
+	}
+
+	/**
+	 * Clear the whole nginx zone, at most once now and once more at the end
+	 * of the request.
+	 *
+	 * The first clear runs at once, as it always has, so an operator's Purge
+	 * All lands before the response. A later one in the same request (a bulk
+	 * edit of ten posts that each fall back to the whole site) waits for
+	 * shutdown and runs once, after every change the request makes. Clearing
+	 * the zone covers every URL queued before it, so those are dropped.
+	 */
+	private static function purge_nginx_zone(): void {
+		self::note_forwarded( 'Nginx Helper' );
+		self::$nginx['urls']     = array();
+		self::$nginx['overflow'] = false;
+		if ( self::$nginx['zone_done'] ) {
+			self::$nginx['zone_again'] = true;
+			self::arm_nginx_flush();
+			return;
+		}
+		if ( Host_Page_Caches::purge_nginx_helper() ) {
+			self::$nginx['zone_done'] = true;
+		}
+	}
+
+	/**
+	 * Tell an operator's purge report which cache took the purge. The
+	 * nginx batch is sent at shutdown, after the caller has printed its
+	 * answer, so this records the hand-off rather than the send.
+	 *
+	 * @param string $layer Cache name.
+	 */
+	private static function note_forwarded( string $layer ): void {
+		if ( class_exists( __NAMESPACE__ . '\\Cache' ) ) {
+			Cache::note_purge_forwarded( $layer );
+		}
+	}
+
+	/** Add one URL to this request's nginx batch. */
+	private static function queue_nginx_url( string $url ): void {
+		self::note_forwarded( 'Nginx Helper' );
+		if ( self::$nginx['zone_again'] ) {
+			// The zone is cleared at shutdown anyway.
+			return;
+		}
+		if ( ! self::$nginx['overflow'] ) {
+			self::$nginx['urls'][ $url ] = true;
+			if ( count( self::$nginx['urls'] ) > self::nginx_url_limit() ) {
+				self::$nginx['overflow'] = true;
+				self::$nginx['urls']     = array();
+			}
+		}
+		self::arm_nginx_flush();
+	}
+
+	/**
+	 * Send the batch at shutdown, or now when shutdown is already running.
+	 *
+	 * Inside `shutdown` a callback added at a priority that has already run
+	 * would never fire, so a purge raised there (Cache::flush_pending_saves()
+	 * runs at priority 1) is sent straight away.
+	 */
+	private static function arm_nginx_flush(): void {
+		if ( function_exists( 'did_action' ) && did_action( 'shutdown' ) ) {
+			self::flush_nginx_helper();
+			return;
+		}
+		if ( self::$nginx['armed'] || ! function_exists( 'add_action' ) ) {
+			return;
+		}
+		self::$nginx['armed'] = true;
+		add_action( 'shutdown', array( __CLASS__, 'flush_nginx_helper' ), 20, 0 );
+	}
+
+	/**
+	 * Send this request's nginx work: one zone clear, or each queued URL.
+	 *
+	 * Sent in the request that raised it, not handed to WP-Cron the way the
+	 * Cloudflare module defers its edge calls. On a site behind an nginx page
+	 * cache, anonymous visits are answered by nginx and never run PHP, so
+	 * WP-Cron can go a long time without a request to run on, and the pages
+	 * would stay stale until it did. The visitor requests that reach here (a
+	 * comment, a stock change at checkout) name about four URLs, and Nginx
+	 * Helper's own comment and post hooks already purge inline in those same
+	 * requests. NGINX_URL_SECONDS bounds the wait when the purge endpoint is
+	 * slow.
+	 *
+	 * Public because it is a `shutdown` callback; not part of the contract.
+	 */
+	public static function flush_nginx_helper(): void {
+		$work                      = self::$nginx;
+		self::$nginx['urls']       = array();
+		self::$nginx['overflow']   = false;
+		self::$nginx['zone_again'] = false;
+		self::$nginx['armed']      = false;
+
+		if ( ! Host_Page_Caches::nginx_helper_is_fastcgi() ) {
+			return;
+		}
+		if ( $work['zone_again'] ) {
+			Host_Page_Caches::purge_nginx_helper();
+			return;
+		}
+		if ( $work['overflow'] ) {
+			self::record_nginx_zone_fallback();
+			if ( Host_Page_Caches::purge_nginx_helper() ) {
+				self::$nginx['zone_done'] = true;
+			}
+			return;
+		}
+		if ( array() === $work['urls'] ) {
+			return;
+		}
+		Host_Page_Caches::purge_nginx_helper_urls( array_keys( $work['urls'] ), self::NGINX_URL_SECONDS );
+	}
+
+	/**
+	 * How many URLs a request may send to Nginx Helper one by one.
+	 */
+	private static function nginx_url_limit(): int {
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return self::NGINX_URL_LIMIT;
+		}
+		/**
+		 * Filter how many URLs one request sends to Nginx Helper one by one
+		 * before clearing the whole nginx zone instead.
+		 *
+		 * @param int $limit URLs per request.
+		 */
+		$limit = (int) apply_filters( 'xspeed_nginx_helper_url_purge_limit', self::NGINX_URL_LIMIT );
+		return $limit > 0 ? $limit : self::NGINX_URL_LIMIT;
+	}
+
+	/** Say in the activity log that a batch became a zone clear. */
+	private static function record_nginx_zone_fallback(): void {
+		if ( ! class_exists( __NAMESPACE__ . '\\Activity_Log' ) || ! function_exists( '__' ) ) {
+			return;
+		}
+		Activity_Log::record(
+			'cache_purged',
+			sprintf(
+				/* translators: %d: most URLs purged one by one. */
+				__( 'Cleared the whole nginx cache: more than %d pages changed in one request, too many to purge one by one', 'xspeed' ),
+				self::nginx_url_limit()
+			)
+		);
+	}
+
+	/**
+	 * Whether a site-wide content purge fell back from a narrow one for a
+	 * reason Nginx Helper's own rules do not cover.
+	 *
+	 * Nginx Helper purges the post, the homepage and the first page of the
+	 * post's archives. That is enough for `limit`: the pages were all named,
+	 * only too many of them, and the ones past the first archive page wait
+	 * for the server TTL, as every content purge did before narrow purges.
+	 * It is not enough for the others:
+	 *
+	 * - `theme_list`: a list the theme draws on every page changed.
+	 * - `pending`: the save could not be worked out at all.
+	 * - `filter`: a site's own code said the named pages are not enough.
+	 * - `listing`: pages that run a post list of their own (a page builder
+	 *   grid) may have changed, and they are not ones Nginx Helper purges.
+	 *
+	 * An excluded post type (a WooCommerce product) carries no reason and
+	 * stays with Nginx Helper.
+	 *
+	 * @param array<string,mixed> $context Public purge context.
+	 */
+	private static function fallback_needs_whole_zone( array $context ): bool {
+		$reason = isset( $context['fallback'] ) && is_string( $context['fallback'] ) ? $context['fallback'] : '';
+		return in_array( $reason, array( Cache::FALLBACK_THEME_LIST, Cache::FALLBACK_PENDING, Cache::FALLBACK_FILTER, Cache::FALLBACK_LISTING ), true );
 	}
 
 	/**

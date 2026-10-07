@@ -39,6 +39,7 @@ return array(
     'XSpeed\\Modules\\Mcp\\Mcp_Activity_Log' => $baseDir . '/includes/modules/Mcp/Mcp_Activity_Log.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Auth' => $baseDir . '/includes/modules/Mcp/Mcp_Auth.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Hub' => $baseDir . '/includes/modules/Mcp/Mcp_Hub.php',
+    'XSpeed\\Modules\\Mcp\\Mcp_Hub_Connect' => $baseDir . '/includes/modules/Mcp/Mcp_Hub_Connect.php',
     'XSpeed\\Modules\\Mcp\\Mcp_OAuth' => $baseDir . '/includes/modules/Mcp/Mcp_OAuth.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Pairing' => $baseDir . '/includes/modules/Mcp/Mcp_Pairing.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Rate_Limiter' => $baseDir . '/includes/modules/Mcp/Mcp_Rate_Limiter.php',

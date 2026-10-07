@@ -532,6 +532,11 @@ class Admin {
 				// host — the banner uses this to switch to honest messaging
 				// instead of dangling a snippet the user can't apply.
 				'behind_proxy' => Server::is_behind_proxy(),
+				// Mirrors /status (see the note there). On first paint the
+				// probe is whatever was last cached, so this is usually
+				// `unknown` until the Health tab runs a live probe — the
+				// dashboard needs the key present either way.
+				'rules'        => Cache::rules_state( $probe ),
 			);
 		}
 
@@ -629,6 +634,11 @@ class Admin {
 				continue;
 			}
 			$settings = Settings_Manager::get_public( $slug );
+			// Something else on the site has taken over this module's job. It
+			// stands down whatever its own switch says, so it is reported off,
+			// with the reason in place of its usual one.
+			$blocked = $module->blocked_by();
+			$active  = $module->is_active();
 
 			$entry = array(
 				'slug'         => $slug,
@@ -655,14 +665,18 @@ class Admin {
 				// modules that happen to store that one key. null means the
 				// module has no meaningful on/off and should be excluded from
 				// any count rather than treated as off. (#363)
-				'active'       => $module->is_active(),
+				'active'       => ( null !== $blocked && true === $active ) ? false : $active,
 				// One sentence explaining the line above, computed next to it
 				// so the two cannot disagree. The UI shows it behind an (i)
 				// beside the status pill: "On" is a bare assertion otherwise,
 				// and least obvious exactly where it matters -- Media
 				// Optimization reads On while its two most prominent switches
 				// are off, because three other flags are on. (#363)
-				'active_reason' => $module->active_reason(),
+				'active_reason' => null !== $blocked ? $blocked : $module->active_reason(),
+				// A purchase or licence the module still waits on. Shown in the
+				// page header in place of the On/Off pill. Not while another
+				// module has taken over: that reason is the one to show.
+				'status_label' => null !== $blocked ? null : $module->status_label(),
 				'label'        => $meta['label'] ?? ucfirst( $slug ),
 				'icon'         => $meta['icon'] ?? 'Square',
 				'description'  => $meta['description'] ?? '',
@@ -690,6 +704,10 @@ class Admin {
 				'schema'       => $schema,
 				'notices'      => $module->ui_notices(),
 				'custom_panel' => $meta['custom_panel'] ?? null,
+				// Why this module may not be switched on, when something else
+				// on the site has taken over from it. Null for almost every
+				// module almost always — Free never blocks anything itself.
+				'blocked_by'   => $blocked,
 			);
 
 			/**

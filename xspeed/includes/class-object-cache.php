@@ -47,7 +47,7 @@ final class Object_Cache {
 	 *   class_available: array<string,bool>
 	 * }
 	 */
-	public static function detect(): array {
+	public static function detect( bool $with_owner = false ): array {
 		$dropin       = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/object-cache.php' : '';
 		$has_drop_in  = '' !== $dropin && file_exists( $dropin );
 		$label        = $has_drop_in ? self::sniff_drop_in_label( $dropin ) : '';
@@ -117,7 +117,84 @@ final class Object_Cache {
 			'degraded'          => $degraded,
 			'persistent'        => $persistent,
 			'class_available'   => $class_available,
+			// Who owns a foreign drop-in and how a switch would go, so every
+			// surface can offer it (or say why not) the same way. (#686)
+			// Only on request: it reads plugin folders, and module status
+			// calls detect() on dashboard loads.
+			'owner'             => $with_owner && $has_drop_in && ! self::is_our_dropin_present() ? Object_Cache_Takeover::owner() : null,
+			// The plugin a switch replaced, which Disable can put back.
+			'previous_owner'    => self::previous_owner(),
 		);
+	}
+
+	/**
+	 * Label of the plugin xSpeed switched from, while ours is installed.
+	 *
+	 * @return array{label:string}|null
+	 */
+	private static function previous_owner(): ?array {
+		if ( ! self::is_our_dropin_present() ) {
+			return null;
+		}
+		$record = Object_Cache_Takeover::record();
+		return null === $record ? null : array( 'label' => $record['label'] );
+	}
+
+	/** A drop-in that is not ours sits in wp-content. */
+	private static function foreign_dropin_present(): bool {
+		$dropin = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/object-cache.php' : '';
+		return '' !== $dropin && ( file_exists( $dropin ) || is_link( $dropin ) ) && ! self::is_our_dropin_present();
+	}
+
+	/** Our drop-in is the object cache this request is running on. */
+	private static function our_dropin_is_live(): bool {
+		return isset( $GLOBALS['wp_object_cache'] ) && $GLOBALS['wp_object_cache'] instanceof \XSpeed_Object_Cache;
+	}
+
+	/**
+	 * Delete this site's keys from Redis, the same `salt:*` scope the
+	 * drop-in's flush uses. For when the drop-in is not loaded in this
+	 * request, so wp_cache_flush() would flush someone else's cache or none.
+	 * Memcached has no key enumeration; its namespace generation covers it.
+	 *
+	 * @param array $opts Settings array.
+	 * @return int Keys deleted, or -1 when nothing could be done.
+	 */
+	public static function purge_namespace( array $opts ): int {
+		if ( 'redis' !== (string) ( $opts['backend'] ?? 'redis' ) ) {
+			return -1;
+		}
+		$salt = self::effective_salt( $opts );
+		if ( '' === $salt ) {
+			return -1;
+		}
+		$client = new Redis_Client(
+			self::str( $opts, 'redis_host', '127.0.0.1' ),
+			self::int( $opts, 'redis_port', 6379 ),
+			(float) self::int( $opts, 'connection_timeout', 1 ),
+			false
+		);
+		if ( ! $client->connect() ) {
+			return -1;
+		}
+		$user = self::str( $opts, 'redis_user', '' );
+		$pass = self::str( $opts, 'redis_password', '' );
+		if ( ( '' !== $pass || '' !== $user ) && false === $client->auth( $pass, $user ) ) {
+			$client->close();
+			return -1;
+		}
+		$db = self::int( $opts, 'redis_database', 0 );
+		if ( $db > 0 ) {
+			$client->select( $db );
+		}
+		$pattern = str_replace(
+			array( '\\', '*', '?', '[', ']' ),
+			array( '\\\\', '\\*', '\\?', '\\[', '\\]' ),
+			$salt
+		) . ':*';
+		$deleted = $client->delete_by_pattern( $pattern );
+		$client->close();
+		return $deleted;
 	}
 
 	/**
@@ -581,7 +658,54 @@ final class Object_Cache {
 	 * @param array $opts Settings array.
 	 * @return array{ok:bool,message:string,steps:array<string,bool>,test:array,detect:array}
 	 */
-	public static function enable( array $opts ): array {
+	public static function enable( array $opts, array $args = array() ): array {
+		/*
+		 * Another plugin's object-cache.php is a switch, not an install: its
+		 * owner has to be out of the picture first or it puts its file back
+		 * (W3TC on the next admin request, LiteSpeed on its next save). The
+		 * panel always refused here while REST, CLI and MCP overwrote the
+		 * file, so every entry point now refuses unless the caller asked for
+		 * the switch. (#686)
+		 */
+		if ( self::foreign_dropin_present() ) {
+			if ( empty( $args['takeover'] ) ) {
+				$owner = Object_Cache_Takeover::owner();
+				return array(
+					'ok'             => false,
+					'needs_takeover' => true,
+					'message'        => Object_Cache_Takeover::refusal_message( $owner ),
+					'steps'          => array(
+						'connection' => false,
+						'wp_config'  => false,
+						'drop_in'    => false,
+						'verified'   => false,
+					),
+					'owner'          => $owner,
+					'detect'         => self::detect( true ),
+				);
+			}
+			return Object_Cache_Takeover::run( $opts );
+		}
+
+		// Enabling from scratch starts a new session, so an earlier switch's
+		// record no longer describes anything to put back. Re-running enable
+		// over our own drop-in (a re-sync, an import) keeps it.
+		if ( ! self::is_our_dropin_present() ) {
+			Object_Cache_Takeover::forget();
+		}
+		return self::install( $opts );
+	}
+
+	/**
+	 * Test, write the wp-config block and install our drop-in. The shared
+	 * second half of enable() and of a switch from another plugin; neither
+	 * calls it while a foreign drop-in is in place.
+	 *
+	 * @param array      $opts Settings array.
+	 * @param array|null $test A connection test already run moments ago.
+	 * @return array{ok:bool,message:string,steps:array<string,bool>,test:array,detect:array}
+	 */
+	public static function install( array $opts, ?array $test = null ): array {
 		$steps = array(
 			'connection' => false,
 			'wp_config'  => false,
@@ -590,17 +714,25 @@ final class Object_Cache {
 		);
 
 		// 1. Don't write anything until the backend actually answers.
-		$test = self::test_connection( $opts );
+		$test = $test ?? self::test_connection( $opts );
 		if ( ! $test['ok'] ) {
 			return array(
 				'ok'      => false,
 				'message' => 'Could not enable: ' . $test['message'],
 				'steps'   => $steps,
 				'test'    => $test,
-				'detect'  => self::detect(),
+				'detect'  => self::detect( true ),
 			);
 		}
 		$steps['connection'] = true;
+
+		// Values from an earlier xSpeed session are still in Redis (keys
+		// have no TTL, `alloptions` included), and the drop-in would read
+		// them back as current. Only when ours is not already the live cache:
+		// re-running enable over a working install must not cool it.
+		if ( ! self::our_dropin_is_live() ) {
+			self::purge_namespace( $opts );
+		}
 
 		// 2. Write the XSPEED_OC_* constants into wp-config.php.
 		$steps['wp_config'] = self::write_wp_config( $opts );
@@ -634,7 +766,7 @@ final class Object_Cache {
 	 *
 	 * @return array{ok:bool,message:string,steps:array<string,bool>,detect:array}
 	 */
-	public static function disable(): array {
+	public static function disable( array $args = array() ): array {
 		// A drop-in owned by another plugin is left in place by
 		// remove_dropin(), which then reports success because nothing of ours
 		// is there to remove. Reporting "disabled" for that is a lie: the site
@@ -648,8 +780,22 @@ final class Object_Cache {
 					'drop_in'   => false,
 					'wp_config' => false,
 				),
-				'detect'  => self::detect(),
+				'detect'  => self::detect( true ),
 			);
+		}
+
+		// Empty our namespace before the drop-in goes, so a later enable
+		// never reads this session's values back. Our cache stays loaded
+		// until this request ends, so whatever it writes after this point
+		// (a restore's own option writes) is flushed again at shutdown.
+		// (#686)
+		if ( self::is_our_dropin_present() ) {
+			if ( self::our_dropin_is_live() ) {
+				self::flush();
+				add_action( 'shutdown', array( __CLASS__, 'flush' ), PHP_INT_MAX );
+			} elseif ( class_exists( __NAMESPACE__ . '\\Settings_Manager' ) ) {
+				self::purge_namespace( (array) Settings_Manager::get( 'object-cache' ) );
+			}
 		}
 
 		$dropin_removed = self::remove_dropin();
@@ -664,16 +810,36 @@ final class Object_Cache {
 		 */
 		self::delete_sidecar();
 
+		$message = $dropin_removed
+			? 'Object cache disabled. Drop-in removed and wp-config.php cleaned.'
+			: 'Could not remove the drop-in — wp-content may not be writable.';
+
+		// Put back the plugin xSpeed switched from, when asked. Without the
+		// ask, the record describes nothing any more.
+		$restored = null;
+		if ( $dropin_removed && ! empty( $args['restore'] ) ) {
+			$restored = Object_Cache_Takeover::restore();
+			$message .= ' ' . $restored['message'];
+		} elseif ( $dropin_removed ) {
+			// Not put back, but its namespace is cleared all the same, so a
+			// later manual re-enable does not start from the switch's
+			// snapshot.
+			Object_Cache_Takeover::discard();
+		}
+
 		return array(
-			'ok'      => $dropin_removed,
-			'message' => $dropin_removed
-				? 'Object cache disabled. Drop-in removed and wp-config.php cleaned.'
-				: 'Could not remove the drop-in — wp-content may not be writable.',
-			'steps'   => array(
+			// Whether xSpeed's object cache is off. A restore that could not
+			// complete is reported beside it, in `restored` and the message:
+			// the disable itself still happened. (#687)
+			'ok'       => $dropin_removed,
+			'restored' => null === $restored ? null : $restored['ok'],
+			'message'  => $message,
+			'steps'    => array(
 				'drop_in'   => $dropin_removed,
 				'wp_config' => $config_removed,
+				'restored'  => null !== $restored && $restored['ok'],
 			),
-			'detect'  => self::detect(),
+			'detect'   => self::detect( true ),
 		);
 	}
 
@@ -707,7 +873,9 @@ final class Object_Cache {
 				if ( $existing === $source_contents ) {
 					return true;
 				}
-				return (bool) $fs->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+				$written = (bool) $fs->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+				self::invalidate_compiled( $target );
+				return $written;
 			}
 
 			// Foreign drop-in — back it up before overwriting.
@@ -724,7 +892,9 @@ final class Object_Cache {
 			}
 		}
 
-		return (bool) $fs->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+		$written = (bool) $fs->put_contents( $target, $source_contents, FS_CHMOD_FILE );
+		self::invalidate_compiled( $target );
+		return $written;
 	}
 
 	/**
@@ -743,6 +913,7 @@ final class Object_Cache {
 		$contents = $fs->get_contents( $target );
 		if ( is_string( $contents ) && false !== strpos( $contents, self::DROPIN_TAG ) ) {
 			wp_delete_file( $target );
+			self::invalidate_compiled( $target );
 			return ! file_exists( $target );
 		}
 		// Not ours — leave it, but report success (nothing of ours to remove).
@@ -1077,6 +1248,7 @@ final class Object_Cache {
 
 		$written = (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
 		if ( $written ) {
+			self::invalidate_compiled( $wp_config );
 			// The block just changed; a memoized scan from earlier in this
 			// request would still name the previous set. (#398)
 			self::forget_our_constants();
@@ -1112,6 +1284,7 @@ final class Object_Cache {
 		$config  = preg_replace( $pattern, '', $config );
 		$removed = (bool) $fs->put_contents( $wp_config, $config, FS_CHMOD_FILE );
 		if ( $removed ) {
+			self::invalidate_compiled( $wp_config );
 			// A scan from earlier in this request would still name the
 			// constants we just deleted, so origins() would report a field as
 			// ours -- editable -- when a host define is now the only source
@@ -1282,6 +1455,35 @@ final class Object_Cache {
 	 * ftp_fget(). We only need 'direct' — these writes target wp-config.php /
 	 * wp-content, both owned by the PHP user on a normal install.
 	 */
+	/**
+	 * Drop a file's compiled copy from OPcache after we rewrite or remove it.
+	 *
+	 * wp-config.php and object-cache.php are both compiled once and reused.
+	 * With the default revalidate_freq of 2 seconds, and indefinitely where a
+	 * host turns validate_timestamps off, requests right after a write still
+	 * run the old code: the panel read "Off" and "Backend: unknown" just
+	 * after a switch because the new block's constants were not defined yet,
+	 * and the old drop-in was still the live cache. (#687)
+	 *
+	 * @param string $path Absolute file path.
+	 */
+	public static function invalidate_compiled( string $path ): void {
+		if ( function_exists( 'wp_opcache_invalidate' ) ) {
+			wp_opcache_invalidate( $path, true );
+		} elseif ( function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $path, true ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- opcache may be disabled or restricted; nothing to do either way.
+		}
+	}
+
+	/**
+	 * The direct filesystem, for Object_Cache_Takeover's copies and deletes.
+	 *
+	 * @return \WP_Filesystem_Base|null
+	 */
+	public static function filesystem() {
+		return self::fs();
+	}
+
 	private static function fs() {
 		global $wp_filesystem;
 		if ( ! function_exists( 'WP_Filesystem' ) ) {

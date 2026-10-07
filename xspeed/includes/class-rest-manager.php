@@ -161,6 +161,31 @@ final class Rest_Manager {
 	}
 
 	/**
+	 * Values that are shaped like a capability but cannot be one.
+	 *
+	 * WordPress's `__return_*` helpers are function names. Passed where a
+	 * capability belongs they are simply an unknown capability, and an unknown
+	 * capability is denied — so they close a route rather than open it. Listed
+	 * literally: the check has to be certain, because a capability that merely
+	 * happens to share a name with some function is legitimate.
+	 */
+	private const NOT_A_CAPABILITY = array(
+		'__return_true',
+		'__return_false',
+		'__return_zero',
+		'__return_null',
+		'__return_empty_array',
+		'__return_empty_string',
+	);
+
+	/** Whether a declared capability is one `current_user_can()` could grant. */
+	private static function is_capability( $capability ): bool {
+		return is_string( $capability )
+			&& '' !== $capability
+			&& ! in_array( $capability, self::NOT_A_CAPABILITY, true );
+	}
+
+	/**
 	 * Wrap permission_callback with the always-on cap check. A module may
 	 * declare its own permission_callback for an extra-strict gate; both
 	 * must pass.
@@ -181,6 +206,37 @@ final class Rest_Manager {
 		$declared   = $route['permission_callback'] ?? null;
 		$capability = $route['capability'] ?? 'manage_options';
 		$public     = ! empty( $route['allow_unauthenticated'] );
+
+		if ( ! $public && ! self::is_capability( $capability ) ) {
+			/*
+			 * A route that reads as public and is closed to everyone.
+			 *
+			 * `'capability' => '__return_true'` is the shape this catches: a
+			 * function name, not a capability. `current_user_can()` denies an
+			 * unknown capability — for an anonymous caller AND for a logged-in
+			 * administrator — so the route answers 401 to every request while
+			 * looking, to the next person who reads it, like it lets everyone
+			 * through. One shipped that way, and what found it was a customer's
+			 * 401 rather than any test.
+			 *
+			 * It stays DENIED. Reading "public" out of a value that cannot be a
+			 * capability would turn a typo into an authentication bypass, which
+			 * is a far worse failure than the one being reported. The fix is to
+			 * say `'allow_unauthenticated' => true`, which is the only thing
+			 * that opens a route here, and this says so.
+			 */
+			_doing_it_wrong(
+				__METHOD__,
+				esc_html(
+					sprintf(
+						'Route "%s" declares "%s" as its capability. That is not a capability, so current_user_can() denies every caller, including administrators. Use \'allow_unauthenticated\' => true for a route that is meant to be public.',
+						$module->slug() . ( $route['path'] ?? '' ),
+						is_scalar( $capability ) ? (string) $capability : gettype( $capability )
+					)
+				),
+				'xspeed 1.2.5'
+			);
+		}
 
 		return static function ( \WP_REST_Request $request ) use ( $declared, $capability, $public ) {
 			if ( ! $public && ! current_user_can( $capability ) ) {

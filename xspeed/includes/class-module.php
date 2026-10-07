@@ -310,6 +310,29 @@ abstract class Module {
 			);
 		}
 
+		/*
+		 * A module another module has taken over from.
+		 *
+		 * Distinct from the licence gate above: that one says "you have not
+		 * paid for this", and this one says "something else on this site is
+		 * already doing it, and running both would be worse than running
+		 * either". The Cloudflare module behind the Cloudflare Enterprise
+		 * edge is the case it was written for — two proxy layers, each with
+		 * its own copy, and purges that reach one of them.
+		 *
+		 * Only a write that turns the module ON is refused. Turning it off,
+		 * or changing anything else, is exactly what somebody resolving the
+		 * conflict needs to be able to do.
+		 */
+		$blocked = $this->blocked_by();
+		if ( null !== $blocked && ! empty( $params['enabled'] ) ) {
+			return new \WP_Error(
+				'xspeed_module_blocked',
+				$blocked,
+				array( 'status' => 409 )
+			);
+		}
+
 		// A field pinned by a wp-config.php constant cannot be written. Saying
 		// so beats a 200 over a write that silently did nothing -- and naming
 		// the constant tells the caller where to go and change it. (#398)
@@ -334,6 +357,27 @@ abstract class Module {
 		}
 
 		return rest_ensure_response( $this->update_settings( $params ) );
+	}
+
+	/**
+	 * Why this module may not be switched on right now, or null.
+	 *
+	 * A seam for one module to stand another down. Free answers null for
+	 * everything and never blocks anything itself — it has no opinion about
+	 * which modules conflict, and an add-on that knows the answer says so.
+	 *
+	 * The reason is shown to the customer, so it says what to do rather than
+	 * naming an internal state.
+	 */
+	final public function blocked_by(): ?string {
+		/**
+		 * Filter: xspeed_module_blocked_by
+		 *
+		 * @param string|null $reason Why this module cannot be enabled.
+		 * @param string      $slug   The module being asked about.
+		 */
+		$reason = apply_filters( 'xspeed_module_blocked_by', null, static::SLUG );
+		return is_string( $reason ) && '' !== $reason ? $reason : null;
 	}
 
 	/**
@@ -501,6 +545,18 @@ abstract class Module {
 		}
 
 		return $this->bool_flag_reason();
+	}
+
+	/**
+	 * What the customer still needs before this module can work, when that is
+	 * something to buy or activate, in a few words ("Add-on needed").
+	 *
+	 * The dashboard shows it in the page header in place of the On/Off pill,
+	 * because "Off" on a module nobody can switch on yet reads as a setting
+	 * left off. Null, the default, keeps the pill.
+	 */
+	public function status_label(): ?string {
+		return null;
 	}
 
 	/**

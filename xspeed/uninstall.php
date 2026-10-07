@@ -53,6 +53,12 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_oc_sync_attempts' );
 	delete_option( 'xspeed_overridden_constants' );
 	delete_option( 'xspeed_last_mobile_separate' );
+	delete_option( 'xspeed_rules_inputs' );
+	// Per-user, so it needs the meta sweep rather than delete_option: every
+	// admin who ever confirmed they pasted the server rules has one.
+	if ( function_exists( 'delete_metadata' ) ) {
+		delete_metadata( 'user', 0, 'xspeed_nginx_rules_copied', '', true );
+	}
 	delete_option( 'xspeed_redirect_to_onboarding' );
 	delete_option( 'xspeed_preloader_firewall_block' );
 	delete_option( 'xspeed_onboarding_complete' );
@@ -113,6 +119,10 @@ function xspeed_uninstall_cleanup() {
 	// The tracker's recurring send. Cleared on opt-out, but nothing guarantees
 	// an opt-out ever happened before the uninstall.
 	wp_clear_scheduled_hook( 'xspeed_do_weekly_action' );
+	// Health's edge-mode probe: its pending run and its stored verdict.
+	wp_clear_scheduled_hook( 'xspeed_edge_mode_probe_refresh' );
+	delete_transient( 'xspeed_edge_mode_probe' );
+	delete_transient( 'xspeed_edge_mode_probe_token' );
 	// Our own WP Insights rows: the site id, the original URL, and the last
 	// payload — whose name embeds the site id. The payload names are
 	// derivable from the id, but a failed earlier uninstall or a renamed row

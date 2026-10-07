@@ -356,6 +356,9 @@ final class PreloaderModule extends Module {
 				$state = Preloader::status();
 				\WP_CLI::log( 'Running   : ' . ( $state['running'] ? 'yes' : 'no' ) );
 				\WP_CLI::log( 'Processed : ' . $state['processed'] . ' / ' . $state['total'] );
+				// Which copies each URL gets; the phone copy only with
+				// Separate Mobile Cache on. (#596)
+				\WP_CLI::log( 'Copies    : ' . implode( ', ', ! empty( $state['devices'] ) ? (array) $state['devices'] : Preloader::devices() ) );
 				if ( $state['last_url'] ) {
 					\WP_CLI::log( 'Last URL  : ' . $state['last_url'] );
 				}

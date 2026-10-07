@@ -255,7 +255,10 @@ final class ScoreModule extends Module {
 
 		$started = Scan::start(
 			(string) ( $request->get_param( 'url' ) ?? '' ),
-			(bool) $request->get_param( 'fresh' )
+			(bool) $request->get_param( 'fresh' ),
+			// `both` (default), `desktop` or `mobile` — which Lighthouse runs
+			// the engine spends and therefore which device is the headline.
+			(string) ( $request->get_param( 'strategy' ) ?? 'both' )
 		);
 		if ( is_wp_error( $started ) ) {
 			return $started;
@@ -812,6 +815,13 @@ final class ScoreModule extends Module {
 						'optional'    => true,
 					),
 					array(
+						'type'        => 'assoc',
+						'name'        => 'strategy',
+						'description' => 'Which Lighthouse runs to spend: both (default; desktop graded as the headline, mobile graded alongside), desktop, or mobile. One device costs half the engine quota and becomes the headline.',
+						'optional'    => true,
+						'options'     => array( 'both', 'desktop', 'mobile' ),
+					),
+					array(
 						'type'        => 'flag',
 						'name'        => 'wait',
 						'description' => 'Poll until the scan finishes instead of returning immediately.',
@@ -864,7 +874,8 @@ final class ScoreModule extends Module {
 
 			$started = Scan::start(
 				(string) ( $assoc_args['target'] ?? '' ),
-				! empty( $assoc_args['fresh'] )
+				! empty( $assoc_args['fresh'] ),
+				(string) ( $assoc_args['strategy'] ?? 'both' )
 			);
 			if ( is_wp_error( $started ) ) {
 				\WP_CLI::error( $started->get_error_message() );
@@ -936,18 +947,28 @@ final class ScoreModule extends Module {
 		foreach ( (array) ( $r['dimensions'] ?? array() ) as $key => $d ) {
 			\WP_CLI::log( sprintf( '  %-9s %3s/100  (%s of %s pts)', $key, $d['score'] ?? '-', $d['earned'] ?? '-', $d['weight'] ?? '-' ) );
 		}
-		$lh  = $r['measured']['lighthouse'] ?? null;
+		// Read the PER-DEVICE fields, never `measured.lighthouse`: that one is
+		// the graded run's score, which is desktop on a default scan, so
+		// printing it as "mobile" reported desktop under a mobile label.
+		$lhm = $r['measured']['lighthouse_mobile'] ?? null;
 		$lhd = $r['measured']['lighthouse_desktop'] ?? null;
-		if ( null !== $lh || null !== $lhd ) {
-			// Both strategies: the engine measures both and they diverge
-			// widely, so reporting only mobile states the harsher number as
-			// though it were the whole picture. Labelled, and never as "the
-			// score": different scale.
+		if ( null !== $lhm || null !== $lhd ) {
+			// Name only the devices actually measured. A desktop-only scan
+			// never ran mobile, and a dash there reads as "scored zero"
+			// rather than "not run".
+			$parts = array();
+			if ( null !== $lhd ) {
+				$parts[] = 'desktop ' . $lhd . '/100';
+			}
+			if ( null !== $lhm ) {
+				$parts[] = 'mobile ' . $lhm . '/100';
+			}
+			$graded = (string) ( $r['device'] ?? '' );
 			\WP_CLI::log(
 				sprintf(
-					'Lighthouse: mobile %s, desktop %s - a different scale, one check inside the score above.',
-					null === $lh ? '-' : $lh . '/100',
-					null === $lhd ? '-' : $lhd . '/100'
+					'Lighthouse: %s - a different scale, one check inside the score above.%s',
+					implode( ', ', $parts ),
+					'' !== $graded ? ' Graded on ' . $graded . '.' : ''
 				)
 			);
 		}

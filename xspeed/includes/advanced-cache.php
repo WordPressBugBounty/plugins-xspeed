@@ -1,7 +1,7 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 10
+ * XSPEED_DROPIN_VERSION: 15
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
  * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes so
@@ -29,13 +29,45 @@
  *     brotli stream renders as a blank page. THIS FILE IS A COPY made when
  *     caching was enabled, so without the bump an updated site keeps the old
  *     serve logic and never receives the fix (#286).
- * v9: carry the baked edge-header answer, so a hold set for a page reaches
- *     the paths that run without PHP.
- * v10: keep bots, scanners, cached 404s and xSpeed's own requests (by UA
- *     or the X-XSpeed-Self header) out of hits.log. Without
- *     the bump an existing install keeps writing every crawler HIT into the
- *     ratio while its misses are excluded, which reads MORE optimistic than
- *     having no exclusion at all.
+ * v9: emit the edge/CDN headers baked in from `xspeed_edge_cache_headers`
+ *     on a HIT. Without the bump an existing site keeps a drop-in with no
+ *     placeholder to bake into, so an add-on's CDN headers appear on every
+ *     serve path except this one.
+ * v10: emit `X-XSpeed-Built` — the served file's mtime — so a CDN that has
+ *     just purged can tell whether the origin answered with newer HTML or
+ *     with the same page again. Without the bump an existing site's drop-in
+ *     stays silent and every purge through it reads as unverifiable.
+ * v11: a page whose edge answer differs from the site-wide one carries its
+ *      own pairs in the `.meta` sidecar, and they REPLACE the baked set.
+ *      Without the bump an existing drop-in keeps sending the baked pairs
+ *      for that page, lifetime and all.
+ * v12: `XSPEED_EDGE_PROVIDER=off` empties the edge pairs here too, before
+ *      they are sent, so the emergency switch does not wait for a re-bake.
+ *      `X-XSpeed-Built` still goes out: it is a diagnostic, not an
+ *      instruction to the edge.
+ * v13: a merge of two lines of history that had both used 9 and 10. On `dev`
+ *      they were: v9 carries the baked edge-header answer so a hold set for a
+ *      page reaches the paths that run without PHP, and v10 keeps bots,
+ *      scanners, cached 404s and xSpeed's own requests (by UA or the
+ *      X-XSpeed-Self header) out of hits.log. Everything in v9 to v12 above
+ *      and both of those are in this file. The bump is what makes a site on
+ *      either line rewrite its drop-in.
+ * v14: the key path lowercases percent-escapes and escapes non-ASCII bytes,
+ *      the spelling Cache::normalize_path() now hashes, so `%E7`, `%e7` and
+ *      raw UTF-8 spellings of a non-ASCII slug share one key with the entry
+ *      PHP wrote. Before, PHP keyed a sanitize_text_field() copy that had
+ *      lost every escape, so these pages were never a HIT here. Without the
+ *      bump an existing site keeps computing the old key for them.
+ * v15: two changes, one bump.
+ *      - A page with a lifetime of its own (the sidecar `ttl`: a nonce cap,
+ *        a per-post expiry) has every edge lifetime in its pairs cut to what
+ *        the copy has left. Without the bump an existing drop-in keeps
+ *        telling the edge to hold a nonce page for the site's whole lifetime.
+ *      - A HIT served for a URL carrying an ignored param (`?utm_source=…`)
+ *        sends the baked `query-variant` hold instead of the edge lifetime,
+ *        so an edge keeps only URLs a purge can name. A query string of `0`
+ *        is no longer read as no query string. Without the bump an existing
+ *        drop-in keeps telling the edge to store every variant.
  *
  * IMPORTANT: This file is included by wp-settings.php BEFORE
  * wp-includes/formatting.php and wp-includes/load.php are loaded, so NO
@@ -69,7 +101,16 @@ if ( 'GET' !== $xspeed_method ) {
 // must match it; one that doesn't means the response could genuinely vary,
 // so we stand down and let PHP decide. A missing sidecar means the same —
 // fail safe, never guess.
-if ( ! empty( $_SERVER['QUERY_STRING'] ) ) {
+//
+// A key that matches is one the cache key leaves out, so the URL it makes is
+// one no purge names. `$xspeed_qs_unpurged` records that for the edge hold
+// further down, the same test Cache::query_carries_unpurged_param() makes.
+//
+// An empty string test rather than empty(): a query string of `0` is still a
+// query string, and empty() let `/post?0` through as if it were `/post`.
+$xspeed_qs_unpurged = false;
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs pre-WP. Only tested for emptiness here; parsed for its keys below.
+if ( isset( $_SERVER['QUERY_STRING'] ) && '' !== (string) $_SERVER['QUERY_STRING'] ) {
 	$xspeed_allow_file = WP_CONTENT_DIR . '/cache/xspeed/.ignored-query-params';
 	if ( ! is_readable( $xspeed_allow_file ) ) {
 		return;
@@ -92,6 +133,7 @@ if ( ! empty( $_SERVER['QUERY_STRING'] ) ) {
 		if ( 1 !== @preg_match( '#^' . $xspeed_allow_re . '$#', (string) $xspeed_qs_key ) ) {
 			return;
 		}
+		$xspeed_qs_unpurged = true;
 	}
 }
 
@@ -190,7 +232,22 @@ $xspeed_host = str_replace( "\0", '', $xspeed_host );
 // Restrict host to a safe charset (letters, digits, dot, hyphen, colon for port).
 $xspeed_host = preg_replace( '/[^a-zA-Z0-9.\-:]/', '', $xspeed_host );
 
-$xspeed_path_only  = strtok( $xspeed_request_uri, '?' );
+$xspeed_path_only = (string) strtok( $xspeed_request_uri, '?' );
+
+// Path spelling. MUST mirror XSpeed\Cache::normalize_path() exactly.
+// WordPress links carry lower-case escapes and browsers send upper-case ones,
+// so escapes are lowercased, and a byte outside printable ASCII is escaped the
+// same way. Nothing is decoded. Without this a non-ASCII slug requested as
+// `%E7…` or as raw UTF-8 hashes to a different key than the one
+// Cache::store() wrote. A plain ASCII path passes through unchanged. The
+// site-path match below sees this spelling too; blog paths are plain ASCII.
+$xspeed_path_only = (string) preg_replace_callback(
+	'/%[0-9a-fA-F]{2}|[^\x21-\x7E]/',
+	static function ( $xspeed_m ) {
+		return '%' === $xspeed_m[0][0] ? strtolower( $xspeed_m[0] ) : sprintf( '%%%02x', ord( $xspeed_m[0] ) );
+	},
+	$xspeed_path_only
+);
 
 // Device bucket — MUST mirror XSpeed\Cache::cache_key() exactly, or the key
 // the drop-in computes won't match the file Cache::store() wrote, the HIT
@@ -345,6 +402,29 @@ if ( file_exists( $xspeed_cache_file ) ) {
 			$xspeed_edge_headers = $xspeed_meta['edge_headers'];
 		}
 
+		// A URL carrying an ignored param gets the hold baked for it instead.
+		// This file serves `/post?utm_source=x` from the entry stored for
+		// `/post`, but an edge keys on the full URL, so it would store each
+		// variant as its own copy, and a purge of `/post` never reaches them.
+		// Holding the variants keeps the edge to URLs a purge can name. This
+		// file keeps serving them; only the edge copy is refused.
+		//
+		// It replaces the sidecar too, since that carries a lifetime. The
+		// page's `Cache-Tag` is kept, as Cache::edge_headers_for() keeps it on
+		// every hold. An empty literal means the hold would say the same as
+		// the plain answer, and nothing changes. An un-substituted token
+		// stays a string and is ignored.
+		$xspeed_query_hold = '@@XSPEED_EDGE_QUERY_HOLD@@';
+		if ( $xspeed_qs_unpurged && is_array( $xspeed_query_hold ) && array() !== $xspeed_query_hold ) {
+			$xspeed_query_tag = ( is_array( $xspeed_edge_headers ) && isset( $xspeed_edge_headers['Cache-Tag'] ) )
+				? $xspeed_edge_headers['Cache-Tag']
+				: null;
+			$xspeed_edge_headers = $xspeed_query_hold;
+			if ( null !== $xspeed_query_tag ) {
+				$xspeed_edge_headers['Cache-Tag'] = $xspeed_query_tag;
+			}
+		}
+
 		// The one setting this file reads for itself. Everything else about
 		// the edge answer is baked, because re-deriving it here would mean
 		// loading options before WordPress exists. `off` is the exception
@@ -355,11 +435,53 @@ if ( file_exists( $xspeed_cache_file ) ) {
 			$xspeed_edge_headers = array();
 		}
 
+		// A page with a lifetime of its own (a nonce it carries, a per-post
+		// expiry: the sidecar `ttl`) may not be kept at the edge past it. A
+		// lifetime in the pairs is the site's, so it is cut to what this copy
+		// has left. Without the cut a page capped to its nonce went to the edge
+		// with the site's lifetime and served a dead nonce until the next purge.
+		//
+		// The two patterns copy Cache::EDGE_LIFETIME_HEADER and
+		// Cache::EDGE_LIFETIME_DIRECTIVE, and the cut copies
+		// Cache::cap_edge_lifetime(): the class is not loaded yet.
+		if ( is_array( $xspeed_edge_headers ) && isset( $xspeed_meta['ttl'] ) && (int) $xspeed_meta['ttl'] > 0 ) {
+			$xspeed_left = max( 0, $xspeed_ttl - $xspeed_age );
+			foreach ( $xspeed_edge_headers as $xspeed_edge_name => $xspeed_edge_value ) {
+				if ( ! preg_match( '/(?:^|-)control$/i', (string) $xspeed_edge_name ) ) {
+					continue;
+				}
+				$xspeed_capped = preg_replace_callback(
+					'/(?<![\w-])(max-age|s-maxage)\s*=\s*"?(\d+)"?/i',
+					static function ( array $m ) use ( $xspeed_left ): string {
+						return $m[1] . '=' . min( (int) $m[2], $xspeed_left );
+					},
+					(string) $xspeed_edge_value
+				);
+				if ( is_string( $xspeed_capped ) ) {
+					$xspeed_edge_headers[ $xspeed_edge_name ] = $xspeed_capped;
+				}
+			}
+		}
+
 		if ( is_array( $xspeed_edge_headers ) ) {
 			foreach ( $xspeed_edge_headers as $xspeed_edge_name => $xspeed_edge_value ) {
 				header( $xspeed_edge_name . ': ' . $xspeed_edge_value );
 			}
 		}
+
+		// When this page's HTML was generated, so a CDN that just asked for a
+		// purge can check whether the origin actually served something newer.
+		// The cache file's mtime is that moment: store_static() writes the
+		// file at the end of the render it came from.
+		//
+		// Emitted AFTER the baked pairs above and therefore replacing any
+		// build stamp among them. A baked value is the time the DROP-IN was
+		// installed, identical on every page for as long as it stays
+		// installed, so it would answer "yes, freshly built" to every purge
+		// check forever. Cache::edge_headers_for() already drops it from the
+		// bake; this ordering means a drop-in installed by an older version
+		// cannot lie either.
+		header( 'X-XSpeed-Built: ' . (int) filemtime( $xspeed_cache_file ) );
 
 		// Record the HIT for the dashboard hit-ratio. The drop-in runs
 		// BEFORE WordPress loads, so it can't call Hit_Counter — instead

@@ -91,6 +91,25 @@ class Rest_Api {
 			)
 		);
 
+		// The server-side mirror of "I pasted the block". Only meaningful on a
+		// host where the probe cannot read the rules back — see
+		// nginx_copied_hash().
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/cache/nginx-copied-hash',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'nginx_copied_hash' ),
+				'permission_callback' => array( $this, 'permissions' ),
+				'args'                => array(
+					'hash' => array(
+						'type'     => 'string',
+						'required' => true,
+					),
+				),
+			)
+		);
+
 		register_rest_route(
 			self::NAMESPACE_V1,
 			'/cache/benchmark',
@@ -181,6 +200,15 @@ class Rest_Api {
 				'methods'             => 'GET',
 				'callback'            => array( $this, 'recommendations' ),
 				'permission_callback' => array( $this, 'permissions' ),
+				'args'                => array(
+					// `contributed` adds the entries other plugins hand in
+					// through `xspeed_recommendations`. Only the Overview
+					// card asks for them; see all_with_contributed().
+					'include' => array(
+						'type' => 'string',
+						'enum' => array( '', 'contributed' ),
+					),
+				),
 			)
 		);
 
@@ -341,8 +369,10 @@ class Rest_Api {
 
 	/** Ranked "next best action" recommendations (issue #48). */
 	public function recommendations( $request ) {
-		unset( $request );
-		return rest_ensure_response( array( 'recommendations' => Recommendations::all() ) );
+		$recs = 'contributed' === (string) $request->get_param( 'include' )
+			? Recommendations::all_with_contributed()
+			: Recommendations::all();
+		return rest_ensure_response( array( 'recommendations' => $recs ) );
 	}
 
 	/** One-click apply of a recommendation's settings fix. */
@@ -411,6 +441,12 @@ class Rest_Api {
 				'snippet'      => Cache::nginx_snippet(),
 				'topology'     => Server::rewrite_topology(),
 				'behind_proxy' => Server::is_behind_proxy(),
+				// Whether the rules the web server is running are the rules
+				// these settings generate — `current`, `stale`, `absent` or
+				// `unknown`, with the hashes both sides compared. Nothing
+				// else can answer that: the nginx block lives in a server
+				// config WordPress cannot read. See Cache::rules_state().
+				'rules'        => Cache::rules_state( $probe ),
 			);
 		}
 
@@ -549,8 +585,43 @@ class Rest_Api {
 				'snippet'      => Cache::nginx_snippet(),
 				'topology'     => Server::rewrite_topology(),
 				'behind_proxy' => Server::is_behind_proxy(),
+				// The whole reason to re-run the probe is usually that the
+				// user just pasted the block, so this is where they most need
+				// to be told whether the installed rules are the current ones.
+				// It was only ever on /status before, which the CLI and MCP
+				// recheck paths never call. See Cache::rules_state().
+				'rules'        => $probe['rules'],
 			)
 		);
+	}
+
+	/**
+	 * Remember that this admin copied the current rules block.
+	 *
+	 * The mirror of the panel's own localStorage note, for the one case that
+	 * note cannot cover: a host where the probe returns `unknown` — blocked
+	 * loopback, or a CDN answering it — and a second admin, or the same admin
+	 * on another machine, is otherwise told to paste a block that is already
+	 * installed. Stored per user because it is a claim a person made.
+	 *
+	 * The hash is the rules marker, and a value that is not one is refused
+	 * rather than stored: the mirror is only useful while it holds something
+	 * rules_marker_expected() could also produce.
+	 */
+	public function nginx_copied_hash( \WP_REST_Request $request ) {
+		$params = (array) $request->get_json_params();
+		$hash   = isset( $params['hash'] ) ? (string) $params['hash'] : (string) $request->get_param( 'hash' );
+
+		$stored = Cache::remember_rules_copied( $hash );
+		if ( null === $stored ) {
+			return new \WP_Error(
+				'xspeed_invalid_rules_hash',
+				__( 'That is not a rules marker this site could have generated.', 'xspeed' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return rest_ensure_response( array( 'copied' => $stored ) );
 	}
 
 	public function toggle_cache( \WP_REST_Request $request ) {

@@ -67,6 +67,7 @@ class ComposerStaticInit658ed90fed7749ed814442769ec5d073
         'XSpeed\\Modules\\Mcp\\Mcp_Activity_Log' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Activity_Log.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Auth' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Auth.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Hub' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Hub.php',
+        'XSpeed\\Modules\\Mcp\\Mcp_Hub_Connect' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Hub_Connect.php',
         'XSpeed\\Modules\\Mcp\\Mcp_OAuth' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_OAuth.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Pairing' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Pairing.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Rate_Limiter' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Rate_Limiter.php',

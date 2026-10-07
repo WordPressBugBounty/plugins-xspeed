@@ -277,7 +277,20 @@ final class Css_Combine_Buffer {
 	 * @param array{media:string,async:bool,tags:string[],urls:string[]} $run Run to merge.
 	 */
 	private static function merge_run( array $run ): ?string {
-		$key  = md5( implode( '|', array_map( static fn( $p ) => $p . ':' . (int) @filemtime( $p ), $run['urls'] ) ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a missing file contributes 0 to the key; handled below.
+		// Nowhere to write means nothing to link: a <link> to a file that was
+		// never written unstyles the page.
+		if ( ! Minifier::min_dir_writable() ) {
+			return null;
+		}
+		// Named by content and by site. See Asset_Combiner::combined_key().
+		$parts = array();
+		foreach ( $run['urls'] as $path ) {
+			$parts[] = array(
+				'path' => $path,
+				'url'  => self::path_to_url( $path ),
+			);
+		}
+		$key  = Asset_Combiner::combined_key( $parts, 'css' );
 		$dir  = Asset_Combiner::cache_dir();
 		$file = $dir . '/combined-' . $key . '.css';
 		$url  = Asset_Combiner::cache_url() . '/combined-' . $key . '.css';
@@ -325,8 +338,11 @@ final class Css_Combine_Buffer {
 			if ( ! is_dir( $dir ) ) {
 				wp_mkdir_p( $dir );
 			}
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context, unavailable on the frontend.
-			file_put_contents( $file, $css, LOCK_EX );
+			// Atomic: a concurrent render sees the whole file or none of it.
+			// A failed write links nothing rather than a file that is not there.
+			if ( ! Asset_Manifest::write_atomic( $file, $css ) && ! file_exists( $file ) ) {
+				return null;
+			}
 		}
 
 		// Carry Async CSS across the merge (issue #330). Every sheet in the

@@ -457,6 +457,7 @@
         if (settled) return;
         settled = 1;
         clearTimeout(timer);
+        if (!cap && !phase) armDeadline();
         if (inPhase === phase) done();
       }
       script.addEventListener('load', one);
@@ -484,11 +485,23 @@
       });
     if (observer) observer.observe(document.documentElement, { childList: true, subtree: true });
 
-    // A server that never answers does not hold the events past 15s.
-    deadline = setTimeout(function () {
-      pending = 1;
-      done();
-    }, 15000);
+    // A server that never answers does not hold DOMContentLoaded past 15s
+    // with no progress. Each replayed external that loads or fails in the
+    // first phase restarts the 15s, so the whole wait is at most 15s per
+    // external. A fixed 15s from the first interaction sent the events while
+    // a slow connection was still bringing in jQuery and the builder scripts,
+    // and those then missed them for good. An injected script has its own 1s
+    // cap and restarts nothing: the observer also sees the page's own
+    // scripts, and a page that keeps adding them (an ad refresh, a carousel
+    // cloning a slide with a script in it) would hold the events forever.
+    function armDeadline() {
+      clearTimeout(deadline);
+      deadline = setTimeout(function () {
+        pending = 1;
+        done();
+      }, 15000);
+    }
+    armDeadline();
 
     // An inline module evaluates asynchronously but fires no load (the spec
     // fires it only for scripts from a URL), so its replayed text starts and

@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.7
+Stable tag: 1.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -314,7 +314,69 @@ Used for admin interface icons.
 
 == Changelog ==
 
-= [1.3.7] – 2026-10-01 =
+= [1.4.0] – 2026-10-06 =
+
+**Saving a post now clears only the pages it changes instead of the whole cache, sites on xCloud's Cloudflare Enterprise get every purge passed to the edge, and pages whose address uses non-Latin characters are cached and purged correctly.**
+
+Caching:
+- New: Saving a post, a comment or a product clears only the pages that change: the post itself, its archives, and the listing pages that show it. The whole cache is cleared only when the change reaches a list the theme draws on every page, such as a menu or a Recent Posts widget, and the purge log says why.
+- New: `wp xspeed cache listings` shows the pages that run a post list of their own.
+- New: Add-ons can send CDN headers on cached pages.
+- Fixed: Pages whose address uses non-Latin characters, such as Chinese or Arabic slugs, each get their own cache entry. They could share one, and a slug with no Latin letters could overwrite the home page's cached copy.
+- Fixed: A purge clears such a page however the browser spells its address, and Excluded URLs pasted from the address bar now match.
+- Fixed: Opening wp-admin no longer empties the page cache and the edge.
+- Fixed: Updating a WooCommerce product purges once, and a stock change purges its pages in one batch.
+- Fixed: Making a post sticky, including outside the editor, clears the blog page.
+- Fixed: Publishing in the Customizer purges the cache.
+- Fixed: Content and site purges no longer delete minified CSS and JS files.
+
+Cloudflare:
+- New: On sites where xCloud provides Cloudflare Enterprise, every purge goes to xCloud's purge plugin, from WP-CLI and cron too, and Purge All sends one whole-domain purge.
+- New: xCloud's purge plugin counts as proof that the site is behind Cloudflare.
+- Fixed: The edge no longer keeps a page longer than the page's own lifetime, so forms on cached pages stop failing once their nonce expires.
+- Fixed: Pages served for an address with tracking parameters, such as `?utm_source=`, are no longer stored at the edge, where a purge could not reach them.
+- Fixed: The edge may store a new page only once xSpeed has written it, and not while the page is still being optimized.
+- Fixed: Edge headers are kept on cached pages Apache serves through an internal redirect.
+
+Health:
+- New: Health warns when Cloudflare stores pages that were marked do-not-store.
+- New: The nginx rules panel says whether the server runs the current rules block, and remembers that you pasted it.
+
+Optimization:
+- Fixed: Minified and combined files are named by their content and by site, so a changed source file is never served from an old copy.
+- Fixed: Delay JS restarts its 15-second replay deadline each time a delayed script arrives, so slow pages finish replaying.
+- Fixed: Smart Delay never parks the inline snippets of a script that is already running, and consent-banner protection ignores the site's own domain.
+- Fixed: Text set in the Font Library or theme.json shows at once while its fonts load.
+- Improved: Turbo Render holds a deferred section's images and videos until the section is near.
+
+Media:
+- New: Autoplay videos can start after the page has loaded. Off by default.
+- Fixed: Autoplay videos stay out of the click-to-play facade, and the video restorer respects Excluded Images.
+- Fixed: Images in footer popups load a smaller file on phones.
+
+Resource Hints:
+- Fixed: Device-scoped LCP preloads fetch only the hero image for the visitor's device.
+
+Preloader:
+- New: With Separate Mobile Cache on, the preloader warms the phone copy of each page too.
+
+Object Cache:
+- Fixed: Switching from another object-cache plugin works without a conflict, and switching back restores that plugin on a clean namespace.
+
+AI / MCP:
+- New: A site can be connected from xSpeed Hub through a consent page in wp-admin.
+- New: get_site_info reports add-on licences.
+- Fixed: The site token is never sent to a redirect target, and a connection code works only once.
+- Fixed: Saving settings over MCP could remove the site's Hub connection.
+- Fixed: Destructive commands need confirmation however they are called.
+
+Dashboard & Admin UX:
+- New: The Cloudflare Enterprise add-on has its own entry under Network, a sidebar card and a purchase screen.
+- Fixed: A Pro module shows the Pro lock while Pro is unlicensed.
+- Fixed: Dashboard requests work on sites whose REST address carries a query string.
+- Fixed: The dashboard no longer shows a second scrollbar.
+
+= [1.3.7] – 2026-09-30 =
 
 **Pages with a background-video hero now paint the hero text first, Load CSS Asynchronously no longer makes pages flash unstyled, sites in a multisite network stop sharing cached REST responses, and a site whose token changed can reconnect to xSpeed Hub.**
 

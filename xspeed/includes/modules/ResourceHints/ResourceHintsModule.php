@@ -241,7 +241,32 @@ final class ResourceHintsModule extends Module {
 				$opts['eager_excluded_images'] = array_values( array_filter( array_map( 'strval', $lazy['excluded_images'] ) ) );
 			}
 		}
+		$opts['page_url'] = self::current_page_url();
 		return $opts;
+	}
+
+	/**
+	 * The URL of the page being served, for the LCP preload candidate seam.
+	 * Empty outside a request (CLI, tests).
+	 *
+	 * The site's scheme and host with the request path as the browser sent
+	 * it. Not home_url( REQUEST_URI ): on a site in a subfolder both carry the
+	 * folder, which then appeared twice. And not sanitize_text_field(), which
+	 * drops percent-encoded octets, so `/caf%C3%A9/` lost its é.
+	 */
+	private static function current_page_url(): string {
+		if ( ! isset( $_SERVER['REQUEST_URI'] ) || ! function_exists( 'home_url' ) ) {
+			return '';
+		}
+		$uri = esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) );
+		if ( '' === $uri || '/' !== $uri[0] ) {
+			return '';
+		}
+		$home   = wp_parse_url( home_url( '/' ) );
+		$scheme = isset( $home['scheme'] ) ? $home['scheme'] : 'https';
+		$host   = isset( $home['host'] ) ? $home['host'] : '';
+		$port   = isset( $home['port'] ) ? ':' . $home['port'] : '';
+		return '' === $host ? '' : $scheme . '://' . $host . $port . $uri;
 	}
 
 	public function cli_commands(): array {

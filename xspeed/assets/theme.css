@@ -79,6 +79,12 @@
   --info: #2AA7A0;
   --info-tint: #E6F5F3;
 
+  /* Add-on: something sold separately from Pro (DESIGN.md §24.50). Orange so
+     it never reads as Pro's teal or the warning amber. --addon is text: 5.6:1
+     on --addon-tint, 6.4:1 on --paper. */
+  --addon: #9A4A0B;
+  --addon-tint: #FEF1E6;
+
   /* Deep-sea rail (deliberately not near-black, to separate from WP's menu) */
   --rail-top: #14211F;
   --rail-bottom: #0D1615;
@@ -128,6 +134,8 @@
   --success-tint: #12251F;
   --warning-tint: #251C0F;
   --danger-tint: #2A1516;
+  --addon: #FDBA74;
+  --addon-tint: #2A1A0E;
 }
 
 /* ---- Signature motion (used by the shell + later screens) -------------- */

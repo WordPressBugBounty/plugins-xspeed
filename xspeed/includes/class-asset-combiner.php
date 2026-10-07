@@ -9,8 +9,9 @@
  *      local + external. External (full http(s):// to other origins,
  *      data: URIs, protocol-relative pointing elsewhere) stay enqueued
  *      as-is; local handles get pulled out of the queue.
- *   2. Build cache key = md5(JSON({handle => [src, mtime]})). When the
- *      combined file already exists for that key, skip generation.
+ *   2. Build the cache key from the version, home_url() and each part's
+ *      content key (combined_key()). When the combined file already
+ *      exists for that key, skip generation.
  *   3. Otherwise: read each source body, resolve recursive @import
  *      statements (depth-limited), rewrite url(...) paths to absolute,
  *      concat with a small `/* xspeed: HANDLE *​/` header per chunk for
@@ -119,7 +120,10 @@ final class Asset_Combiner {
 	 * @param array<string,array<mixed>> $bucket handle => info map.
 	 */
 	private static function combine_media_group( \WP_Styles $wp_styles, string $media, array $bucket ): void {
-		$key = self::cache_key( $bucket );
+		if ( ! Minifier::min_dir_writable() ) {
+			return;
+		}
+		$key = self::cache_key( $bucket, 'css' );
 		$dir = self::cache_dir();
 		$out_file = $dir . '/combined-' . $key . '.css';
 		$out_url  = self::cache_url() . '/combined-' . $key . '.css';
@@ -159,10 +163,10 @@ final class Asset_Combiner {
 			// xSpeed Scan's own A2 check while the UI reported minify as on.
 			$contents = self::minify_css_body( $contents );
 
-			// Atomic write: file_put_contents with LOCK_EX so concurrent
-			// renders don't race.
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context, unavailable on frontend.
-			file_put_contents( $out_file, $contents, LOCK_EX );
+			// Atomic: a concurrent render sees the whole file or none of it.
+			if ( ! Asset_Manifest::write_atomic( $out_file, $contents ) && ! file_exists( $out_file ) ) {
+				return;
+			}
 		} else {
 			self::mark_in_use( $out_file );
 		}
@@ -294,7 +298,10 @@ final class Asset_Combiner {
 	 * @param array<string,array<mixed>> $bucket handle => info map for this group.
 	 */
 	private static function combine_script_group( \WP_Scripts $wp_scripts, int $group, array $bucket ): void {
-		$key = self::cache_key( $bucket );
+		if ( ! Minifier::min_dir_writable() ) {
+			return;
+		}
+		$key = self::cache_key( $bucket, 'js' );
 		$dir = self::cache_dir();
 		// Group in the filename so a head and a footer bundle can never
 		// collide on one cache key.
@@ -311,8 +318,9 @@ final class Asset_Combiner {
 				}
 				$contents .= "/* xspeed: $handle */\n" . $body . "\n;\n";
 			}
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem unavailable on frontend.
-			file_put_contents( $out_file, $contents, LOCK_EX );
+			if ( ! Asset_Manifest::write_atomic( $out_file, $contents ) && ! file_exists( $out_file ) ) {
+				return;
+			}
 		} else {
 			self::mark_in_use( $out_file );
 		}
@@ -793,12 +801,91 @@ final class Asset_Combiner {
 		return $out;
 	}
 
-	private static function cache_key( array $bucket ): string {
-		$signature = array();
+	/**
+	 * Cache key for a queue-built bundle. See combined_key().
+	 *
+	 * @param array<string,array<mixed>> $bucket handle => info map.
+	 * @param string                     $kind   'css' or 'js'.
+	 */
+	private static function cache_key( array $bucket, string $kind ): string {
+		$parts = array();
 		foreach ( $bucket as $handle => $info ) {
-			$signature[ $handle ] = array( $info['src'] ?? '', $info['mtime'] ?? 0 );
+			$parts[] = array(
+				'id'   => (string) $handle,
+				'path' => (string) ( $info['path'] ?? '' ),
+				'url'  => (string) ( $info['url'] ?? '' ),
+			);
 		}
-		return md5( wp_json_encode( $signature ) );
+		return self::combined_key( $parts, $kind );
+	}
+
+	/**
+	 * Name for a combined file, derived from what goes into it.
+	 *
+	 * md5 of the plugin version, this site's home_url(), and per part its
+	 * path and content key. The old key was each part's path and mtime,
+	 * which had two faults:
+	 *
+	 *   - It followed mtime, not bytes, so an in-place edit that kept the
+	 *     mtime (or an edit to an @import child) served stale CSS, and a
+	 *     touch with no change orphaned every cached page.
+	 *   - It left out the site. The combined body rewrites every url() to an
+	 *     ABSOLUTE URL built from home_url(), and min/combined/ is shared by
+	 *     every blog on a network, so the first subsite to render a set of
+	 *     sheets wrote its own origin into the file every other subsite then
+	 *     served. home_url() is taken whole, path included, because a
+	 *     subdirectory subsite's URLs carry its path.
+	 *
+	 * A part that is already one of our minified files is named by content,
+	 * so its basename is its content key and costs no IO. Any other part gets
+	 * its key from Asset_Manifest, which also follows the @import children
+	 * the combiner inlines.
+	 *
+	 * @param array<int,array{id?:string,path:string,url?:string}> $parts In output order.
+	 * @param string                                               $kind  'css' or 'js'.
+	 */
+	public static function combined_key( array $parts, string $kind ): string {
+		$signature = array(
+			defined( 'XSPEED_VERSION' ) ? (string) XSPEED_VERSION : '',
+			Asset_Manifest::SCHEMA,
+			rtrim( (string) home_url(), '/' ),
+			$kind,
+		);
+		foreach ( $parts as $part ) {
+			$path        = (string) ( $part['path'] ?? '' );
+			$signature[] = array(
+				(string) ( $part['id'] ?? '' ),
+				$path,
+				self::part_content_key( $path, (string) ( $part['url'] ?? '' ), $kind ),
+			);
+		}
+		return md5( (string) wp_json_encode( $signature ) );
+	}
+
+	/**
+	 * Content key for one part of a combined file.
+	 *
+	 * @param string $path Absolute path of the part.
+	 * @param string $url  URL the combiner resolves the part's imports against.
+	 * @param string $kind 'css' or 'js'.
+	 */
+	private static function part_content_key( string $path, string $url, string $kind ): string {
+		if ( '' === $path ) {
+			return '';
+		}
+		// Our own minified output, min/<content key>.<ext>: the name is the key.
+		$min_root = rtrim( Minifier::min_dir(), '/' ) . '/';
+		if ( 0 === strpos( $path, $min_root ) && false === strpos( substr( $path, strlen( $min_root ) ), '/' ) ) {
+			return basename( $path );
+		}
+		$key = Asset_Manifest::key_for(
+			'part-' . $kind,
+			$path,
+			static function () use ( $kind, $url ): array {
+				return 'css' === $kind && '' !== $url ? Asset_Manifest::import_dependencies( $url ) : array();
+			}
+		);
+		return null === $key ? 'unreadable' : $key;
 	}
 
 	private static function read_local_file( string $path ): string {

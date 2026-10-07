@@ -250,6 +250,12 @@ final class CloudflareModule extends Module {
 		if ( empty( $opts['enabled'] ) ) {
 			return;
 		}
+		// Something else on the site is already the Cloudflare layer in front
+		// of it. The switch stays as the owner left it, and this zone is not
+		// purged while the block lasts. See Module::blocked_by().
+		if ( null !== $this->blocked_by() ) {
+			return;
+		}
 		if ( ! empty( $opts['auto_purge_on_update'] ) ) {
 			// xSpeed fires this action whenever it purges its own
 			// cache (see Cache::purge_all). Listening here keeps
@@ -286,9 +292,10 @@ final class CloudflareModule extends Module {
 	/**
 	 * Mirror a single-URL purge at the edge.
 	 *
-	 * NOT about post edits — `on_save_post()` calls `purge_all()`, so those
-	 * have always reached Cloudflare through the full-purge listener above.
-	 * What reaches `purge_url()` is the narrower set: the two admin purge
+	 * Post edits arrive here too when they clear only their affected pages
+	 * (`Cache::purge_urls()` publishes one event with every URL); an edit
+	 * that clears the whole site comes through the full-purge listener
+	 * above. What else reaches `purge_url()` is the narrower set: the two admin purge
 	 * buttons, an approved comment, a user change, a WooCommerce product or
 	 * stock change, `--url` on the CLI and REST, and MCP. Every one of those
 	 * cleared xSpeed's copy and left Cloudflare's, so the page stayed stale
@@ -322,9 +329,9 @@ final class CloudflareModule extends Module {
 			return;
 		}
 
-		// Collected and sent once, not one API call per URL. `Purge_Ui`'s
-		// post purge and the WooCommerce product path both fire a handful of
-		// these in a loop, and a round trip each would be a wait each.
+		// Collected and sent once, not one API call per URL. A request can
+		// raise several of these (a bulk edit, a stock change on each item
+		// of an order), and a round trip each would be a wait each.
 		if ( array() === $this->pending_edge_urls ) {
 			add_action( 'shutdown', array( $this, 'flush_edge_url_purges' ), 20 );
 		}
@@ -332,6 +339,7 @@ final class CloudflareModule extends Module {
 		foreach ( $urls as $url ) {
 			$this->pending_edge_urls[ $blog ][ $url ] = true;
 		}
+		\XSpeed\Cache::note_purge_forwarded( 'Cloudflare' );
 	}
 
 	/**
@@ -606,6 +614,10 @@ final class CloudflareModule extends Module {
 		if ( empty( $opts['enabled'] ) ) {
 			return __( 'the Cloudflare integration is switched off', 'xspeed' );
 		}
+		$blocked = $this->blocked_by();
+		if ( null !== $blocked ) {
+			return $blocked;
+		}
 		if ( ! $this->has_credentials( $opts ) ) {
 			return __( 'no zone ID or API credentials are configured', 'xspeed' );
 		}
@@ -675,15 +687,17 @@ final class CloudflareModule extends Module {
 	 * immediately so an invalid or newly-changed token surfaces on the panel
 	 * instead of failing silently the next time xSpeed purges. Response shape
 	 * is unchanged (flat settings) so the autosave client is unaffected. (#119)
+	 *
+	 * The parent writes the settings, so its licence, blocked-by and
+	 * wp-config refusals apply here too; a refused write is not verified.
 	 */
 	public function rest_update_settings( \WP_REST_Request $request ) {
-		$params = $request->get_json_params();
-		if ( ! is_array( $params ) ) {
-			$params = $request->get_params();
+		$response = parent::rest_update_settings( $request );
+		if ( is_wp_error( $response ) ) {
+			return $response;
 		}
-		$settings = $this->update_settings( is_array( $params ) ? $params : array() );
 		$this->verify_and_record();
-		return rest_ensure_response( $settings );
+		return $response;
 	}
 
 	public function rest_verify( \WP_REST_Request $request ) {
