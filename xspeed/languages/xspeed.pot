@@ -2,14 +2,14 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.0\n"
+"Project-Id-Version: xSpeed Cache 1.4.1\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-10-07T09:31:28+00:00\n"
+"POT-Creation-Date: 2026-10-08T15:38:17+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
@@ -36,33 +36,33 @@ msgstr ""
 msgid "https://wpdeveloper.com"
 msgstr ""
 
-#: includes/class-admin.php:153
-#: includes/class-admin.php:243
+#: includes/class-admin.php:160
+#: includes/class-admin.php:250
 #: includes/class-cache.php:11272
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
 
-#: includes/class-admin.php:241
+#: includes/class-admin.php:248
 #: assets/admin.js
 msgid "Overview"
 msgstr ""
 
-#: includes/class-admin.php:242
+#: includes/class-admin.php:249
 #: assets/admin.js
 msgid "AI & agents"
 msgstr ""
 
-#: includes/class-admin.php:301
+#: includes/class-admin.php:308
 #: assets/admin.js
 msgid "Loading"
 msgstr ""
 
-#: includes/class-admin.php:303
+#: includes/class-admin.php:310
 msgid "xSpeed"
 msgstr ""
 
-#: includes/class-admin.php:304
+#: includes/class-admin.php:311
 #: assets/admin.js
 msgid "Loading…"
 msgstr ""
@@ -3256,7 +3256,7 @@ msgstr ""
 msgid "“clear the cache on my store,” “warm up the homepage,” “how fast is my blog?”"
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:44
+#. Source: src/components/CfeOfferCard.tsx:53
 #: assets/admin.js
 msgid "/domain/mo"
 msgstr ""
@@ -3312,23 +3312,23 @@ msgstr ""
 msgid "Action"
 msgstr ""
 
-#. Source: src/components/Sidebar.tsx:522
-#. Source: src/components/Sidebar.tsx:543
-#. Source: src/upsell/LockedPanel.tsx:62
+#. Source: src/components/Sidebar.tsx:523
+#. Source: src/components/Sidebar.tsx:544
+#. Source: src/upsell/LockedPanel.tsx:76
 #. Source: src/upsell/ProOverview.tsx:73
 #: assets/admin.js
 msgid "Activate License"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:165
+#. Source: src/upsell/LockedPanel.tsx:193
 #. Source: src/upsell/LockedSection.tsx:88
 #. Source: src/upsell/ProDemo.tsx:92
 #: assets/admin.js
 msgid "Activate your license"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:101
-#. Source: src/upsell/LockedPanel.tsx:212
+#. Source: src/upsell/LockedPanel.tsx:129
+#. Source: src/upsell/LockedPanel.tsx:240
 #: assets/admin.js
 msgid "Activating your license unlocks this module + every other locked row in the sidebar. Your current settings stay unchanged."
 msgstr ""
@@ -3365,7 +3365,7 @@ msgstr ""
 msgid "AI connection active"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:80
+#. Source: src/upsell/LockedPanel.tsx:95
 #: assets/admin.js
 msgid "Already bought both? Enter your license keys"
 msgstr ""
@@ -3520,7 +3520,7 @@ msgstr[1] ""
 msgid "Cache cleared."
 msgstr ""
 
-#. Source: src/App.tsx:347
+#. Source: src/App.tsx:355
 #: assets/admin.js
 msgid "Cache could not be enabled."
 msgstr ""
@@ -3530,17 +3530,17 @@ msgstr ""
 msgid "Cache coverage"
 msgstr ""
 
-#. Source: src/App.tsx:359
+#. Source: src/App.tsx:367
 #: assets/admin.js
 msgid "Cache disabled"
 msgstr ""
 
-#. Source: src/App.tsx:359
+#. Source: src/App.tsx:367
 #: assets/admin.js
 msgid "Cache enabled"
 msgstr ""
 
-#. Source: src/App.tsx:353
+#. Source: src/App.tsx:361
 #: assets/admin.js
 msgid "Cache enabled, but nothing will be cached until WP_CACHE is added to wp-config.php — copy the line from Health."
 msgstr ""
@@ -3690,16 +3690,16 @@ msgstr ""
 msgid "Close navigation"
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:111
-#. Source: src/components/CfeOfferCard.tsx:137
-#. Source: src/components/CfeOfferCard.tsx:199
-#. Source: src/components/CfeOfferCard.tsx:210
-#. Source: src/components/CfeOfferCard.tsx:87
+#. Source: src/components/CfeOfferCard.tsx:123
+#. Source: src/components/CfeOfferCard.tsx:149
+#. Source: src/components/CfeOfferCard.tsx:211
+#. Source: src/components/CfeOfferCard.tsx:222
+#. Source: src/components/CfeOfferCard.tsx:99
 #: assets/admin.js
 msgid "Cloudflare Enterprise"
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:184
+#. Source: src/components/CfeOfferCard.tsx:196
 #: assets/admin.js
 msgid "Cloudflare Enterprise add-on"
 msgstr ""
@@ -3720,7 +3720,7 @@ msgstr ""
 msgid "Compare"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:186
+#. Source: src/upsell/LockedPanel.tsx:214
 #: assets/admin.js
 msgid "Compare plans"
 msgstr ""
@@ -3841,6 +3841,16 @@ msgstr ""
 msgid "Control xSpeed with AI"
 msgstr ""
 
+#. Source: src/components/RecordCard.tsx:130
+#: assets/admin.js
+msgid "Copied"
+msgstr ""
+
+#. Source: src/components/RecordCard.tsx:95
+#: assets/admin.js
+msgid "Copy"
+msgstr ""
+
 #. Source: src/components/score/ScanCard.tsx:81
 #: assets/admin.js
 msgid "Core Web Vitals"
@@ -3913,7 +3923,7 @@ msgstr ""
 msgid "Dismiss banner"
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:92
+#. Source: src/components/CfeOfferCard.tsx:104
 #: assets/admin.js
 msgid "Dismiss the Cloudflare Enterprise offer"
 msgstr ""
@@ -3921,6 +3931,11 @@ msgstr ""
 #. Source: src/components/overview/OverviewFooter.tsx:24
 #: assets/admin.js
 msgid "Documentation"
+msgstr ""
+
+#. Source: src/components/Stepper.tsx:53
+#: assets/admin.js
+msgid "done"
 msgstr ""
 
 #. Source: src/upsell/PurchasePath.tsx:96
@@ -3964,17 +3979,17 @@ msgstr ""
 msgid "failed"
 msgstr ""
 
-#. Source: src/App.tsx:363
+#. Source: src/App.tsx:371
 #: assets/admin.js
 msgid "Failed to disable cache"
 msgstr ""
 
-#. Source: src/App.tsx:363
+#. Source: src/App.tsx:371
 #: assets/admin.js
 msgid "Failed to enable cache"
 msgstr ""
 
-#. Source: src/App.tsx:302
+#. Source: src/App.tsx:310
 #: assets/admin.js
 msgid "Failed to load"
 msgstr ""
@@ -4019,7 +4034,7 @@ msgstr ""
 msgid "Full report"
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:59
+#. Source: src/components/CfeOfferCard.tsx:71
 #: assets/admin.js
 msgid "Get it"
 msgstr ""
@@ -4029,7 +4044,7 @@ msgstr ""
 msgid "Get more over time"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:69
+#. Source: src/upsell/LockedPanel.tsx:83
 #: assets/admin.js
 msgid "Get Pro"
 msgstr ""
@@ -4219,7 +4234,7 @@ msgstr ""
 msgid "License"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:61
+#. Source: src/upsell/LockedPanel.tsx:75
 #: assets/admin.js
 msgid "License not active"
 msgstr ""
@@ -4244,8 +4259,8 @@ msgstr ""
 msgid "LiteSpeed Static Fast Path is on: cache hits are served by the web server with no PHP, carry no X-XSpeed-Cache header, and are not counted here — so a low ratio reflects the trade you chose, not a broken cache."
 msgstr ""
 
-#. Source: src/App.tsx:485
-#. Source: src/components/GroupLanding.tsx:79
+#. Source: src/App.tsx:493
+#. Source: src/components/GroupLanding.tsx:91
 #. Source: src/components/LogsView.tsx:35
 #: assets/admin.js
 msgid "Logs"
@@ -4287,8 +4302,8 @@ msgstr ""
 msgid "Manage xSpeed through conversation"
 msgstr ""
 
-#. Source: src/components/Sidebar.tsx:493
-#. Source: src/components/Sidebar.tsx:500
+#. Source: src/components/Sidebar.tsx:494
+#. Source: src/components/Sidebar.tsx:501
 #: assets/admin.js
 msgid "Manage your license"
 msgstr ""
@@ -4413,7 +4428,7 @@ msgstr ""
 msgid "No completed scan"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:71
+#. Source: src/upsell/LockedPanel.tsx:85
 #: assets/admin.js
 msgid "No license key"
 msgstr ""
@@ -4474,7 +4489,7 @@ msgstr ""
 msgid "Not in use on this site"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:68
+#. Source: src/upsell/LockedPanel.tsx:82
 #: assets/admin.js
 msgid "Not installed"
 msgstr ""
@@ -4509,7 +4524,7 @@ msgstr ""
 msgid "Now unlocked"
 msgstr ""
 
-#. Source: src/components/GroupLanding.tsx:106
+#. Source: src/components/GroupLanding.tsx:118
 #. Source: src/components/Sidebar.tsx:407
 #. Source: src/components/Sidebar.tsx:408
 #. Source: src/components/Sidebar.tsx:443
@@ -4536,7 +4551,7 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#. Source: src/components/GroupLanding.tsx:106
+#. Source: src/components/GroupLanding.tsx:118
 #: assets/admin.js
 msgid "on"
 msgstr ""
@@ -4718,27 +4733,27 @@ msgstr ""
 msgid "Preload"
 msgstr ""
 
-#. Source: src/App.tsx:439
+#. Source: src/App.tsx:447
 #: assets/admin.js
 msgid "Preload could not start"
 msgstr ""
 
-#. Source: src/App.tsx:438
+#. Source: src/App.tsx:446
 #: assets/admin.js
 msgid "Preload could not start: %s"
 msgstr ""
 
-#. Source: src/App.tsx:426
+#. Source: src/App.tsx:434
 #: assets/admin.js
 msgid "Preload found no pages to warm"
 msgstr ""
 
-#. Source: src/App.tsx:425
+#. Source: src/App.tsx:433
 #: assets/admin.js
 msgid "Preload found no pages to warm: %s"
 msgstr ""
 
-#. Source: src/App.tsx:415
+#. Source: src/App.tsx:423
 #: assets/admin.js
 msgid "Preloading %d page"
 msgid_plural "Preloading %d pages"
@@ -4768,13 +4783,13 @@ msgstr ""
 msgid "Pro"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:143
+#. Source: src/upsell/LockedPanel.tsx:171
 #. Source: src/upsell/ProOverview.tsx:40
 #: assets/admin.js
 msgid "Pro — license needed"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:143
+#. Source: src/upsell/LockedPanel.tsx:171
 #: assets/admin.js
 msgid "Pro feature"
 msgstr ""
@@ -4789,15 +4804,15 @@ msgstr ""
 msgid "Pro layers deeper optimization, real-user insight, and automation on top of the cache you already run. Nothing you have set up changes."
 msgstr ""
 
-#. Source: src/components/Sidebar.tsx:493
-#. Source: src/components/Sidebar.tsx:509
+#. Source: src/components/Sidebar.tsx:494
+#. Source: src/components/Sidebar.tsx:510
 #. Source: src/upsell/ProOverview.tsx:38
 #: assets/admin.js
 msgid "Pro Licensed"
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:102
-#. Source: src/upsell/LockedPanel.tsx:213
+#. Source: src/upsell/LockedPanel.tsx:130
+#. Source: src/upsell/LockedPanel.tsx:241
 #: assets/admin.js
 msgid "Pro unlocks this module + every other locked row in the sidebar. Your current Free settings stay unchanged."
 msgstr ""
@@ -4805,6 +4820,11 @@ msgstr ""
 #. Source: src/components/migration/MigrationPanel.tsx:802
 #: assets/admin.js
 msgid "Profile JSON to import"
+msgstr ""
+
+#. Source: src/components/Stepper.tsx:19
+#: assets/admin.js
+msgid "Progress"
 msgstr ""
 
 #. Source: src/components/score/ScorePanel.tsx:727
@@ -4823,13 +4843,13 @@ msgstr ""
 msgid "Purge all"
 msgstr ""
 
-#. Source: src/App.tsx:386
+#. Source: src/App.tsx:394
 #. Source: src/components/TopBar.tsx:203
 #: assets/admin.js
 msgid "Purge failed"
 msgstr ""
 
-#. Source: src/App.tsx:386
+#. Source: src/App.tsx:394
 #: assets/admin.js
 msgid "Purge failed: %s"
 msgstr ""
@@ -4860,6 +4880,11 @@ msgstr ""
 msgid "Re-run"
 msgstr ""
 
+#. Source: src/upsell/LockedPanel.tsx:106
+#: assets/admin.js
+msgid "Read the setup guide"
+msgstr ""
+
 #. Source: src/components/mcp/McpActivity.tsx:194
 #: assets/admin.js
 msgid "read-only call"
@@ -4886,7 +4911,7 @@ msgstr ""
 msgid "Recent cache and settings activity on this site."
 msgstr ""
 
-#. Source: src/components/GroupLanding.tsx:79
+#. Source: src/components/GroupLanding.tsx:91
 #: assets/admin.js
 msgid "Recent cache and settings activity."
 msgstr ""
@@ -5105,8 +5130,13 @@ msgstr ""
 msgid "See how this site performs for real visitors."
 msgstr ""
 
-#. Source: src/components/CfeOfferCard.tsx:139
-#. Source: src/components/CfeOfferCard.tsx:212
+#. Source: src/components/RecordCard.tsx:134
+#: assets/admin.js
+msgid "Select and copy:"
+msgstr ""
+
+#. Source: src/components/CfeOfferCard.tsx:151
+#. Source: src/components/CfeOfferCard.tsx:224
 #: assets/admin.js
 msgid "Serve your whole site from Cloudflare’s network."
 msgstr ""
@@ -5150,6 +5180,11 @@ msgstr ""
 #. Source: src/components/overview/FeatureMap.tsx:114
 #: assets/admin.js
 msgid "Show less"
+msgstr ""
+
+#. Source: src/components/RecordCard.tsx:157
+#: assets/admin.js
+msgid "Show records"
 msgstr ""
 
 #. Source: src/components/cache/CacheHero.tsx:214
@@ -5364,9 +5399,19 @@ msgstr ""
 msgid "Under a minute"
 msgstr ""
 
-#. Source: src/components/Sidebar.tsx:522
-#. Source: src/components/Sidebar.tsx:543
-#. Source: src/upsell/LockedPanel.tsx:177
+#. Source: src/upsell/LockedPanel.tsx:67
+#: assets/admin.js
+msgid "Update needed"
+msgstr ""
+
+#. Source: src/upsell/LockedPanel.tsx:68
+#: assets/admin.js
+msgid "Update Pro"
+msgstr ""
+
+#. Source: src/components/Sidebar.tsx:523
+#. Source: src/components/Sidebar.tsx:544
+#. Source: src/upsell/LockedPanel.tsx:205
 #. Source: src/upsell/LockedSection.tsx:98
 #. Source: src/upsell/ProAudit.tsx:113
 #. Source: src/upsell/ProDemo.tsx:102
@@ -5415,7 +5460,7 @@ msgstr ""
 msgid "We couldn't read this site's AI connection status. Open MCP to check."
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:200
+#. Source: src/upsell/LockedPanel.tsx:228
 #: assets/admin.js
 msgid "What this adds"
 msgstr ""
@@ -5497,7 +5542,7 @@ msgstr ""
 msgid "xSpeed Pro is installed — activate your license to unlock every feature below. Your current settings stay exactly as they are."
 msgstr ""
 
-#. Source: src/upsell/LockedPanel.tsx:157
+#. Source: src/upsell/LockedPanel.tsx:185
 #: assets/admin.js
 msgid "xSpeed Pro is installed — activate your license to unlock this module and every other Pro feature."
 msgstr ""

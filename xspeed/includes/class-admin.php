@@ -15,6 +15,13 @@ class Admin {
 
 	const THEME_COOKIE = 'xspeed_theme';
 
+	/**
+	 * The dashboard's sidebar offer reads a module's `purchase_needed` before
+	 * its `status_label`. An add-on checks for this constant before it labels
+	 * a setup step, which an older dashboard would read as "still for sale".
+	 */
+	const OFFER_READS_PURCHASE_NEEDED = true;
+
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue' ) );
@@ -435,6 +442,10 @@ class Admin {
 				// not_installed when Pro is absent; 'active' when Pro is present
 				// (Pro downgrades to 'unlicensed' when its license isn't valid).
 				'proState'  => self::pro_state(),
+				// The xCloud purge plugin is here: the site already has
+				// Cloudflare Enterprise from its host, so the dashboard does
+				// not offer the add-on.
+				'xcloudPurgePlugin' => Managed_Edge_Purge::installed(),
 				// Setup Wizard URL, surfaced in the sidebar profile popover.
 				'wizardUrl' => admin_url( 'admin.php?page=' . Onboarding::PAGE_SLUG ),
 				'bootstrap' => self::bootstrap_payload(),

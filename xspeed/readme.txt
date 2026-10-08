@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -313,6 +313,21 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.1] – 2026-10-08 =
+
+**Cloudflare Enterprise setup now runs in four short steps, and the add-on's offer opens its page in the dashboard, shows with any version of Pro, and goes away once the add-on is bought.**
+
+Cloudflare:
+- New: The Cloudflare Enterprise add-on can show its setup as four steps (Setup, Verify, Connect, Done), with a card for each DNS record and a Copy button beside every value.
+- Improved: "Get it" on the sidebar's Cloudflare Enterprise card opens the add-on's page in the dashboard, in the same tab, instead of the store. That page explains what you need and has the buy button.
+- Improved: The sidebar card and the add-on's page show the price the service reports.
+- Improved: The Cloudflare Enterprise card on the Network page has a glowing border until the add-on is on. With reduced motion turned on, the border stays but does not move.
+- Improved: The add-on's page links to its setup guide.
+- Improved: The header shows the add-on's state as soon as its licence or domain changes, without a reload.
+- Fixed: The sidebar shows one Cloudflare Enterprise card, with any version of Pro.
+- Fixed: With a Pro older than 1.3.0, the Network page keeps the Cloudflare Enterprise card and page, and a licensed Pro is asked to update.
+- Fixed: The offer is hidden once the add-on key is entered, and on sites whose host already provides Cloudflare Enterprise.
 
 = [1.4.0] – 2026-10-06 =
 

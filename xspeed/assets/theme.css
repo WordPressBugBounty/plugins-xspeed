@@ -157,6 +157,24 @@
   #xspeed-app [class*="xspeed-anim"] { animation: none !important; }
 }
 
+/* ---- Loader bar + live dot (DESIGN.md §24.55) ----------------------------- */
+/*
+ * A thin indeterminate bar for a wait with no progress to report, and a
+ * pulsing dot beside a status line that keeps updating on its own. Both are
+ * CSS here rather than Tailwind utilities because they need a pseudo-element
+ * and keyframes. Tokens only: --line, --primary, --success, --radius-pill.
+ */
+@keyframes xspeed-blink { 50% { opacity: .25; } }
+@keyframes xspeed-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+#xspeed-app .xspeed-loader-bar { height: 3px; border-radius: var(--radius-pill); background: var(--line); overflow: hidden; position: relative; max-width: 320px; }
+#xspeed-app .xspeed-loader-bar::after { content: ""; position: absolute; inset: 0; width: 35%; border-radius: var(--radius-pill); background: var(--primary); animation: xspeed-slide 1.6s ease-in-out infinite; }
+#xspeed-app .xspeed-live-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); margin-top: 6px; animation: xspeed-blink 1.6s ease-in-out infinite; }
+#xspeed-app .xspeed-live-dot.is-done { background: var(--success); animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  #xspeed-app .xspeed-live-dot, #xspeed-app .xspeed-loader-bar::after { animation: none; }
+  #xspeed-app .xspeed-loader-bar::after { width: 100%; opacity: .4; }
+}
+
 /* ---- MCP discovery card (Overview, disconnected) ----------------------- */
 /*
  * Three tinted surfaces for the "Control and optimize your site with AI" card.
