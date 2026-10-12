@@ -62,8 +62,14 @@ final class TurboRenderModule extends Module {
 		'fl-row',                // Beaver Builder.
 	);
 
-	/** Sections presumed above the fold and left untouched. */
-	private const DEFAULT_SKIP_FIRST = 2;
+	/**
+	 * Sections presumed above the fold and left untouched. Three, not two:
+	 * the only other automatic implementation (WP Rocket's lazy render)
+	 * refuses anything within 1800px of the viewport bottom, and until the
+	 * fold is measured a section count should err the same way. Only a
+	 * fresh install sees the change — a stored value is kept as is.
+	 */
+	private const DEFAULT_SKIP_FIRST = 3;
 
 	/**
 	 * Pre-first-render size estimate (px) for contain-intrinsic-size.
@@ -100,6 +106,9 @@ final class TurboRenderModule extends Module {
 	/** Fallback: a child holding this share of its siblings' combined bytes is a wrapper to unwrap, not a section. */
 	private const FALLBACK_DOMINANT = 0.6;
 
+	/** Our own output-buffer nesting level, when we had to open one. */
+	private ?int $buffer_level = null;
+
 	public function ui_metadata(): array {
 		return array(
 			'label'       => __( 'Turbo Render', 'xspeed' ),
@@ -123,7 +132,7 @@ final class TurboRenderModule extends Module {
 				'min'         => 1,
 				'max'         => 10,
 				'label'       => __( 'Sections to render immediately', 'xspeed' ),
-				'description' => __( 'How many sections at the top are drawn right away. The default of 2 suits most pages; raise it if a section near the top appears late.', 'xspeed' ),
+				'description' => __( 'How many sections at the top are drawn right away. The default of 3 suits most pages; raise it if a section near the top appears late.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
 			'section_classes' => array(
@@ -165,6 +174,84 @@ final class TurboRenderModule extends Module {
 		// that our injected <style> must survive, and later passes never
 		// strip inline styles.
 		add_filter( 'xspeed_cache_final_html', array( $this, 'process' ), 8 );
+		// That filter fires only when the page cache stores a page. With the
+		// cache off, or on a URL it excludes, nothing else hands us the HTML,
+		// so open our own buffer then (#507), the way Combine CSS does (#195).
+		// Combine's buffer opens first and is the outer one, so this pass
+		// runs before it there: harmless, since we only add a <style> to
+		// <head>, which Combine leaves in place.
+		add_action( 'template_redirect', array( $this, 'maybe_buffer' ), 1 );
+	}
+
+	/**
+	 * Buffer the page ourselves when the page cache will not.
+	 *
+	 * Stands down on the same requests Combine CSS's buffer does, and when
+	 * the page cache is buffering: it will call process() through its filter,
+	 * and a second buffer would only copy the page again.
+	 */
+	public function maybe_buffer(): void {
+		if ( is_admin() || wp_doing_ajax() || wp_doing_cron()
+			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST )
+			|| ( defined( 'WP_CLI' ) && WP_CLI )
+			|| ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST )
+			|| ( function_exists( 'is_feed' ) && is_feed() )
+			|| ( function_exists( 'is_user_logged_in' ) && is_user_logged_in() )
+			|| \XSpeed\Builder_Editor::is_active() ) {
+			return; // process() never stamps for a signed-in visitor either.
+		}
+		if ( class_exists( '\\XSpeed\\Cache' ) && \XSpeed\Cache::is_buffering() ) {
+			return;
+		}
+		if ( $this->request_opted_out() ) {
+			return;
+		}
+		ob_start( array( $this, 'filter_buffer' ) );
+		$this->buffer_level = ob_get_level();
+		add_action( 'shutdown', array( $this, 'close_buffer' ), 0 );
+	}
+
+	/**
+	 * Pages the site has marked as not-for-optimizing, which Turbo Render
+	 * leaves alone even with the page cache off.
+	 *
+	 * With the cache on, a page reached Turbo Render only by being cached, so
+	 * the cache's URL exclusions (cart, checkout, my-account by default, plus
+	 * whatever the site added) kept it off transactional pages. Its own
+	 * buffer must keep that promise, or turning on Turbo Render would start
+	 * deferring sections of a checkout. The WooCommerce conditionals cover a
+	 * store whose cart or checkout lives at a translated slug the URL list
+	 * does not name.
+	 */
+	public function request_opted_out(): bool {
+		foreach ( array( 'is_cart', 'is_checkout', 'is_account_page' ) as $fn ) {
+			if ( function_exists( $fn ) && $fn() ) {
+				return true;
+			}
+		}
+		if ( ! class_exists( '\\XSpeed\\Settings_Manager' ) || ! class_exists( '\\XSpeed\\Cache' ) ) {
+			return false;
+		}
+		$cache    = \XSpeed\Settings_Manager::get( 'cache' );
+		$excluded = is_array( $cache['excluded_urls'] ?? null ) ? $cache['excluded_urls'] : array();
+		// The cache's own matcher: it keeps percent-escapes that
+		// sanitize_text_field() would delete, so an entry for a non-ASCII
+		// slug matches here too.
+		return array() !== $excluded && \XSpeed\Cache::request_matches_exclusions( $excluded );
+	}
+
+	/** ob_start() callback. */
+	public function filter_buffer( string $buffer ): string {
+		$out = $this->process( $buffer );
+		return is_string( $out ) ? $out : $buffer;
+	}
+
+	/** Flush only the buffer we opened. */
+	public function close_buffer(): void {
+		if ( null !== $this->buffer_level && ob_get_level() >= $this->buffer_level ) {
+			ob_end_flush();
+			$this->buffer_level = null;
+		}
 	}
 
 	/**
@@ -179,6 +266,11 @@ final class TurboRenderModule extends Module {
 		}
 		if ( false === stripos( $html, '</head>' ) ) {
 			return $html; // Not a full document (fragment, feed, JSON).
+		}
+		// Already processed: our buffer and the cache filter can both see a
+		// page, and stamping twice would add a second style block.
+		if ( false !== strpos( $html, '<style id="xspeed-turbo">' ) ) {
+			return $html;
 		}
 		if ( function_exists( 'is_user_logged_in' ) && is_user_logged_in() ) {
 			return $html;
@@ -228,6 +320,13 @@ final class TurboRenderModule extends Module {
 
 		$excluded = $this->excluded_pattern();
 
+		// Document order and the end of <body>, the fallback span bound for
+		// the containment check below.
+		$sorted = $offsets;
+		sort( $sorted );
+		$body_end = stripos( $masked, '</body>' );
+		$doc_end  = false === $body_end ? strlen( $masked ) : (int) $body_end;
+
 		$seen  = 0;
 		$edits = array();
 		foreach ( $offsets as $offset ) {
@@ -253,6 +352,9 @@ final class TurboRenderModule extends Module {
 			// a Kadence maps container painted over the card overlapping it.)
 			$span_end = self::element_end( $masked, $offset );
 			if ( null !== $span_end && false !== stripos( substr( $masked, $offset, $span_end - $offset ), '<iframe' ) ) {
+				continue;
+			}
+			if ( self::breaks_under_containment( $masked, $offset, $span_end, $sorted, $doc_end ) ) {
 				continue;
 			}
 			$edits[] = $offset;
@@ -485,6 +587,51 @@ final class TurboRenderModule extends Module {
 			}
 		}
 		return $children;
+	}
+
+	/**
+	 * Whether stamping this section would break something inside it.
+	 *
+	 * `content-visibility: auto` applies layout, style and paint
+	 * containment even while the section is on screen and rendered. Two
+	 * kinds of content break under that:
+	 *
+	 * - an SVG `<use>`: paint containment breaks sprite references (WP
+	 *   Rocket skips these too);
+	 * - an inline `position: fixed` or `sticky`: the section becomes the
+	 *   containing block, so a back-to-top button or a sticky bar is
+	 *   positioned against the section instead of the viewport.
+	 *
+	 * The span runs to the element's close tag. When element_end() can't
+	 * pair it, the span runs to the next candidate (or `</body>` for the
+	 * last one) instead: overshooting into a sibling only skips more, which
+	 * is the safe direction. Read from the masked copy, so text in a script
+	 * (`el.style.position = 'fixed'`) never counts. (#478)
+	 *
+	 * @param string   $masked   Markup with script/textarea/noscript/comments nulled.
+	 * @param int      $offset   The candidate's `<`.
+	 * @param int|null $span_end element_end() for this candidate.
+	 * @param int[]    $sorted   Every candidate offset, ascending.
+	 * @param int      $doc_end  Offset of `</body>`, or the buffer length.
+	 */
+	private static function breaks_under_containment( string $masked, int $offset, ?int $span_end, array $sorted, int $doc_end ): bool {
+		$stop = $span_end;
+		if ( null === $stop ) {
+			$stop = $doc_end;
+			foreach ( $sorted as $next ) {
+				if ( $next > $offset ) {
+					$stop = $next;
+					break;
+				}
+			}
+		}
+		$span = substr( $masked, $offset, max( 0, $stop - $offset ) );
+		// A <style> element in the body often carries rules for other parts
+		// of the page (a sticky header rule printed by a page builder), so it
+		// says nothing about this section. Inline style="" attributes do.
+		$span = (string) preg_replace( '#<style\b[^>]*>.*?</style>#is', '', $span );
+
+		return (bool) preg_match( '#<use[\s/>]|position\s*:\s*(?:-webkit-)?(?:fixed|sticky)\b#i', $span );
 	}
 
 	/**

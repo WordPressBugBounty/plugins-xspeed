@@ -79,6 +79,12 @@ final class Page_Cache_Detector {
 	public const BLOCKER_UNREADABLE_DROPIN = 'unreadable_dropin';
 	/** A page-cache-capable plugin is active with no drop-in evidence. */
 	public const BLOCKER_ACTIVE_PAGE_CACHE = 'active_page_cache';
+	/**
+	 * An active plugin's own settings say its page cache is on. Unlike
+	 * `active_page_cache`, which only says it CAN cache pages, this is
+	 * proof that it does, so xSpeed's would be stacked on top of it. (#653)
+	 */
+	public const BLOCKER_PAGE_CACHE_SWITCHED_ON = 'page_cache_switched_on';
 	/** More than one plugin owns, or could own, the page cache. */
 	public const BLOCKER_MULTIPLE_PAGE_CACHES = 'multiple_page_caches';
 	/** WP_CACHE is true with no drop-in to explain it. */
@@ -183,6 +189,8 @@ final class Page_Cache_Detector {
 				continue;
 			}
 
+			$page_cache = in_array( Cache_Plugin_Catalog::CAP_PAGE_CACHE, $entry['capabilities'], true );
+
 			$out[] = array(
 				'plugin'          => $file,
 				'label'           => $entry['label'],
@@ -192,7 +200,10 @@ final class Page_Cache_Detector {
 				'network_active'  => $network_active,
 				'activation_scope' => $site_active && $network_active ? 'site-and-network' : ( $network_active ? 'network' : ( $site_active ? 'site' : 'inactive' ) ),
 				'capabilities'    => $entry['capabilities'],
-				'page_cache'      => in_array( Cache_Plugin_Catalog::CAP_PAGE_CACHE, $entry['capabilities'], true ),
+				'page_cache'      => $page_cache,
+				// The plugin's own page-cache switch: true on, false off,
+				// null unknown. Only asked of an active page cache.
+				'page_cache_on'   => ( $page_cache && $active ) ? Cache_Plugin_Catalog::page_cache_state( $file ) : null,
 				'signals'         => $signals,
 			);
 		}
@@ -447,11 +458,29 @@ final class Page_Cache_Detector {
 			if ( self::SELF_PLUGIN_FILE === (string) $plugin['plugin'] ) {
 				continue;
 			}
-			if ( ! empty( $plugin['page_cache'] ) && ! empty( $plugin['active'] ) ) {
+			if ( self::may_be_caching_pages( $plugin ) ) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * An active page-cache plugin, unless its own settings prove its page
+	 * cache is off.
+	 *
+	 * A plugin kept active for its other features, with its page cache
+	 * switched off, owns nothing here. Counting it anyway is what made
+	 * Health report LiteSpeed Cache as a conflict on GridPane's
+	 * OpenLiteSpeed servers with its page cache off. When the setting
+	 * cannot be read we still assume it may be caching. (#653)
+	 *
+	 * @param array $plugin One row from inspect_plugins().
+	 */
+	private static function may_be_caching_pages( array $plugin ): bool {
+		return ! empty( $plugin['page_cache'] )
+			&& ! empty( $plugin['active'] )
+			&& false !== ( $plugin['page_cache_on'] ?? null );
 	}
 
 	public static function is_field_clear(): bool {
@@ -479,7 +508,7 @@ final class Page_Cache_Detector {
 	public static function active_page_caches(): array {
 		$out = array();
 		foreach ( self::inspect()['plugins'] as $plugin ) {
-			if ( $plugin['page_cache'] && $plugin['active'] ) {
+			if ( self::may_be_caching_pages( $plugin ) ) {
 				$out[] = (string) $plugin['label'];
 			}
 		}
@@ -590,9 +619,24 @@ final class Page_Cache_Detector {
 		$owners = array();
 		$active = array();
 		foreach ( $report['plugins'] as $plugin ) {
-			if ( $plugin['page_cache'] && $plugin['active'] ) {
+			if ( self::may_be_caching_pages( $plugin ) ) {
 				$active[ (string) $plugin['plugin'] ] = $plugin;
 				$owners[ (string) $plugin['plugin'] ] = (string) $plugin['label'];
+			}
+		}
+
+		/*
+		 * Proven live, not just possible. Raised before the state ladder so
+		 * it rides along with whichever state wins: two page caches serving
+		 * the same pages is the problem whoever holds the drop-in. (#653)
+		 */
+		foreach ( $active as $file => $plugin ) {
+			if ( self::SELF_PLUGIN_FILE !== $file && true === ( $plugin['page_cache_on'] ?? null ) ) {
+				$blockers[] = array(
+					'code'   => self::BLOCKER_PAGE_CACHE_SWITCHED_ON,
+					'plugin' => $plugin['plugin'],
+					'label'  => $plugin['label'],
+				);
 			}
 		}
 		if ( self::OWNER_FOREIGN === $dropin['owner'] ) {

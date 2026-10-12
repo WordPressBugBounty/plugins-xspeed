@@ -121,6 +121,9 @@ class Minifier {
 			// so the src sweep above never sees them; this one parks an
 			// inline body that names a known third-party host.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'delay_inline_snippets' ), 21 );
+			// Elementor's entrance-animation elements are hidden until its
+			// frontend script runs; when that script is delayed, show them.
+			add_action( 'wp_head',           array( Minify_Filters::class, 'print_entrance_animation_reveal' ), 1 );
 		}
 
 		// Everything above honors data-no-optimize / data-no-minify, but
@@ -150,6 +153,10 @@ class Minifier {
 			// font-CSS hosts. Baked into the cache file, so it replays on
 			// static hits where PHP never boots.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'async_raw_font_css_links' ), 22 );
+			// Holds CSS transitions while async stylesheets replace the
+			// critical CSS. Runs after every script pass so its own
+			// inline script is never deferred or delayed.
+			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'hold_transitions_for_async_css' ), 26 );
 		}
 
 		/*

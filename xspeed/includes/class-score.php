@@ -22,7 +22,9 @@
  * no schedule, no background call, no telemetry — see readme.txt "External
  * services".
  *
- * Storage: `xspeed_score_history`, capped, autoload off. The row shape
+ * Storage: the `xspeed_scores` table (Score_Store). The legacy
+ * `xspeed_score_history` option, capped and autoload off, is written only
+ * when the table refuses a row. The row shape
  * matches what Pro's Pagespeed engine already returns (ok/status/url/
  * strategy/score/metrics/issues) so a Pro run and a Free run are the same
  * kind of row and the history stays one series.
@@ -442,7 +444,15 @@ final class Score {
 		// admin_init, but record() can run from CLI on a site that has done
 		// neither yet, so make sure it exists before writing.
 		Score_Store::maybe_install();
-		Score_Store::insert( $row, isset( $row['source'] ) ? (string) $row['source'] : 'local' );
+		$id = Score_Store::insert( $row, isset( $row['source'] ) ? (string) $row['source'] : 'local' );
+
+		// The option is only the fallback for a site where the table could
+		// not take the row. Writing it on every run as well kept a second,
+		// PHP-serialized copy that a latin1 options table can corrupt the
+		// same way it corrupted the scan result (#468).
+		if ( $id > 0 ) {
+			return;
+		}
 
 		$history = self::history_option();
 		array_unshift( $history, $row );

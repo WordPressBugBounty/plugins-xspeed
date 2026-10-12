@@ -100,6 +100,10 @@
     TRIGGERS.forEach(function (name) {
       window.removeEventListener(name, start, { passive: true, capture: true });
     });
+    // Marks the start, before any delayed script is put back. The Elementor
+    // entrance-animation reveal listens for it to settle the widgets the
+    // visitor has already seen.
+    document.dispatchEvent(new Event('xspeed:replaying'));
     var nav = window.performance && performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
     if (nav && nav.domContentLoadedEventStart > 0) dclFired = true;
 
@@ -217,6 +221,46 @@
     var currentRsc = pageRsc;
     var jq = window.jQuery;
     var ended;
+
+    // jQuery ready. When jQuery ran before the replay and is already ready,
+    // jQuery(fn) and $(document).ready(fn) run fn on the next timer, which
+    // can come before a later delayed script has arrived. On a real page
+    // ready waits for DOMContentLoaded, so every deferred script has run
+    // first. Elementor's frontend calls init from ready, and Elementor Pro, a
+    // later script, listens for the event init sends: run early, Pro missed
+    // it and its sticky header and motion effects never started. So while
+    // the replay runs, ready only queues, and the queue goes to jQuery's own
+    // ready with the synthetic DOMContentLoaded. jQuery(fn) goes through
+    // jQuery.fn.ready, so one wrapper covers both forms.
+    var heldReady = [];
+    var pageReady;
+    var ourReady;
+    try {
+      if (jq && jq.fn && jq.isReady && jq.fn.ready) {
+        pageReady = jq.fn.ready;
+        ourReady = jq.fn.ready = function (fn) {
+          // Only while the queue is open: once released, a call that still
+          // reaches us (through a wrapper put on top) goes straight through.
+          if (ourReady) {
+            heldReady.push(fn);
+            return this;
+          }
+          return pageReady.apply(this, arguments);
+        };
+      }
+    } catch (e) {}
+    // Puts jQuery's ready back (unless something wrapped it after us) and
+    // hands it the queue, in order. jQuery runs each on a timer, as usual,
+    // and catches what they throw, so this call itself does not throw.
+    function releaseReady() {
+      if (!ourReady) return;
+      if (jq.fn.ready === ourReady) jq.fn.ready = pageReady;
+      ourReady = 0;
+      heldReady.forEach(function (fn) {
+        pageReady.call(jq(document), fn);
+      });
+      heldReady = [];
+    }
     if (pageLoaded && pageOnload) currentOnload = window.onload = function () {};
     if (pageLoaded && pageRsc) currentRsc = document.onreadystatechange = function () {};
 
@@ -374,6 +418,7 @@
         fireReadyStateChange();
       }
       firePrivate(document, 'DOMContentLoaded', 1);
+      releaseReady();
       if (faking) fakeDepth--;
       if (pageLoaded && !faking) fireReadyStateChange();
       pending = 1;
@@ -403,6 +448,7 @@
     function finish() {
       if (ended) return;
       ended = 1;
+      releaseReady();
       if (observer) observer.disconnect();
       if (faking) {
         if (ownReadyState) Object.defineProperty(document, 'readyState', ownReadyState);

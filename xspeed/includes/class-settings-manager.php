@@ -173,7 +173,17 @@ final class Settings_Manager {
 				 * @param string $on     Gating constant name.
 				 */
 				$actual = apply_filters( 'xspeed_constant_gate_value', $actual, $on );
-				if ( $actual !== ( $gate['is'] ?? null ) ) {
+				$want   = $gate['is'] ?? null;
+				/*
+				 * `case_insensitive` is for gates on another plugin's
+				 * convention that is read that way at its source: Redis
+				 * Object Cache matches WP_REDIS_SCHEME with strcasecmp(), so
+				 * `UNIX` is a socket there and has to be one here. (#566)
+				 */
+				$match = ! empty( $gate['case_insensitive'] ) && is_string( $actual ) && is_string( $want )
+					? 0 === strcasecmp( $actual, $want )
+					: $actual === $want;
+				if ( ! $match ) {
 					continue;
 				}
 			}

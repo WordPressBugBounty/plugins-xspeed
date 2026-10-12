@@ -297,6 +297,7 @@ final class ScoreModule extends Module {
 						'scan_id'    => $polled['scan_id'],
 						'step'       => $polled['step'],
 						'latest'     => Scan::latest(),
+						'stored'     => Scan::stored_state(),
 						'visibility' => Scan::visibility(),
 						'private_supported' => Scan::private_supported(),
 					)
@@ -306,6 +307,7 @@ final class ScoreModule extends Module {
 				array(
 					'status'     => 'complete',
 					'latest'     => $polled,
+					'stored'     => 'ok',
 					'visibility' => Scan::visibility(),
 					'private_supported' => Scan::private_supported(),
 				)
@@ -316,6 +318,7 @@ final class ScoreModule extends Module {
 			array(
 				'status'     => 'idle',
 				'latest'     => Scan::latest(),
+				'stored'     => Scan::stored_state(),
 				'visibility' => Scan::visibility(),
 				'private_supported' => Scan::private_supported(),
 			)
@@ -926,6 +929,10 @@ final class ScoreModule extends Module {
 		}
 
 		$latest = Scan::latest();
+		if ( null === $latest && 'unreadable' === Scan::stored_state() ) {
+			\WP_CLI::log( 'The last scan report could not be read back from the database and was discarded. Run `wp xspeed scan run --wait` again.' );
+			return;
+		}
 		if ( null === $latest ) {
 			\WP_CLI::log( 'No scan yet. Run `wp xspeed scan run --wait`.' );
 			return;

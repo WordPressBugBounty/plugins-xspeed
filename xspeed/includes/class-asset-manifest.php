@@ -449,7 +449,7 @@ final class Asset_Manifest {
 	 * depth it follows them (Asset_Combiner::resolve_imports()).
 	 *
 	 * Resolution mirrors the combiner: each reference is resolved against the
-	 * part's URL, and a URL under home_url() maps to ABSPATH. Candidates that
+	 * part's URL and mapped by Asset_Combiner::url_to_candidate_path(). Candidates that
 	 * do not exist yet are kept, for the same reason as css_dependencies().
 	 *
 	 * @param string $url Absolute URL of the part.
@@ -498,15 +498,7 @@ final class Asset_Manifest {
 	 * @param string $url Absolute URL.
 	 */
 	private static function url_to_candidate( string $url ): ?string {
-		$home = home_url();
-		if ( '' === $url || 0 !== strpos( $url, $home ) ) {
-			return null;
-		}
-		$clean = strtok( $url, '?' );
-		if ( ! is_string( $clean ) ) {
-			return null;
-		}
-		return ABSPATH . ltrim( str_replace( $home, '', $clean ), '/' );
+		return Asset_Combiner::url_to_candidate_path( $url );
 	}
 
 	/**

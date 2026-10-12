@@ -545,18 +545,19 @@ final class CacheModule extends Module {
 			array(
 				'name'      => 'xspeed cache',
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it, or `listings` to show which pages were recorded running a post list of their own (cleared by a narrow purge when a save may change that list). To clear the whole site use `wp xspeed purge`.',
+				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge` to clear everything (same as `wp xspeed purge`), `purge <url>` or `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it, or `listings` to show which pages were recorded running a post list of their own (cleared by a narrow purge when a save may change that list). To clear the whole site use `wp xspeed purge`.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'status', 'inventory', 'size', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config', 'edge', 'listings' ),
+						'options'  => array( 'status', 'inventory', 'size', 'purge', 'purge-log', 'purge-url', 'recheck-rewrite', 'nginx-config', 'edge', 'listings' ),
 						'optional' => true,
 					),
 					array(
-						'type'     => 'positional',
-						'name'     => 'url',
-						'optional' => true,
+						'type'        => 'positional',
+						'name'        => 'url',
+						'description' => 'For purge and purge-url: the page to clear, as a URL on this site or a path such as /about/. Without it, purge clears everything.',
+						'optional'    => true,
 					),
 					array(
 						'type'        => 'assoc',
@@ -567,8 +568,21 @@ final class CacheModule extends Module {
 					array(
 						'type'        => 'assoc',
 						'name'        => 'cause',
-						'description' => 'Label recorded in the purge log for purge-url. Default "CLI".',
+						'description' => 'Label recorded in the purge log for purge and purge-url. Default "CLI".',
 						'optional'    => true,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'type',
+						'description' => 'For purge without a URL: what to clear, as in `wp xspeed purge --type`. Default all.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'format',
+						'description' => 'For purge without a URL: table (default) or json.',
+						'optional'    => true,
+						'options'     => array( 'table', 'json' ),
 					),
 					array(
 						'type'        => 'assoc',
@@ -725,7 +739,14 @@ final class CacheModule extends Module {
 			switch ( $row['status'] ) {
 				case \XSpeed\Purge_Runner::CLEARED:
 					++$cleared;
-					\WP_CLI::log( sprintf( '  cleared  %s%s', $row['label'], self::purge_amount( $row ) ) );
+					\WP_CLI::log(
+						sprintf(
+							'  cleared  %s%s%s',
+							$row['label'],
+							self::purge_amount( $row ),
+							'' !== $row['reason'] ? '; ' . $row['reason'] : ''
+						)
+					);
 					break;
 				case \XSpeed\Purge_Runner::FAILED:
 					++$failed;
@@ -761,6 +782,63 @@ final class CacheModule extends Module {
 	}
 
 	/**
+	 * Clear one page: `wp xspeed cache purge-url <url>` and
+	 * `wp xspeed cache purge <url>`.
+	 *
+	 * A string purge_url() cannot act on (another scheme, a scheme with no
+	 * host, a bare word) is refused with an error. purge_url() returns 0 for
+	 * it, which read as "already cold" and exited 0.
+	 *
+	 * @param string               $url   Absolute URL or site-relative path.
+	 * @param array<string,string> $assoc Flags; only --cause is read.
+	 */
+	private function cli_purge_url( string $url, array $assoc ): void {
+		if ( ! self::is_purgeable_url( $url ) ) {
+			\WP_CLI::error( sprintf( 'Not a page URL: %s. Give an http(s) URL on this site or a path starting with /, such as /about/.', $url ) );
+			return;
+		}
+		$cause     = isset( $assoc['cause'] ) && '' !== trim( (string) $assoc['cause'] ) ? trim( (string) $assoc['cause'] ) : 'CLI';
+		$result    = \XSpeed\Cache::purge_url_reported( $url, $cause );
+		$removed   = $result['removed'];
+		$forwarded = implode( ', ', $result['forwarded'] );
+		if ( $removed > 0 ) {
+			\WP_CLI::success(
+				'' === $forwarded
+					? sprintf( 'Purged %d cache file(s) for %s', $removed, $url )
+					: sprintf( 'Purged %d cache file(s) for %s, and sent the purge to %s', $removed, $url, $forwarded )
+			);
+		} elseif ( '' !== $forwarded ) {
+			// xSpeed's own cache held nothing, but a cache in front of
+			// PHP took the purge: that copy is the one visitors get.
+			\WP_CLI::success( sprintf( 'Sent the purge for %s to %s. xSpeed\'s own cache held no copy.', $url, $forwarded ) );
+		} else {
+			\WP_CLI::log( sprintf( 'No cache entries found for %s (already cold, or the URL never cached).', $url ) );
+		}
+	}
+
+	/**
+	 * Whether purge_url() can act on this string: an http(s) URL with a
+	 * host, a host without a scheme (`site.test/page/`), or a path starting
+	 * with `/`. The same rules purge_url() applies before it returns 0.
+	 *
+	 * @param string $url What the operator typed.
+	 */
+	private static function is_purgeable_url( string $url ): bool {
+		$parts = wp_parse_url( $url );
+		if ( ! is_array( $parts ) ) {
+			return false;
+		}
+		if ( isset( $parts['scheme'] ) ) {
+			return in_array( strtolower( (string) $parts['scheme'] ), array( 'http', 'https' ), true ) && ! empty( $parts['host'] );
+		}
+		if ( isset( $parts['host'] ) ) {
+			return true;
+		}
+		$path = isset( $parts['path'] ) ? (string) $parts['path'] : '';
+		return '' !== $path && '/' === $path[0];
+	}
+
+	/**
 	 * The " — 42 entries (1.3 MB)" tail on a cleared line.
 	 *
 	 * Entries and bytes are both optional: a Redis FLUSHALL reports neither,
@@ -784,6 +862,27 @@ final class CacheModule extends Module {
 	public function cli_handler( array $args, array $assoc ): void {
 		$action = isset( $args[0] ) ? (string) $args[0] : 'status';
 		$limit  = isset( $assoc['limit'] ) ? max( 1, (int) $assoc['limit'] ) : 20;
+
+		// `wp xspeed cache purge` is what people type. It runs the same
+		// purge as `wp xspeed purge`; before it was listed, WP-CLI rejected
+		// it with "Invalid value specified for positional arg". Given a URL
+		// it clears that one page, as purge-url does: it used to drop the
+		// URL and clear the whole site.
+		if ( 'purge' === $action ) {
+			$url = isset( $args[1] ) ? trim( (string) $args[1] ) : '';
+			if ( '' === $url ) {
+				$this->cli_purge( array(), $assoc );
+				return;
+			}
+			foreach ( array( 'type', 'format' ) as $flag ) {
+				if ( isset( $assoc[ $flag ] ) ) {
+					\WP_CLI::error( sprintf( '--%s applies to a full purge, not to one URL. Run `wp xspeed cache purge %s` without it, or drop the URL to purge everything.', $flag, $url ) );
+					return;
+				}
+			}
+			$this->cli_purge_url( $url, $assoc );
+			return;
+		}
 
 		/*
 		 * Print the unified nginx server-block so an installer, provisioning
@@ -943,23 +1042,7 @@ final class CacheModule extends Module {
 				\WP_CLI::error( 'Usage: wp xspeed cache purge-url <url-or-path>' );
 				return;
 			}
-			$cause   = isset( $assoc['cause'] ) && '' !== trim( (string) $assoc['cause'] ) ? trim( (string) $assoc['cause'] ) : 'CLI';
-			$result    = \XSpeed\Cache::purge_url_reported( $url, $cause );
-			$removed   = $result['removed'];
-			$forwarded = implode( ', ', $result['forwarded'] );
-			if ( $removed > 0 ) {
-				\WP_CLI::success(
-					'' === $forwarded
-						? sprintf( 'Purged %d cache file(s) for %s', $removed, $url )
-						: sprintf( 'Purged %d cache file(s) for %s, and sent the purge to %s', $removed, $url, $forwarded )
-				);
-			} elseif ( '' !== $forwarded ) {
-				// xSpeed's own cache held nothing, but a cache in front of
-				// PHP took the purge: that copy is the one visitors get.
-				\WP_CLI::success( sprintf( 'Sent the purge for %s to %s. xSpeed\'s own cache held no copy.', $url, $forwarded ) );
-			} else {
-				\WP_CLI::log( sprintf( 'No cache entries found for %s (already cold, or the URL never cached).', $url ) );
-			}
+			$this->cli_purge_url( $url, $assoc );
 			return;
 		}
 

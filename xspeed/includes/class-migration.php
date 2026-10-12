@@ -390,6 +390,10 @@ final class Migration {
 					continue;
 				}
 				$first = (string) ( $servers[0] ?? '' );
+				// A Redis socket imports whole, so there is nothing to warn about.
+				if ( 'redis' === $engine && '' !== Redis_Client::socket_path( $first ) ) {
+					continue;
+				}
 				if ( ! preg_match( '#^([a-z][a-z0-9+.-]*)://#i', $first, $m ) ) {
 					continue;
 				}
@@ -1070,6 +1074,14 @@ final class Migration {
 				// never connect. A managed Redis on TLS is the common case.
 				// Bracketed IPv6 is left alone — stream_socket_client() wants
 				// the brackets. (#224)
+				// W3TC writes a unix socket as `unix:/path`. Split on the
+				// colon like a host:port, it imported host "unix" and port 0.
+				// A socket carries no port, so only the host is set. (#566)
+				$socket = 'redis' === $engine ? Redis_Client::socket_path( $first ) : '';
+				if ( '' !== $socket ) {
+					$patch['object-cache']['redis_host'] = $socket;
+					$first = '';
+				}
 				$first     = (string) preg_replace( '#^[a-z][a-z0-9+.-]*://#i', '', $first );
 				$separator = strrpos( $first, ':' );
 				if ( false !== $separator ) {

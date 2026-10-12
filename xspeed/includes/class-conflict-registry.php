@@ -109,11 +109,18 @@ final class Conflict_Registry {
 		$out    = array();
 		foreach ( $matrix as $plugin => $spec ) {
 			if ( is_plugin_active( $plugin ) ) {
+				$strategy = (array) $spec['strategy'];
+				// Its page cache is switched off in its own settings, so
+				// it does not compete with ours. Its other features keep
+				// their strategy: each has its own switch. (#653)
+				if ( false === Cache_Plugin_Catalog::page_cache_state( (string) $plugin ) ) {
+					unset( $strategy['cache.page'] );
+				}
 				$out[] = array(
 					'plugin'   => $plugin,
 					'label'    => $spec['label'],
 					'kind'     => $spec['kind'],
-					'strategy' => $spec['strategy'],
+					'strategy' => $strategy,
 				);
 			}
 		}

@@ -68,14 +68,14 @@ if ( ! function_exists( 'xspeed_oc_config' ) ) {
 			// XSPEED_OC_MC_*, so the fallback fades out on the next save.
 			'host'     => $is_memcached
 				? array( 'XSPEED_OC_MC_HOST', 'XSPEED_OC_HOST' )
-				: array( 'XSPEED_OC_HOST', 'WP_REDIS_HOST' ),
+				: array( 'XSPEED_OC_HOST', 'WP_REDIS_PATH', 'WP_REDIS_HOST' ),
 			'port'     => $is_memcached
 				? array( 'XSPEED_OC_MC_PORT', 'XSPEED_OC_PORT' )
 				: array( 'XSPEED_OC_PORT', 'WP_REDIS_PORT' ),
 			// WP_REDIS_PASSWORD trails the user names on purpose: in its array
 			// form it carries the ACL username too, so a site that defines only
 			// the password pair still authenticates as the right user.
-			'user'     => array( 'XSPEED_OC_USER', 'WP_REDIS_USER', 'WP_REDIS_PASSWORD' ),
+			'user'     => array( 'XSPEED_OC_USER', 'WP_REDIS_USERNAME', 'WP_REDIS_USER', 'WP_REDIS_PASSWORD' ),
 			'password' => array( 'XSPEED_OC_PASSWORD', 'WP_REDIS_PASSWORD' ),
 			'database' => array( 'XSPEED_OC_DATABASE', 'WP_REDIS_DATABASE' ),
 			'timeout'  => array( 'XSPEED_OC_TIMEOUT', 'WP_REDIS_TIMEOUT' ),
@@ -183,6 +183,12 @@ if ( ! function_exists( 'xspeed_oc_config' ) ) {
 				if ( ! defined( $const ) ) {
 					continue;
 				}
+				// WP_REDIS_PATH names a socket only when WP_REDIS_SCHEME is
+				// `unix` in any case, the same gate the schema declares in
+				// `constants_when`. Redis Object Cache uses strcasecmp(). (#566)
+				if ( 'WP_REDIS_PATH' === $const && ! ( defined( 'WP_REDIS_SCHEME' ) && is_string( constant( 'WP_REDIS_SCHEME' ) ) && 0 === strcasecmp( constant( 'WP_REDIS_SCHEME' ), 'unix' ) ) ) {
+					continue;
+				}
 				$value = constant( $const );
 				// WP_REDIS_PASSWORD only answers for `user` in its array form,
 				// which carries the ACL username. As a plain string it is just
@@ -274,6 +280,29 @@ if ( ! function_exists( 'xspeed_oc_first_memcached_server' ) ) {
 			return array( substr( $entry, 0, $at ), (int) substr( $entry, $at + 1 ) );
 		}
 		return array( $entry, null );
+	}
+}
+
+if ( ! function_exists( 'xspeed_oc_redis_socket' ) ) {
+	/**
+	 * The unix socket path a Redis host names, or '' for a network host.
+	 *
+	 * A copy of \XSpeed\Redis_Client::socket_path(), which this drop-in cannot
+	 * call when phpredis is the client: the class is only loaded for the
+	 * built-in one. ObjectCacheSocketTest runs both over the same inputs, so
+	 * the panel's Test connection and the runtime agree on what a socket is.
+	 * (#566)
+	 *
+	 * @param string $host Configured Redis host.
+	 * @return string Socket path, or ''.
+	 */
+	function xspeed_oc_redis_socket( $host ) {
+		$host = trim( (string) $host );
+		if ( 0 === stripos( $host, 'unix:' ) ) {
+			// unix:///path and unix:/path both name /path.
+			$host = '/' . ltrim( substr( $host, 5 ), '/' );
+		}
+		return ( '' !== $host && '/' === $host[0] && '/' !== $host ) ? $host : '';
 	}
 }
 
@@ -701,10 +730,17 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 					$persist       = (bool) xspeed_oc_config( 'persist', false );
 
 					if ( class_exists( 'Redis' ) ) {
-						// phpredis extension (preferred).
+						// phpredis extension (preferred). It opens a unix
+						// socket only for a bare path with a port below 1;
+						// with any real port it tries TCP to the path. (#566)
 						$this->client = 'phpredis';
 						$redis        = new Redis();
-						$ok           = $persist
+						$socket       = xspeed_oc_redis_socket( $host );
+						if ( '' !== $socket ) {
+							$host = $socket;
+							$port = 0;
+						}
+						$ok = $persist
 							? @$redis->pconnect( $host, $port, $timeout )
 							: @$redis->connect( $host, $port, $timeout );
 						if ( $ok ) {

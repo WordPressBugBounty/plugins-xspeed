@@ -716,7 +716,10 @@ class Server {
 			if ( 'xspeed/xspeed.php' === $file ) {
 				continue;
 			}
-			if ( is_plugin_active( $file ) ) {
+			// Active for its other features with its own page cache switched
+			// off: nothing is caching pages, so there is nothing to warn
+			// about. An unreadable setting still counts. (#653)
+			if ( is_plugin_active( $file ) && false !== Cache_Plugin_Catalog::page_cache_state( $file ) ) {
 				$found[] = $entry['label'];
 			}
 		}

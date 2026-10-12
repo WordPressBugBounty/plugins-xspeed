@@ -1210,6 +1210,237 @@ final class Minify_Filters {
 	}
 
 	/**
+	 * What a held async sheet runs once it has settled: mark itself and let
+	 * the flip script check whether every held sheet has.
+	 */
+	private const HOLD_SETTLED_JS = "this.setAttribute('data-xs-ready','1');window.xsCssFlip&&xsCssFlip()";
+
+	/**
+	 * A held sheet that fails (404, blocked, network error) never fires
+	 * `load`, so with only an onload the flip waited for it and every other
+	 * sheet stayed off until the 5-second fallback: an unstyled page. An
+	 * error settles it as well. An onerror the tag already carries keeps
+	 * running, after ours, so its throwing cannot hold the flip back.
+	 *
+	 * @param string $tag A held `<link>` tag, already carrying our onload.
+	 */
+	private static function settle_held_sheet_on_error( string $tag ): string {
+		$merged = (string) preg_replace_callback(
+			'#\sonerror\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))#i',
+			static function ( array $e ): string {
+				$own = (string) ( $e[1] ?? '' ) . (string) ( $e[2] ?? '' ) . (string) ( $e[3] ?? '' );
+				$own = html_entity_decode( $own, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+				return ' onerror="' . self::HOLD_SETTLED_JS . ';' . esc_attr( $own ) . '"';
+			},
+			$tag,
+			1,
+			$count
+		);
+		if ( 1 === $count ) {
+			return $merged;
+		}
+		return (string) preg_replace(
+			'#\sonload="' . preg_quote( self::HOLD_SETTLED_JS, '#' ) . '"#',
+			'$0 onerror="' . self::HOLD_SETTLED_JS . '"',
+			$tag,
+			1
+		);
+	}
+
+	/**
+	 * Hosts whose stylesheets are the site's own for the transition hold:
+	 * the site's host and, when the CDN rewrite is on, its CDN host. A sheet
+	 * from any other host applies on its own load.
+	 *
+	 * @return string[] Lowercase hosts.
+	 */
+	private static function first_party_hosts(): array {
+		$hosts = array( strtolower( (string) wp_parse_url( home_url( '/' ), PHP_URL_HOST ) ) );
+		$cdn   = get_option( 'xspeed_module_cdn', array() );
+		if ( is_array( $cdn ) && ! empty( $cdn['enabled'] ) && ! empty( $cdn['cdn_url'] ) ) {
+			$hosts[] = (string) preg_replace( '#[/:].*$#', '', Cdn_Rewriter::normalize_host( (string) $cdn['cdn_url'] ) );
+		}
+		/**
+		 * Filter: xspeed_async_css_first_party_hosts. Hosts whose async
+		 * stylesheets wait for the transition hold's single flip. Add a
+		 * static-asset host that serves the site's own CSS.
+		 *
+		 * @param string[] $hosts Lowercase hosts.
+		 */
+		$hosts = (array) apply_filters( 'xspeed_async_css_first_party_hosts', $hosts );
+		return array_values( array_filter( array_map( static fn( $h ) => strtolower( trim( (string) $h ) ), $hosts ) ) );
+	}
+
+	/**
+	 * Hold CSS transitions while async stylesheets load.
+	 *
+	 * Critical CSS styles only the first screen. When the deferred
+	 * stylesheets arrive, every element that has a `transition` and a value
+	 * that changes animates at once: below the fold from the browser's
+	 * defaults, above it wherever the critical CSS differs. On an Elementor
+	 * page that was about 100 elements and seconds of main-thread work on a
+	 * throttled phone. Transitions stay off until the last async sheet has
+	 * applied, then come back two frames later.
+	 *
+	 * @param string $html Complete page HTML.
+	 */
+	public static function hold_transitions_for_async_css( $html ): string {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return (string) $html;
+		}
+		if ( self::skip_in_non_frontend_context() ) {
+			return $html;
+		}
+		/**
+		 * Filter: xspeed_async_css_hold_transitions. Return false to let
+		 * transitions run while async stylesheets load.
+		 *
+		 * @param bool $hold Whether to hold them. Default true.
+		 */
+		if ( ! apply_filters( 'xspeed_async_css_hold_transitions', true ) ) {
+			return $html;
+		}
+		if ( false !== strpos( $html, 'id="xspeed-transition-hold-js"' ) ) {
+			return $html;
+		}
+		if ( ! preg_match( '#<link\b[^>]*\bdata-(?:xs|xspeed)-async\b#i', $html ) ) {
+			return $html;
+		}
+		// Async sheets used to switch themselves on as each finished, in
+		// download order. Between the first and the last the page ran on a
+		// partial cascade that matched neither the critical CSS nor the
+		// final layout, and the hero jumped (CLS 0.3 on a phone). Each sheet
+		// now only marks itself loaded; the script below switches them all
+		// on together, in document order, once every one has loaded.
+		// A cross-origin sheet (Google Fonts, a CDN font kit) keeps switching
+		// itself on: waiting for it let a slow third party hold back the
+		// site's own CSS. The flip script skips it too.
+		$own_hosts = self::first_party_hosts();
+		$rewritten = (string) preg_replace_callback(
+			'#<link\b[^>]*\bdata-(?:xs|xspeed)-async\b[^>]*>#i',
+			static function ( array $m ) use ( $own_hosts ): string {
+				if ( preg_match( '#\shref\s*=\s*["\']?(?:https?:)?//([^/"\'\s>:]+)#i', $m[0], $h ) && ! in_array( strtolower( $h[1] ), $own_hosts, true ) ) {
+					return $m[0];
+				}
+				$held = (string) preg_replace(
+					'#\sonload\s*=\s*"this\.media=\'[^\'"]*\'"#i',
+					' data-xs-hold="1" onload="' . self::HOLD_SETTLED_JS . '"',
+					$m[0],
+					1,
+					$count
+				);
+				if ( 1 !== $count ) {
+					return $m[0];
+				}
+				return self::settle_held_sheet_on_error( $held );
+			},
+			$html
+		);
+
+		// The hold style is added by a script, so a visitor without
+		// JavaScript, whom the flip script never reaches, keeps transitions:
+		// a style in the markup stayed for good there. The no-JS page is the
+		// page without this pass, apart from the inert script tags.
+		$style  = '<script id="xspeed-transition-hold-css">(function(){var s=document.createElement("style");s.id="xspeed-transition-hold";'
+			. 's.textContent="*,*::before,*::after{transition:none!important}";(document.head||document.documentElement).appendChild(s)})();</script>';
+		$script = '<script id="xspeed-transition-hold-js">(function(){var s=document.getElementById("xspeed-transition-hold"),d=0,dcl=0;'
+			. 'function links(){return document.querySelectorAll("link[data-xs-hold]")}'
+			. 'function flip(force){if(d)return;var l=links(),i;if(!force){if(!dcl)return;for(i=0;i<l.length;i++)if(l[i].media==="print"&&!l[i].hasAttribute("data-xs-ready"))return}'
+			. 'd=1;for(i=0;i<l.length;i++)if(l[i].media==="print")l[i].media=l[i].getAttribute("data-xs-async")||l[i].getAttribute("data-xspeed-async")||"all";'
+			. 'requestAnimationFrame(function(){requestAnimationFrame(function(){s&&s.parentNode&&s.parentNode.removeChild(s)})})}'
+			. 'window.xsCssFlip=function(){flip(0)};'
+			. 'document.addEventListener("DOMContentLoaded",function(){dcl=1;flip(0)});setTimeout(function(){flip(1)},5000)})();</script>';
+
+		$out = preg_replace( '#<head\b[^>]*>#i', '$0' . $style, $rewritten, 1, $count );
+		if ( null === $out || 1 !== $count ) {
+			return $html;
+		}
+		$with_script = preg_replace( '#</body>#i', $script . '$0', $out, 1, $count );
+		return ( null === $with_script || 1 !== $count ) ? $html : $with_script;
+	}
+
+	/**
+	 * Action: `wp_head` (priority 1). Show Elementor's entrance-animation
+	 * elements when Delay JS holds back the script that would show them.
+	 *
+	 * Elementor prints a widget with an entrance animation as
+	 * `elementor-invisible` (visibility:hidden), and its frontend script
+	 * removes the class as the widget scrolls into view. Delayed, that script
+	 * runs on the first interaction, so a hero with an entrance animation
+	 * stayed blank until then. Lighthouse never interacts: it measured an
+	 * empty first screen, and its LCP and CLS described a page nobody sees.
+	 *
+	 * Printed from the head rather than the cached-page buffer, which never
+	 * runs with the page cache off or on a bypassed page, where the script
+	 * is delayed all the same. The decision is the one delay_script_tag()
+	 * makes later in the request: Smart Delay delays the handle unless it is
+	 * excluded; plain delay keeps it live (its config snippet reads it)
+	 * unless the user named it. A rule left on a page with no such element
+	 * matches nothing.
+	 */
+	public static function print_entrance_animation_reveal(): void {
+		if ( self::skip_in_non_frontend_context() || ! self::delays_elementor_frontend() ) {
+			return;
+		}
+		/**
+		 * Filter: xspeed_delay_js_reveal_entrance_animations. Return false to
+		 * keep Elementor's entrance-animation elements hidden until the
+		 * delayed frontend script runs.
+		 *
+		 * @param bool $reveal Whether to show them at load. Default true.
+		 */
+		if ( ! apply_filters( 'xspeed_delay_js_reveal_entrance_animations', true ) ) {
+			return;
+		}
+		echo self::entrance_reveal_markup() . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed markup, no input.
+	}
+
+	/**
+	 * The reveal style, and the script that settles what the visitor has
+	 * already seen.
+	 *
+	 * Shown by the style, an element still carries its entrance animation,
+	 * and when the delayed frontend script runs Elementor plays it: the
+	 * element drops to opacity 0 and fades back in. For the first screen that
+	 * was the hero heading vanishing on the first mouse move. So when the
+	 * replay starts (`xspeed:replaying`, before any delayed script is back),
+	 * every animated element in the viewport has its animation set to
+	 * `none` in `data-settings`, which Elementor reads as "show it, do not
+	 * animate". Elements further down keep theirs and animate as they
+	 * scroll in, as on a page without Delay JS.
+	 */
+	public static function entrance_reveal_markup(): string {
+		return '<style id="xspeed-reveal-entrance">.elementor-invisible{visibility:visible!important}</style>'
+			. '<script id="xspeed-reveal-entrance-js" data-xs-nodelay>document.addEventListener("xspeed:replaying",function(){'
+			. 'var h=window.innerHeight,w=window.innerWidth,j=window.jQuery;'
+			. 'Array.prototype.forEach.call(document.querySelectorAll(".elementor-invisible[data-settings]"),function(e){'
+			. 'var r=e.getBoundingClientRect(),s,k;'
+			. 'if(!(r.width||r.height)||r.bottom<=0||r.top>=h||r.right<=0||r.left>=w)return;'
+			. 'try{s=JSON.parse(e.getAttribute("data-settings"))}catch(x){return}'
+			. 'if(!s||typeof s!=="object")return;'
+			. 'for(k in s)if(/^_?animation(_|$)/.test(k)&&!/(delay|duration)/.test(k))s[k]="none";'
+			. 'e.setAttribute("data-settings",JSON.stringify(s));e.classList.remove("elementor-invisible");'
+			. 'j&&j.removeData&&j.removeData(e,"settings")})},{once:true})</script>';
+	}
+
+	/** Will Delay JS hold back Elementor's frontend script on this request? */
+	private static function delays_elementor_frontend(): bool {
+		$opts = self::opts();
+		if ( empty( $opts['delay_js'] ) ) {
+			return false;
+		}
+		$handle = 'elementor-frontend';
+		$src    = self::registered_src( $handle );
+		if ( '' === $src ) {
+			return false; // Elementor is not loaded.
+		}
+		if ( self::smart_delay_enabled() ) {
+			return self::smart_delays_handle( $handle );
+		}
+		return ! self::is_excluded_script( $handle, $src, true ) && self::is_user_named_target( $handle, $src );
+	}
+
+	/**
 	 * Inline bootstrap that flips delayed scripts on the first user
 	 * interaction. Printed once on wp_footer priority 1000.
 	 */

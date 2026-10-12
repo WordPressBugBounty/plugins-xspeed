@@ -734,27 +734,140 @@ final class Asset_Combiner {
 	}
 
 	/**
+	 * Map a URL on this site to the file it names, whether or not the file
+	 * exists yet.
+	 *
+	 * The plugin, theme, uploads, content and includes bases WordPress
+	 * registers are checked first, and home_url() → ABSPATH only last. That
+	 * fallback alone assumed wp-content sits under ABSPATH, which is false on
+	 * Flywheel (/wordpress/ next to /www/wp-content), Bedrock (web/wp next to
+	 * web/app) and any WP_CONTENT_DIR define. There every stylesheet mapped to
+	 * a missing file, so Combine CSS combined nothing and said nothing. (#725)
+	 *
+	 * The URL must be on the site's host, and is then compared with each base
+	 * without its scheme, as Minifier::url_to_path() does. Behind a
+	 * TLS-terminating proxy, or after a move to https, the page, home_url()
+	 * and content_url() don't always agree on http or https, and a
+	 * subdirectory multisite's home_url() carries a path its content URLs
+	 * don't. A prefix test against home_url() refused all of those.
+	 *
+	 * `.` and `..` segments are resolved first, as a browser would, so a href
+	 * can't climb out of the base it appears to be under.
+	 *
+	 * @param string $url Absolute URL.
+	 */
+	public static function url_to_candidate_path( string $url ): ?string {
+		if ( '' === $url ) {
+			return null;
+		}
+		$clean = strtok( $url, '?#' );
+		if ( ! is_string( $clean ) ) {
+			return null;
+		}
+		$host      = wp_parse_url( $clean, PHP_URL_HOST );
+		$site_host = wp_parse_url( home_url(), PHP_URL_HOST );
+		if ( ! is_string( $host ) || '' === $host || ! is_string( $site_host ) || strtolower( $host ) !== strtolower( $site_host ) ) {
+			return null;
+		}
+		$match = self::remove_dot_segments( self::strip_scheme( $clean ) );
+		foreach ( self::path_bases() as $pair ) {
+			list( $base_url, $base_dir ) = $pair;
+			$prefix = self::strip_scheme( rtrim( (string) $base_url, '/' ) );
+			if ( '' === $prefix || '' === (string) $base_dir || 0 !== strpos( $match, $prefix . '/' ) ) {
+				continue;
+			}
+			return rtrim( (string) $base_dir, '/' ) . substr( $match, strlen( $prefix ) );
+		}
+		return null;
+	}
+
+	/**
+	 * The reverse of url_to_candidate_path(), for rebasing `@import` and
+	 * `url()` references found in a file we read from disk. A path under no
+	 * known base is returned as given.
+	 *
+	 * @param string $path Absolute filesystem path.
+	 */
+	public static function path_to_url( string $path ): string {
+		foreach ( self::path_bases() as $pair ) {
+			list( $base_url, $base_dir ) = $pair;
+			$dir = rtrim( (string) $base_dir, '/' );
+			if ( '' === $dir || '' === (string) $base_url || 0 !== strpos( $path, $dir . '/' ) ) {
+				continue;
+			}
+			// On home_url()'s scheme, as the rebased URL always was before
+			// (#725). content_url() and plugins_url() follow is_ssl(), which
+			// reads false behind a TLS-terminating proxy, and an http url()
+			// in a combined file is blocked as mixed content on an https page.
+			$scheme = wp_parse_url( home_url(), PHP_URL_SCHEME );
+			$scheme = is_string( $scheme ) && '' !== $scheme ? $scheme : 'https';
+			return $scheme . ':' . self::strip_scheme( rtrim( (string) $base_url, '/' ) ) . substr( $path, strlen( $dir ) );
+		}
+		return $path;
+	}
+
+	/**
+	 * URL base → directory pairs, most specific first. The last pair is the
+	 * old home_url() → ABSPATH mapping, so an install with wp-content under
+	 * ABSPATH resolves exactly as it did before.
+	 *
+	 * @return array<int,array{0:string,1:string}>
+	 */
+	private static function path_bases(): array {
+		$uploads = wp_get_upload_dir();
+		return array(
+			array( plugins_url(), WP_PLUGIN_DIR ),
+			array( get_stylesheet_directory_uri(), get_stylesheet_directory() ),
+			array( get_template_directory_uri(), get_template_directory() ),
+			array( (string) ( $uploads['baseurl'] ?? '' ), (string) ( $uploads['basedir'] ?? '' ) ),
+			array( content_url(), WP_CONTENT_DIR ),
+			array( includes_url(), ABSPATH . WPINC ),
+			array( home_url(), ABSPATH ),
+		);
+	}
+
+	private static function strip_scheme( string $url ): string {
+		return (string) preg_replace( '#^https?://#i', '//', $url );
+	}
+
+	/**
+	 * Resolve `.` and `..` in the path of a scheme-less `//host/path` URL.
+	 * `..` never climbs above the host.
+	 */
+	private static function remove_dot_segments( string $url ): string {
+		$slash = strpos( $url, '/', 2 );
+		if ( false === $slash ) {
+			return $url;
+		}
+		$out = array();
+		foreach ( explode( '/', substr( $url, $slash + 1 ) ) as $seg ) {
+			if ( '.' === $seg ) {
+				continue;
+			}
+			if ( '..' === $seg ) {
+				array_pop( $out );
+				continue;
+			}
+			$out[] = $seg;
+		}
+		return substr( $url, 0, $slash ) . '/' . implode( '/', $out );
+	}
+
+	/**
 	 * Resolve an absolute URL to a local filesystem path + mtime, or
 	 * return null if the URL isn't on this site / outside web root.
 	 *
 	 * @return array{url:string,path:string,mtime:int}|null
 	 */
 	public static function local_info( string $url ): ?array {
-		if ( '' === $url ) {
-			return null;
-		}
-		$home = home_url();
-		if ( 0 !== strpos( $url, $home ) ) {
-			return null;
-		}
-		// Strip query / fragment for filesystem lookup; keep them in
+		// Query / fragment are stripped for the filesystem lookup and kept in
 		// the URL we hash against.
-		$clean = strtok( $url, '?' );
-		if ( ! is_string( $clean ) ) {
-			return null;
-		}
-		$path = ABSPATH . ltrim( str_replace( $home, '', $clean ), '/' );
-		if ( ! file_exists( $path ) || ! is_readable( $path ) ) {
+		$path = self::url_to_candidate_path( $url );
+		// Only the asset types the combiners read. Every caller wants a
+		// stylesheet or a script, and the bytes end up in a public combined
+		// file, so a href that names any other file (wp-config.php, say) must
+		// not be read at all.
+		if ( null === $path || ! preg_match( '/\.(?:css|js|mjs)$/i', $path ) || ! file_exists( $path ) || ! is_readable( $path ) ) {
 			return null;
 		}
 		return array(

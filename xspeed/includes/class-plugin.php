@@ -81,6 +81,9 @@ class Plugin {
 		// button and the admin-post handler the admin-bar item also uses.
 		Purge_Ui::boot();
 
+		// While the page cache is off, every admin page says so (#594).
+		Cache_Off_Notice::boot();
+
 		// Phase 0 architecture — managers + Free modules. v1 services
 		// (Cache/Minifier/Gzip) are NOT yet Modules; they'll be refactored
 		// in a follow-up PR with parity tests.

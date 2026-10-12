@@ -567,11 +567,7 @@ final class Css_Combine_Buffer {
 
 	/** Inverse of local_path, for @import + url() resolution. */
 	private static function path_to_url( string $path ): string {
-		$root = defined( 'ABSPATH' ) ? rtrim( ABSPATH, '/' ) : '';
-		if ( '' !== $root && 0 === strpos( $path, $root ) ) {
-			return rtrim( home_url(), '/' ) . str_replace( $root, '', $path );
-		}
-		return $path;
+		return Asset_Combiner::path_to_url( $path );
 	}
 
 	/**

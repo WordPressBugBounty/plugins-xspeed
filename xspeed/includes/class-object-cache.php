@@ -229,8 +229,17 @@ final class Object_Cache {
 			$timeout = self::int( $opts, 'connection_timeout', 1 );
 			$persist = ! empty( $opts['persistent'] );
 
-			$lines[] = "define( 'WP_REDIS_HOST', '" . self::esc( $host ) . "' );";
-			$lines[] = "define( 'WP_REDIS_PORT', " . $port . ' );';
+			// A socket is written the way Redis Object Cache expects one,
+			// scheme plus path, so the snippet works with that plugin too.
+			// xSpeed's drop-in reads the same pair. (#566)
+			$socket = Redis_Client::socket_path( $host );
+			if ( '' !== $socket ) {
+				$lines[] = "define( 'WP_REDIS_SCHEME', 'unix' );";
+				$lines[] = "define( 'WP_REDIS_PATH', '" . self::esc( $socket ) . "' );";
+			} else {
+				$lines[] = "define( 'WP_REDIS_HOST', '" . self::esc( $host ) . "' );";
+				$lines[] = "define( 'WP_REDIS_PORT', " . $port . ' );';
+			}
 			// Emit the ACL username only when set (Redis 6+). The drop-in
 			// reads it; an empty user keeps the legacy default-user behavior.
 			if ( '' !== $user ) {
@@ -338,11 +347,19 @@ final class Object_Cache {
 			$user    = self::str( $opts, 'redis_user', '' );
 			$pass    = self::str( $opts, 'redis_password', '' );
 			$db      = self::int( $opts, 'redis_database', 0 );
+			// A socket path has no port. phpredis opens a socket only when the
+			// port is below 1, and the messages should name the path the user
+			// typed rather than "path:6379". (#566)
+			$socket = Redis_Client::socket_path( $host );
+			$where  = '' !== $socket ? $socket : "{$host}:{$port}";
 
 			if ( class_exists( '\\Redis' ) ) {
-				$redis = new \Redis();
-				if ( ! @$redis->connect( $host, $port, $timeout ) ) {
-					return self::test_result( false, $backend, "Could not connect to Redis at {$host}:{$port}." );
+				$redis     = new \Redis();
+				$connected = '' !== $socket
+					? @$redis->connect( $socket, 0, $timeout )
+					: @$redis->connect( $host, $port, $timeout );
+				if ( ! $connected ) {
+					return self::test_result( false, $backend, "Could not connect to Redis at {$where}." );
 				}
 				// Redis 6+ ACL: when a username is set, authenticate as that user
 				// (phpredis ≥ 5.3 accepts ['user'=>..,'pass'=>..]); otherwise keep
@@ -357,7 +374,7 @@ final class Object_Cache {
 				$pong = @$redis->ping();
 				$ok   = ( '+PONG' === $pong || true === $pong || 'PONG' === $pong );
 				if ( ! $ok ) {
-					return self::test_result( false, $backend, "Redis at {$host}:{$port} did not respond to PING.", $start );
+					return self::test_result( false, $backend, "Redis at {$where} did not respond to PING.", $start );
 				}
 				// Write-verification: PING only proves auth, not that the user can
 				// STORE data. ACL-namespaced hosts (xCloud) restrict a user to a
@@ -371,15 +388,15 @@ final class Object_Cache {
 				$got   = @$redis->get( $probe ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- same.
 				@$redis->del( $probe ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort cleanup.
 				if ( ! $set || '1' !== (string) $got ) {
-					return self::test_result( false, $backend, self::write_denied_message( $opts, $host, $port ), $start );
+					return self::test_result( false, $backend, self::write_denied_message( $opts, $where ), $start );
 				}
-				return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$host}:{$port} (phpredis).", $opts ), $start );
+				return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$where} (phpredis).", $opts ), $start );
 			}
 
 			// Pure-PHP fallback — our own client, zero dependencies.
 			$rc = new Redis_Client( $host, $port, (float) $timeout, false );
 			if ( ! $rc->connect() ) {
-				return self::test_result( false, $backend, "Could not connect to Redis at {$host}:{$port}." );
+				return self::test_result( false, $backend, "Could not connect to Redis at {$where}." );
 			}
 			// Authenticate when a user OR a password is set. Gating on password
 			// alone skipped auth for the "ACL user + empty password" case, which
@@ -395,7 +412,7 @@ final class Object_Cache {
 			$ok   = ( is_string( $pong ) && false !== stripos( $pong, 'PONG' ) );
 			if ( ! $ok ) {
 				$rc->close();
-				return self::test_result( false, $backend, "Redis at {$host}:{$port} did not respond to PING.", $start );
+				return self::test_result( false, $backend, "Redis at {$where} did not respond to PING.", $start );
 			}
 			// Write-verification round-trip — same rationale as the phpredis path
 			// above. (FBS-83118 OC-2)
@@ -405,9 +422,9 @@ final class Object_Cache {
 			$rc->del( $probe );
 			$rc->close();
 			if ( ! $set || '1' !== (string) $got ) {
-				return self::test_result( false, $backend, self::write_denied_message( $opts, $host, $port ), $start );
+				return self::test_result( false, $backend, self::write_denied_message( $opts, $where ), $start );
 			}
-			return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$host}:{$port} (built-in client).", $opts ), $start );
+			return self::test_result( true, $backend, self::with_prefix_advisory( "Connected to Redis at {$where} (built-in client).", $opts ), $start );
 		} catch ( \Throwable $e ) {
 			return self::test_result( false, $backend, 'Connection error: ' . $e->getMessage() );
 		}
@@ -637,17 +654,16 @@ final class Object_Cache {
 	 * hosts at the fix (match the key prefix to the host's Redis Object Cache
 	 * Key), which is exactly the xCloud failure mode. (FBS-83118 OC-2)
 	 *
-	 * @param array  $opts Settings array.
-	 * @param string $host Redis host.
-	 * @param int    $port Redis port.
+	 * @param array  $opts  Settings array.
+	 * @param string $where host:port, or the socket path.
 	 * @return string
 	 */
-	private static function write_denied_message( array $opts, string $host, int $port ): string {
+	private static function write_denied_message( array $opts, string $where ): string {
 		$has_prefix = '' !== self::str( $opts, 'key_prefix', '' );
 		$hint       = $has_prefix
 			? 'The Redis user may lack write permission for this key prefix (NOPERM).'
 			: 'On ACL/namespaced Redis (e.g. xCloud), set Cache key prefix to the host\'s "Redis Object Cache Key" so writes land in the permitted namespace.';
-		return "Connected to Redis at {$host}:{$port}, but the cache could not store data. {$hint}";
+		return "Connected to Redis at {$where}, but the cache could not store data. {$hint}";
 	}
 
 	/**

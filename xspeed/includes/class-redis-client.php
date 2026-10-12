@@ -2,7 +2,7 @@
 /**
  * XSpeed_Redis_Client — a minimal, dependency-free Redis client.
  *
- * Speaks the Redis wire protocol (RESP) directly over a TCP socket. It exists
+ * Speaks the Redis wire protocol (RESP) directly over a TCP or unix socket. It exists
  * so xSpeed's object cache can talk to Redis WITHOUT the phpredis extension and
  * WITHOUT bundling a heavyweight library (Predis ships 700+ files for cluster /
  * sentinel / pub-sub / transactions we never use). This implements exactly the
@@ -50,6 +50,28 @@ class Redis_Client {
 	}
 
 	/**
+	 * The unix socket path a Redis host names, or '' for a network host.
+	 *
+	 * Hosts that run Redis on a socket only (Hetzner managed servers, shared
+	 * LiteSpeed hosting) hand out a path rather than an address, written as
+	 * `/run/redis/redis.sock`, `unix:/run/redis/redis.sock` (Hetzner's own
+	 * docs) or `unix:///run/redis/redis.sock`. A socket has no port, so the
+	 * caller ignores the configured one when this returns a path. (#566)
+	 *
+	 * The drop-in carries a copy as xspeed_oc_redis_socket(), because it loads
+	 * before this class can; ObjectCacheSocketTest runs both over the same
+	 * inputs so they cannot drift.
+	 */
+	public static function socket_path( string $host ): string {
+		$host = trim( $host );
+		if ( 0 === stripos( $host, 'unix:' ) ) {
+			// unix:///path and unix:/path both name /path.
+			$host = '/' . ltrim( substr( $host, 5 ), '/' );
+		}
+		return ( '' !== $host && '/' === $host[0] && '/' !== $host ) ? $host : '';
+	}
+
+	/**
 	 * Open the socket. Returns true on success. Never throws — callers check
 	 * the boolean and fall back to a non-persistent cache on failure.
 	 */
@@ -57,9 +79,10 @@ class Redis_Client {
 		$flags  = STREAM_CLIENT_CONNECT | ( $this->persistent ? STREAM_CLIENT_PERSISTENT : 0 );
 		$errno  = 0;
 		$errstr = '';
+		$path   = self::socket_path( $this->host );
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.PHP.NoSilencedErrors.Discouraged -- A raw stream socket is the only way to speak the Redis protocol; WP_Filesystem cannot open TCP sockets. Errors are captured via $errno/$errstr and surfaced as a boolean.
 		$sock = @stream_socket_client(
-			"tcp://{$this->host}:{$this->port}",
+			'' !== $path ? "unix://{$path}" : "tcp://{$this->host}:{$this->port}",
 			$errno,
 			$errstr,
 			$this->timeout,

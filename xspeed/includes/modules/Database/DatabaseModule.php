@@ -202,6 +202,13 @@ final class DatabaseModule extends Module {
 		wp_clear_scheduled_hook( Database_Cleaner::CRON_HOOK );
 	}
 
+	/**
+	 * The schedule or the selected types changed: reschedule, and drop the
+	 * scheduled clean's resume point. A cursor left in place would carry on
+	 * deleting a category the user has just switched off. Any other save
+	 * returns early and keeps both. clean() also discards a cursor written for
+	 * a different selection, so this is the belt to that brace.
+	 */
 	public function on_settings_change( $old, $new ): void {
 		// A revision-limit save must not reschedule cleanup: apply_schedule()
 		// restarts the timer, which pulled a weekly run forward on every save.
@@ -213,12 +220,14 @@ final class DatabaseModule extends Module {
 		}
 		$schedule = is_array( $new ) ? (string) ( $new['schedule'] ?? 'manual' ) : 'manual';
 		$types    = is_array( $new ) && isset( $new['included_types'] ) && is_array( $new['included_types'] ) ? $new['included_types'] : array();
+		Database_Cleaner::reset_cursor();
 		Database_Cleaner::apply_schedule( $schedule, $types );
 	}
 
 	public function on_settings_added( $name, $value ): void {
 		$schedule = is_array( $value ) ? (string) ( $value['schedule'] ?? 'manual' ) : 'manual';
 		$types    = is_array( $value ) && isset( $value['included_types'] ) && is_array( $value['included_types'] ) ? $value['included_types'] : array();
+		Database_Cleaner::reset_cursor();
 		Database_Cleaner::apply_schedule( $schedule, $types );
 	}
 
@@ -257,15 +266,26 @@ final class DatabaseModule extends Module {
 		switch ( $action ) {
 			case 'scan':
 				foreach ( Database_Cleaner::scan() as $key => $row ) {
-					\WP_CLI::log( sprintf( '%-22s %s — %d rows', $key, $row['label'], $row['count'] ) );
+					\WP_CLI::log( sprintf( '%-26s %s — %d rows', $key, $row['label'], $row['count'] ) );
 				}
 				return;
 
 			case 'clean':
 				$types = isset( $assoc['types'] ) ? array_filter( array_map( 'trim', explode( ',', (string) $assoc['types'] ) ) ) : array_keys( Database_Cleaner::type_labels() );
 				$res   = Database_Cleaner::clean( $types );
-				foreach ( $res['cleaned'] as $key => $affected ) {
-					\WP_CLI::log( sprintf( '%-22s %d removed', $key, $affected ) );
+				foreach ( $res['skipped'] as $key ) {
+					\WP_CLI::warning( sprintf( 'Unknown type "%s" skipped. Run `wp xspeed db scan` for the list.', $key ) );
+				}
+				foreach ( $res['remaining'] as $key => $left ) {
+					\WP_CLI::log( sprintf( '%-26s %d removed, %d left', $key, (int) ( $res['cleaned'][ $key ] ?? 0 ), $left ) );
+				}
+				$left = array_sum( $res['remaining'] );
+				if ( $res['partial'] && $left > 0 ) {
+					// Each run is time-boxed so a large trash can't outlive the
+					// request. Nothing carries over: the next run starts over
+					// on whatever still matches.
+					\WP_CLI::warning( sprintf( 'Stopped at the time limit. %d left — run it again to continue.', $left ) );
+					return;
 				}
 				\WP_CLI::success( 'Cleanup complete.' );
 				return;

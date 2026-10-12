@@ -390,7 +390,7 @@ final class Cache_GC {
 			// can enforce it. A site caching for a week would otherwise hand
 			// out a dead nonce for six and a half days of it, breaking every
 			// anonymous form on the page.
-			$expires_file = dirname( $path ) . '/.xspeed-expires';
+			$expires_file = dirname( $path ) . '/' . Cache::EXPIRES_MARKER;
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- sidecar read on a cron sweep; WP_Filesystem is not loaded here.
 			$expires = is_readable( $expires_file ) ? (int) @file_get_contents( $expires_file ) : 0; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- file may vanish between the check and the read.
 			if ( $expires > 0 ) {
@@ -520,26 +520,11 @@ final class Cache_GC {
 
 	/**
 	 * Delete a cache entry and every sibling that only exists because of it,
-	 * so the sweep never creates the orphans it is there to remove:
-	 *
-	 *   <md5>.html    → <md5>.meta, <md5>.html.br
-	 *   index.html    → index.html.br
-	 *   <key>.css/js  → (none)
+	 * so the sweep never creates the orphans it is there to remove.
 	 */
 	private static function delete_entry( string $path ): void {
 		wp_delete_file( $path );
-
-		$br = $path . '.br';
-		if ( file_exists( $br ) ) {
-			wp_delete_file( $br );
-		}
-
-		if ( '.html' === substr( $path, -5 ) ) {
-			$meta = substr( $path, 0, -5 ) . '.meta';
-			if ( file_exists( $meta ) ) {
-				wp_delete_file( $meta );
-			}
-		}
+		self::delete_siblings( $path );
 
 		// Deleting an asset and invalidating the pages that embed it are ONE
 		// operation, so the two caches can never disagree. is_referenced()
@@ -551,6 +536,32 @@ final class Cache_GC {
 		$min_root = self::phase_root( 'min' );
 		if ( null !== $min_root && 0 === strpos( $path, $min_root . '/' ) ) {
 			self::purge_pages_referencing( ltrim( str_replace( $min_root, '', $path ), '/' ) );
+		}
+	}
+
+	/**
+	 * The files that exist only because of $path:
+	 *
+	 *   <md5>.html    → <md5>.meta, <md5>.html.br, <md5>.html.br.size
+	 *   index.html    → index.html.br, index.html.br.size, the expires marker
+	 *   <key>.css/js  → its .br and .br.size, if any
+	 *
+	 * The marker and the size record were missed once, which left every
+	 * nonce page's folder non-empty so prune_empty_dirs() could never remove
+	 * it (#636).
+	 */
+	private static function delete_siblings( string $path ): void {
+		$siblings = array( $path . '.br', $path . '.br.size' );
+		if ( '.html' === substr( $path, -5 ) ) {
+			$siblings[] = substr( $path, 0, -5 ) . '.meta';
+		}
+		if ( 'index.html' === basename( $path ) ) {
+			$siblings[] = dirname( $path ) . '/' . Cache::EXPIRES_MARKER;
+		}
+		foreach ( $siblings as $sibling ) {
+			if ( file_exists( $sibling ) ) {
+				wp_delete_file( $sibling );
+			}
 		}
 	}
 
@@ -584,11 +595,7 @@ final class Cache_GC {
 				}
 
 				wp_delete_file( $file );
-				foreach ( array( $file . '.br', substr( $file, 0, -5 ) . '.meta' ) as $sibling ) {
-					if ( file_exists( $sibling ) ) {
-						wp_delete_file( $sibling );
-					}
-				}
+				self::delete_siblings( $file );
 			}
 		}
 	}

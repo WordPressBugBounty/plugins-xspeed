@@ -134,7 +134,7 @@ final class Server_Caches {
 		} catch ( \Throwable $e ) {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG && function_exists( 'error_log' ) ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- built-in integration failure after local invalidation.
-				error_log( '[xspeed] nginx FastCGI response purge failed: ' . $e->getMessage() );
+				error_log( '[xspeed] Nginx Helper response purge failed: ' . $e->getMessage() );
 			}
 		}
 
@@ -334,7 +334,7 @@ final class Server_Caches {
 
 		// Nothing to decide on a site with no nginx zone, so the filter below
 		// is only asked when there is one.
-		if ( ! Host_Page_Caches::nginx_helper_is_fastcgi() ) {
+		if ( null === Host_Page_Caches::nginx_helper_page_cache() ) {
 			return;
 		}
 
@@ -441,15 +441,18 @@ final class Server_Caches {
 	 * the zone covers every URL queued before it, so those are dropped.
 	 */
 	private static function purge_nginx_zone(): void {
-		self::note_forwarded( 'Nginx Helper' );
 		self::$nginx['urls']     = array();
 		self::$nginx['overflow'] = false;
 		if ( self::$nginx['zone_done'] ) {
+			self::note_forwarded( 'Nginx Helper' );
 			self::$nginx['zone_again'] = true;
 			self::arm_nginx_flush();
 			return;
 		}
+		// Named only once it was sent: a listener on Nginx Helper's action
+		// that throws means the zone was not cleared. (#654)
 		if ( Host_Page_Caches::purge_nginx_helper() ) {
+			self::note_forwarded( 'Nginx Helper' );
 			self::$nginx['zone_done'] = true;
 		}
 	}
@@ -525,7 +528,9 @@ final class Server_Caches {
 		self::$nginx['zone_again'] = false;
 		self::$nginx['armed']      = false;
 
-		if ( ! Host_Page_Caches::nginx_helper_is_fastcgi() ) {
+		// Either mode takes a zone clear; only URLs queued under FastCGI
+		// reach the per-URL branch below.
+		if ( null === Host_Page_Caches::nginx_helper_page_cache() ) {
 			return;
 		}
 		if ( $work['zone_again'] ) {

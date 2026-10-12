@@ -378,6 +378,13 @@ class Cache {
 		// the save_post gate rightly ignores. Without this, cached pages kept
 		// the old header, colours and custom CSS for the whole TTL.
 		add_action( 'customize_save_after', array( __CLASS__, 'on_customize_save' ), 10, 0 );
+		// Adding, removing or editing a widget on the Widgets screen (classic
+		// or block) only writes options: `sidebars_widgets` for which widget
+		// sits where, `widget_<type>` for its settings. No hook above fires,
+		// so the sidebar on every cached page stayed as it was until expiry.
+		add_action( 'update_option_sidebars_widgets', array( __CLASS__, 'on_widgets_change' ), 10, 0 );
+		add_action( 'add_option_sidebars_widgets', array( __CLASS__, 'on_widgets_change' ), 10, 0 );
+		add_action( 'updated_option', array( __CLASS__, 'on_widget_option_change' ), 10, 1 );
 		// …except the four hooks above that fire on ordinary visitor actions.
 		// Attached bare, purge_all() can't see WHAT changed, so on a store
 		// every order, every product review and every checkout
@@ -2867,6 +2874,17 @@ class Cache {
 		return $decoded !== $path && Glob_Matcher::any_match( $patterns, $decoded );
 	}
 
+	/**
+	 * Whether this request's path matches an Excluded URLs list, by the
+	 * page cache's own rule. Turbo Render asks it when it buffers the page
+	 * itself (page cache off), so both read an entry the same way.
+	 *
+	 * @param string[] $patterns Exclusion entries.
+	 */
+	public static function request_matches_exclusions( array $patterns ): bool {
+		return self::path_matches_exclusions( $patterns, self::request_path() );
+	}
+
 	public static function cache_key() {
 		$host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : 'default';
 
@@ -3697,9 +3715,21 @@ class Cache {
 		 * + preconnect hints and add fetchpriority="high" to the hero <img>.
 		 * Keep listeners fast and idempotent; this is the on-wire body.
 		 *
+		 * A result with fewer than 255 non-whitespace bytes is treated as a
+		 * failed listener and replaced by the rendered page.
+		 *
 		 * @param string $full Complete page HTML.
 		 */
-		$full = (string) apply_filters( 'xspeed_cache_final_html', $full );
+		$rendered = $full;
+		$full     = apply_filters( 'xspeed_cache_final_html', $full );
+
+		// A listener whose preg_* call fails returns null, which a cast turns
+		// into ''. That empty string used to be signed, sent and cached, and
+		// nginx then served the signature comment as a HIT to every visitor
+		// until purge. Same floor as the rendered page above. (#723)
+		if ( ! is_string( $full ) || strlen( trim( $full ) ) < 255 ) {
+			$full = $rendered;
+		}
 		if ( $single_chunk ) {
 			$buffer = $full;
 		}
@@ -3899,6 +3929,13 @@ class Cache {
 	private const STATIC_SKIP_TRANSIENT = 'xspeed_static_skip';
 
 	/**
+	 * File beside a static index.html that holds its nonce deadline. GC reads
+	 * it; every path that deletes the page must delete it too, or the folder
+	 * can never be removed.
+	 */
+	public const EXPIRES_MARKER = '.xspeed-expires';
+
+	/**
 	 * Remember why a page was kept out of the static tree, for Health.
 	 *
 	 * Records the URL, the reason, and — for the nonce case — the distinct
@@ -4061,7 +4098,7 @@ class Cache {
 		// action below so a listener that shells out cannot race the sweep.
 		if ( false !== $written && $nonce_ttl > 0 ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- same rationale as the write above.
-			file_put_contents( $dir . '/.xspeed-expires', (string) ( time() + $nonce_ttl ), LOCK_EX );
+			file_put_contents( $dir . '/' . self::EXPIRES_MARKER, (string) ( time() + $nonce_ttl ), LOCK_EX );
 		}
 
 		if ( false !== $written ) {
@@ -7334,6 +7371,48 @@ class Cache {
 	}
 
 	/**
+	 * Whether a widget change already purged in this request.
+	 *
+	 * @var bool
+	 */
+	private static $widgets_purged = false;
+
+	/**
+	 * A widget option changed: purge when it is a widget's settings.
+	 *
+	 * @param string $option Option name.
+	 */
+	public static function on_widget_option_change( $option ): void {
+		if ( is_string( $option ) && 0 === strpos( $option, 'widget_' ) ) {
+			self::on_widgets_change();
+		}
+	}
+
+	/**
+	 * A widget was added, removed, moved or edited. Sidebars render on every
+	 * page, so the whole site goes, once per request: one save writes both
+	 * `sidebars_widgets` and the widget's own option.
+	 *
+	 * A Customizer publish writes the same options and purges on its own
+	 * (on_customize_save()), so it is left to that.
+	 */
+	public static function on_widgets_change(): void {
+		if ( self::$widgets_purged || did_action( 'customize_save' ) ) {
+			return;
+		}
+		self::$widgets_purged = true;
+		self::purge_all(
+			'widgets',
+			null,
+			array(
+				'scope'  => 'site',
+				'intent' => 'presentation',
+				'urls'   => array(),
+			)
+		);
+	}
+
+	/**
 	 * Purge this site's pages after a Customizer publish.
 	 *
 	 * A presentation change: every page's markup or inline CSS may differ, so
@@ -7714,6 +7793,12 @@ class Cache {
 			if ( substr( $entry, -5 ) === '.html' ) {
 				self::sweep_delete( $path );
 				++$removed;
+			} elseif ( self::EXPIRES_MARKER === $entry ) {
+				// store_static()'s deadline for a nonce page. Left behind, it
+				// kept every such folder from being removed, and the failed
+				// rmdir warned once per folder: Query Monitor turned those
+				// into enough response headers to 502 a post save (#636).
+				self::sweep_delete( $path );
 			} elseif ( substr( $entry, -3 ) === '.br' || substr( $entry, -8 ) === '.br.size' ) {
 				// Precompressed sibling (index.html.br) and the record of its
 				// length. Remove both so a purge doesn't orphan stale Brotli
@@ -9750,9 +9835,11 @@ class Cache {
 	 * accounting), and PHP/the drop-in is the fallback. To guarantee
 	 * LSCache doesn't shadow that with its own copy — some LiteSpeed
 	 * configs cache by default — we send an explicit `no-cache` control so
-	 * the server defers to our rewrite. Skipped when the LiteSpeed Cache
-	 * plugin is active (it owns its own header policy; our Conflict
-	 * registry handles that coexistence separately).
+	 * the server defers to our rewrite. Skipped while the LiteSpeed Cache
+	 * plugin's page cache may be on: it owns its own header policy then,
+	 * and enabling ours is refused while its page cache is on (#653). With
+	 * its page cache provably off, xSpeed owns the cache exactly as when
+	 * the plugin is absent, so the stand-down is sent.
 	 */
 	public static function maybe_emit_lscache_headers(): void {
 		if ( headers_sent() ) {
@@ -9765,7 +9852,8 @@ class Cache {
 		// isn't auto-loaded on front-end requests. Use the option layer
 		// directly to avoid pulling in admin code from a render path.
 		$active = (array) get_option( 'active_plugins', array() );
-		if ( in_array( 'litespeed-cache/litespeed-cache.php', $active, true ) ) {
+		if ( in_array( 'litespeed-cache/litespeed-cache.php', $active, true )
+			&& false !== Cache_Plugin_Catalog::litespeed_page_cache_state() ) {
 			return;
 		}
 
@@ -10759,6 +10847,15 @@ class Cache {
 	}
 
 	private static function ownership_blocker_message( string $code, string $label ): string {
+		// The plugin can stay active. Only its page cache is in the way, so
+		// say that rather than "deactivate it". (#653)
+		if ( Page_Cache_Detector::BLOCKER_PAGE_CACHE_SWITCHED_ON === $code && '' !== $label ) {
+			return sprintf(
+				/* translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache. */
+				__( "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active.", 'xspeed' ),
+				$label
+			);
+		}
 		if ( '' !== $label ) {
 			return sprintf( __( '%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed.', 'xspeed' ), $label );
 		}

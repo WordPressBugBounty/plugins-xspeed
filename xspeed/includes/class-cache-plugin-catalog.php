@@ -113,6 +113,11 @@ final class Cache_Plugin_Catalog {
 					'paths'         => array( 'litespeed', 'cache/litespeed' ),
 					'dropin_tokens' => array( 'LiteSpeed_Cache', 'LSCWP' ),
 				),
+				// It caches at server level and writes no drop-in, so its
+				// own switch is the only proof of whether it serves pages.
+				// GridPane keeps it installed on OpenLiteSpeed and turns
+				// the page cache on or off there. (#653)
+				'page_cache_state' => array( self::class, 'litespeed_page_cache_state' ),
 			),
 			'w3-total-cache/w3-total-cache.php'            => array(
 				'label'        => 'W3 Total Cache',
@@ -463,6 +468,9 @@ final class Cache_Plugin_Catalog {
 				'capabilities' => array_values( (array) ( $entry['capabilities'] ?? array() ) ),
 				'strategy'     => (array) ( $entry['strategy'] ?? array() ),
 				'signals'      => (array) ( $entry['signals'] ?? array() ),
+				// Reads the plugin's own page-cache setting: true on, false
+				// off, null when it cannot be read. See page_cache_state().
+				'page_cache_state' => is_callable( $entry['page_cache_state'] ?? null ) ? $entry['page_cache_state'] : null,
 			);
 		}
 
@@ -500,6 +508,91 @@ final class Cache_Plugin_Catalog {
 	public static function is_page_cache( string $plugin_file ): bool {
 		$entry = self::get( $plugin_file );
 		return null !== $entry && in_array( self::CAP_PAGE_CACHE, $entry['capabilities'], true );
+	}
+
+	/**
+	 * Is this plugin's own page cache switched on?
+	 *
+	 * True when its settings say on, false when they say off, null when we
+	 * cannot tell (no reader for this plugin, or the setting is not stored
+	 * where we look). "Active" and "caching pages" are different facts: a
+	 * plugin can stay active for its other features with its page cache off,
+	 * and only false lets a caller treat it as not caching. Null keeps the
+	 * old "it is active, so it may be caching" answer.
+	 *
+	 * Readers only read options. They never load the plugin's code.
+	 */
+	public static function page_cache_state( string $plugin_file ): ?bool {
+		$entry = self::get( $plugin_file );
+		if ( null === $entry || ! is_callable( $entry['page_cache_state'] ) ) {
+			return null;
+		}
+		$state = call_user_func( $entry['page_cache_state'] );
+		return is_bool( $state ) ? $state : null;
+	}
+
+	/**
+	 * LiteSpeed Cache's page-cache switch, read the way its own
+	 * Conf::define_cache() decides it (checked against 7.9):
+	 *
+	 *   - `cache` is 1 (on), 0 (off), or on multisite 2, "use the network
+	 *     setting", which lives in the network's own `litespeed.conf.cache`;
+	 *   - QUIC.cloud CDN (`cdn-quic`) turns the page cache on by itself;
+	 *   - Toolbox > "Disable All Features" (`debug-disable_all`) turns
+	 *     everything off, whatever `cache` says.
+	 *
+	 * Without a LiteSpeed web server or QUIC.cloud its page cache has
+	 * nothing to run on, so "on" proves nothing there and the answer is
+	 * null. "Off" is off on every server.
+	 */
+	public static function litespeed_page_cache_state(): ?bool {
+		if ( ! function_exists( 'get_option' ) ) {
+			return null;
+		}
+
+		if ( self::option_is_on( get_option( 'litespeed.conf.debug-disable_all', null ) ) ) {
+			return false;
+		}
+		// "Disable All Features for 24 hours" stores when the pause ends, and
+		// LiteSpeed Cache stands down until then (its Debug2::is_tmp_disable()).
+		$paused_until = get_option( 'litespeed.conf.debug-disable_tmp', 0 );
+		if ( is_numeric( $paused_until ) && time() < (int) $paused_until ) {
+			return false;
+		}
+
+		$cache = get_option( 'litespeed.conf.cache', null );
+		if ( null === $cache || false === $cache || ! is_scalar( $cache ) ) {
+			// Not stored per setting: LiteSpeed Cache 3.x or older, or not
+			// set up yet. Unknown, not off.
+			return null;
+		}
+
+		$on = 1 === (int) $cache;
+		if ( 2 === (int) $cache ) {
+			if ( ! function_exists( 'is_multisite' ) || ! is_multisite() || ! function_exists( 'get_site_option' ) ) {
+				return null;
+			}
+			$network = get_site_option( 'litespeed.conf.cache', null );
+			if ( null === $network || ! is_scalar( $network ) ) {
+				return null;
+			}
+			$on = self::option_is_on( $network );
+		}
+
+		$quic = self::option_is_on( get_option( 'litespeed.conf.cdn-quic', null ) );
+		if ( $quic ) {
+			return true;
+		}
+		if ( ! $on ) {
+			return false;
+		}
+
+		return Server::LITESPEED === Server::type() ? true : null;
+	}
+
+	/** A LiteSpeed Cache switch value as stored: '1', 1, true are on. */
+	private static function option_is_on( $value ): bool {
+		return is_scalar( $value ) && 1 === (int) $value;
 	}
 
 	/**

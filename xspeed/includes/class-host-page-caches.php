@@ -75,14 +75,41 @@ final class Host_Page_Caches {
 	 */
 	private const NH_OPTION = 'rt_wp_nginx_helper_options';
 
-	/**
-	 * The `cache_method` value that means "nginx FastCGI full-page cache".
-	 * The other one Nginx Helper supports is `enable_redis`, which is a
-	 * page cache in Redis fronted by nginx's `srcache` module — a different
-	 * layer, not present on the hosts this integration targets, and not
-	 * something a purge from here should reach for.
-	 */
+	/** `cache_method` for nginx's FastCGI page cache, held on disk. */
 	private const NH_FASTCGI = 'enable_fastcgi';
+
+	/**
+	 * `cache_method` for a page cache held in Redis, fronted by nginx's
+	 * `srcache` module. GridPane offers it, as do EasyEngine and WordOps.
+	 * (#573)
+	 */
+	private const NH_REDIS = 'enable_redis';
+
+	/** Modes nginx_helper_page_cache() returns. */
+	public const MODE_FASTCGI = 'fastcgi';
+	public const MODE_REDIS   = 'redis';
+
+	/**
+	 * Nginx Helper's defaults for the keys read here. rtCamp's 2.4.1 and
+	 * GridPane's fork 9.9.10 agree on them (`nginx_helper_default_settings()`).
+	 * They apply when no option row is stored, which is how Nginx Helper runs
+	 * until someone saves its settings page. (#573)
+	 */
+	private const NH_DEFAULTS = array(
+		'enable_purge'      => 0,
+		'cache_method'      => self::NH_FASTCGI,
+		'purge_method'      => 'get_request',
+		'redis_hostname'    => '127.0.0.1',
+		'redis_port'        => '6379',
+		'redis_prefix'      => 'nginx-cache:',
+		'redis_unix_socket' => '',
+	);
+
+	/** Purger classes Nginx Helper builds for its Redis mode. */
+	private const NH_REDIS_PURGERS = array( 'PhpRedis_Purger', 'Predis_Purger' );
+
+	/** The purger class Nginx Helper builds for anything else. */
+	private const NH_FASTCGI_PURGER = 'FastCGI_Purger';
 
 	/**
 	 * Forward a full purge to the server-level cache, when there is one.
@@ -106,7 +133,7 @@ final class Host_Page_Caches {
 	 * @return bool Whether the purge was forwarded.
 	 */
 	public static function purge_nginx_helper(): bool {
-		if ( ! self::nginx_helper_is_fastcgi() ) {
+		if ( null === self::nginx_helper_page_cache() ) {
 			return false;
 		}
 
@@ -171,38 +198,45 @@ final class Host_Page_Caches {
 	}
 
 	/**
-	 * Whether Nginx Helper is present AND configured against an nginx FastCGI
-	 * cache.
+	 * Which page cache Nginx Helper drives here: MODE_FASTCGI, MODE_REDIS,
+	 * or null when the integration does not apply.
 	 *
-	 * Three separate facts, because each one alone is a false positive:
+	 * Each fact below alone is a false positive:
 	 *
-	 * 1. `RT_WP_NGINX_HELPER_CACHE_PATH` — there is a directory to purge, and
-	 *    we know which one, because Health names it.
+	 * 1. `$GLOBALS['nginx_purger']`, the purger Nginx Helper built once it
+	 *    finished booting. Its constants and option can outlive a deactivated
+	 *    plugin, in which case the action has no listener and firing it is a
+	 *    silent no-op we would still report as a purge.
+	 * 2. The mode Nginx Helper itself runs in. The purger's class says it
+	 *    outright, since `rt_nginx_helper_purge_all` calls that object's
+	 *    purge_all(). For a purger class we do not know, the mode comes from
+	 *    the settings Nginx Helper resolved (see nginx_helper_settings()).
+	 *    Any method other than FastCGI or Redis is silence.
+	 * 3. For FastCGI, `RT_WP_NGINX_HELPER_CACHE_PATH`: there is a directory
+	 *    to purge, and Health names it.
 	 *
-	 *    Do NOT read this as evidence the host configured anything. Nginx
-	 *    Helper defines the constant itself whenever it is not already set,
-	 *    defaulting to `/var/run/nginx-cache` through its own
+	 *    Do NOT read the path as evidence the host configured anything. Nginx
+	 *    Helper defines it itself whenever it is not already set, defaulting
+	 *    to `/var/run/nginx-cache` through its own
 	 *    `rt_wp_nginx_helper_cache_path` filter (its
 	 *    `includes/class-nginx-helper.php`, in the constructor). So it is
-	 *    defined on every install and cannot be missing while the plugin is
-	 *    loaded — the only way past this check is a WordPress older than the
-	 *    plugin's minimum, where it returns before the `define`.
-	 *
-	 *    On a site where the host never set a path, that default is what
-	 *    Nginx Helper would unlink, so it is also what we forward a purge
-	 *    against and what Health names. That directory usually does not
-	 *    exist, making its `purge_all()` a no-op we would report as a purge.
-	 *    Left alone deliberately: it is exactly what the admin gets from
-	 *    Nginx Helper's own Purge All button, and second-guessing another
+	 *    defined on every install while the plugin is loaded. On a site where
+	 *    the host never set a path, that default is what Nginx Helper would
+	 *    unlink, so it is also what Health names; second-guessing another
 	 *    plugin's configured path is not ours to do.
-	 * 2. `$GLOBALS['nginx_purger']` — the plugin finished booting and built a
-	 *    purger. The constant can be defined in `wp-config.php` by a host
-	 *    whose site owner then deactivated the plugin, in which case the
-	 *    action has no listener and firing it is a silent no-op we would
-	 *    still report as a purge.
-	 * 3. `cache_method === 'enable_fastcgi'` — it is the page cache we mean.
-	 *    On `enable_redis` the same action clears a Redis key space that
-	 *    xSpeed's own object-cache flush may already own.
+	 *
+	 * The stored option row alone is not the mode. A host can configure
+	 * Nginx Helper from wp-config.php constants only, and with no row at all
+	 * Nginx Helper runs on its defaults, which are FastCGI. Reading only the
+	 * row missed both on GridPane-style sites, so Purge All never reached a
+	 * server cache Nginx Helper was purging itself. (#573)
+	 *
+	 * Redis mode used to be skipped on the grounds that its purge clears a key
+	 * space xSpeed's object cache may own. It doesn't: Nginx Helper's Redis
+	 * purge_all() deletes only keys under its own prefix, and xSpeed's
+	 * object-cache flush is scoped to its own salt and never runs FLUSHDB. So
+	 * skipping protected nothing and left the server's page cache stale on
+	 * GridPane, EasyEngine and WordOps sites. (#573)
 	 *
 	 * Note what is deliberately NOT in the gate: `enable_purge`. That option
 	 * governs Nginx Helper's own AUTOMATIC purging — its post-save, comment
@@ -215,33 +249,156 @@ final class Host_Page_Caches {
 	 * fix. `nginx_helper_purges_changes()` does read it, only to decide
 	 * whether a content purge can be left to Nginx Helper.
 	 */
-	public static function nginx_helper_is_fastcgi(): bool {
-		return null !== self::nginx_helper_cache_path();
-	}
-
-	/**
-	 * The cache directory Nginx Helper is pointed at, or null when the
-	 * integration does not apply. Read-only — we never define the constant
-	 * and never write the option.
-	 *
-	 * Health reports the path; the gate only cares whether there is one.
-	 */
-	public static function nginx_helper_cache_path(): ?string {
-		if ( ! defined( 'RT_WP_NGINX_HELPER_CACHE_PATH' ) ) {
+	public static function nginx_helper_page_cache(): ?string {
+		$purger = $GLOBALS['nginx_purger'] ?? null;
+		if ( ! is_object( $purger ) ) {
+			return null;
+		}
+		foreach ( self::NH_REDIS_PURGERS as $class ) {
+			if ( is_a( $purger, $class ) ) {
+				return self::MODE_REDIS;
+			}
+		}
+		$method = is_a( $purger, self::NH_FASTCGI_PURGER )
+			? self::NH_FASTCGI
+			: (string) self::nginx_helper_settings()['cache_method'];
+		if ( self::NH_REDIS === $method ) {
+			return self::MODE_REDIS;
+		}
+		if ( self::NH_FASTCGI !== $method || ! defined( 'RT_WP_NGINX_HELPER_CACHE_PATH' ) ) {
 			return null;
 		}
 		$path = (string) constant( 'RT_WP_NGINX_HELPER_CACHE_PATH' );
 		if ( '' === $path ) {
 			return null;
 		}
-		if ( ! isset( $GLOBALS['nginx_purger'] ) || ! is_object( $GLOBALS['nginx_purger'] ) ) {
+		// With nothing saved and no constant, Nginx Helper runs on its
+		// defaults: a FastCGI purger aimed at /var/run/nginx-cache whether or
+		// not nginx caches anything, as on an Apache site where the plugin is
+		// merely active. Count that only when the directory is there.
+		if ( ! self::nginx_helper_configured() && ! is_dir( $path ) ) {
 			return null;
 		}
-		$options = get_site_option( self::NH_OPTION );
-		if ( ! is_array( $options ) || self::NH_FASTCGI !== ( $options['cache_method'] ?? '' ) ) {
+		return self::MODE_FASTCGI;
+	}
+
+	/**
+	 * Whether anyone configured Nginx Helper: a saved settings row, or one of
+	 * the constants a host sets. `RT_WP_NGINX_HELPER_CACHE_PATH` is not one
+	 * of them, since Nginx Helper defines it itself.
+	 */
+	private static function nginx_helper_configured(): bool {
+		if ( is_array( get_site_option( self::NH_OPTION ) ) ) {
+			return true;
+		}
+		foreach ( array( 'RT_WP_NGINX_HELPER_CACHE_METHOD', 'RT_WP_NGINX_HELPER_REDIS_PREFIX', 'RT_WP_NGINX_HELPER_REDIS_HOSTNAME', 'RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET', 'RT_WP_NGINX_HELPER_PURGE_METHOD' ) as $name ) {
+			if ( defined( $name ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether Nginx Helper drives an nginx FastCGI cache, the mode whose
+	 * per-URL purge xSpeed uses. Redis mode takes only whole-zone purges.
+	 */
+	public static function nginx_helper_is_fastcgi(): bool {
+		return self::MODE_FASTCGI === self::nginx_helper_page_cache();
+	}
+
+	/**
+	 * The cache directory Nginx Helper is pointed at in FastCGI mode, or null.
+	 * Read-only — we never define the constant and never write the option.
+	 */
+	public static function nginx_helper_cache_path(): ?string {
+		if ( self::MODE_FASTCGI !== self::nginx_helper_page_cache() ) {
 			return null;
 		}
-		return $path;
+		return (string) constant( 'RT_WP_NGINX_HELPER_CACHE_PATH' );
+	}
+
+	/**
+	 * Where a Redis-mode page cache lives, for Health: the server (host:port,
+	 * or the unix socket) and the key prefix Nginx Helper purges. Null outside
+	 * Redis mode. Never the username or password.
+	 *
+	 * @return array{server:string, prefix:string}|null
+	 */
+	public static function nginx_helper_redis_target(): ?array {
+		if ( self::MODE_REDIS !== self::nginx_helper_page_cache() ) {
+			return null;
+		}
+		$settings = self::nginx_helper_settings();
+		$socket   = (string) $settings['redis_unix_socket'];
+
+		return array(
+			'server' => '' !== $socket ? $socket : $settings['redis_hostname'] . ':' . $settings['redis_port'],
+			'prefix' => (string) $settings['redis_prefix'],
+		);
+	}
+
+	/**
+	 * Nginx Helper's settings as Nginx Helper resolved them: the stored row
+	 * over its defaults, with its wp-config.php constants applied. Its purger
+	 * and its automatic purging both run from this, not from the raw row.
+	 *
+	 * `$GLOBALS['nginx_helper_admin']->options` holds exactly that, built in
+	 * the admin class's constructor before the purger is chosen, in rtCamp's
+	 * plugin and in GridPane's fork. When that object is missing we resolve
+	 * the same way ourselves, following the fork, which accepts every
+	 * constant rtCamp's does and a few more.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function nginx_helper_settings(): array {
+		$admin = $GLOBALS['nginx_helper_admin'] ?? null;
+		if ( is_object( $admin ) && isset( $admin->options ) && is_array( $admin->options ) ) {
+			return array_merge( self::NH_DEFAULTS, $admin->options );
+		}
+
+		$stored   = get_site_option( self::NH_OPTION );
+		$settings = array_merge( self::NH_DEFAULTS, is_array( $stored ) ? $stored : array() );
+
+		if ( defined( 'RT_WP_NGINX_HELPER_PURGE_METHOD' ) ) {
+			$settings['purge_method'] = (string) constant( 'RT_WP_NGINX_HELPER_PURGE_METHOD' );
+		}
+
+		// GridPane's fork only. FastCGI by constant turns its own purging on
+		// and ignores the Redis constants.
+		if ( defined( 'RT_WP_NGINX_HELPER_CACHE_METHOD' ) ) {
+			$settings['cache_method'] = (string) constant( 'RT_WP_NGINX_HELPER_CACHE_METHOD' );
+			if ( self::NH_FASTCGI === $settings['cache_method'] ) {
+				$settings['enable_purge'] = 1;
+				return $settings;
+			}
+		}
+
+		$redis_constants = array(
+			'RT_WP_NGINX_HELPER_REDIS_HOSTNAME'    => 'redis_hostname',
+			'RT_WP_NGINX_HELPER_REDIS_PORT'        => 'redis_port',
+			'RT_WP_NGINX_HELPER_REDIS_PREFIX'      => 'redis_prefix',
+			'RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET' => 'redis_unix_socket',
+		);
+		foreach ( $redis_constants as $name => $key ) {
+			if ( defined( $name ) ) {
+				$settings[ $key ] = (string) constant( $name );
+			}
+		}
+
+		// The prefix plus a way to reach Redis switches Nginx Helper to Redis
+		// mode with its own purging on, whatever the row says. Host and port
+		// work in both plugins; the fork also accepts a unix socket instead,
+		// which is how GridPane reaches its page-cache Redis.
+		$has_prefix = defined( 'RT_WP_NGINX_HELPER_REDIS_PREFIX' );
+		$by_tcp     = $has_prefix && defined( 'RT_WP_NGINX_HELPER_REDIS_HOSTNAME' ) && defined( 'RT_WP_NGINX_HELPER_REDIS_PORT' );
+		$by_socket  = $has_prefix && '' !== (string) ( defined( 'RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET' ) ? constant( 'RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET' ) : '' );
+		if ( $by_tcp || $by_socket ) {
+			$settings['cache_method'] = self::NH_REDIS;
+			$settings['enable_purge'] = 1;
+		}
+
+		return $settings;
 	}
 
 	/**
@@ -250,22 +407,22 @@ final class Host_Page_Caches {
 	 * Its `enable_purge` option is the one switch in front of all of its
 	 * automatic purging: the post, comment and term hooks each return early
 	 * without it. It defaults to off, so an install where the host never
-	 * turned it on purges nothing when a post is published. Not part of the
+	 * turned it on purges nothing when a post is published. Read from the
+	 * resolved settings, because the Redis and cache-method constants turn
+	 * it on without touching the row. Not part of the
 	 * detection gate above; `Server_Caches` asks it only to decide whether a
 	 * content purge can be left to Nginx Helper.
 	 */
 	public static function nginx_helper_purges_changes(): bool {
-		$options = get_site_option( self::NH_OPTION );
-		return is_array( $options ) && ! empty( $options['enable_purge'] );
+		return ! empty( self::nginx_helper_settings()['enable_purge'] );
 	}
 
 	/**
-	 * The configured purge method (`unlink_files`, `get_request`, …), or ''
-	 * when unset. Health uses it to decide whether the permissions caveat
+	 * The purge method Nginx Helper resolved (`unlink_files`, `get_request`,
+	 * …), `get_request` by default. Health uses it to decide whether the permissions caveat
 	 * applies; nothing gates on it.
 	 */
 	public static function nginx_helper_purge_method(): string {
-		$options = get_site_option( self::NH_OPTION );
-		return is_array( $options ) ? (string) ( $options['purge_method'] ?? '' ) : '';
+		return (string) self::nginx_helper_settings()['purge_method'];
 	}
 }

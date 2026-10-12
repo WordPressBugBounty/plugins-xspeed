@@ -203,6 +203,14 @@ class Admin {
 		// strips the hash, so we inject directly into $submenu where
 		// it survives intact (the same trick Yoast / WooCommerce use
 		// for their per-area shortcuts).
+		//
+		// Writing to $submenu skips the capability check add_submenu_page()
+		// does, and core keeps a top-level item the user can't open while its
+		// submenu has entries. Without this guard an Editor saw an empty
+		// "xSpeed Cache" flyout that led to a permissions error. (#720)
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
 		global $submenu;
 		$deep_links = self::deep_link_items();
 		foreach ( $deep_links as $hash => $label ) {

@@ -72,9 +72,14 @@ function xspeed_uninstall_cleanup() {
 	// longer write it; an older host may have, and it is ours to clean up.
 	delete_option( 'xspeed_setup_snapshot' );
 	delete_option( 'xspeed_stats' );
+	// Where the scheduled database clean stopped. Kept here, above the
+	// filesystem early returns below, so a site whose filesystem cannot be
+	// reached still loses it.
+	delete_option( 'xspeed_db_clean_cursor' );
 	delete_option( 'xspeed_gc_cursor' );
 	delete_option( 'xspeed_mcp_rl_gen' );
 	wp_clear_scheduled_hook( 'xspeed_gc' );
+	delete_option( 'xspeed_cache_off_notice_dismissed' );
 
 	global $wpdb;
 

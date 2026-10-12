@@ -321,7 +321,7 @@ final class Purge_Runner {
 	 * them.
 	 *
 	 * @param string $cause Who asked.
-	 * @return array{entries:int,bytes:int}
+	 * @return array{entries:int,bytes:int,reason:string}
 	 */
 	public static function purge_page( string $cause ): array {
 		$removed = Cache::purge_local();
@@ -340,7 +340,23 @@ final class Purge_Runner {
 		// purge_local() does not — without it `wp xspeed purge`, the
 		// dashboard button and the MCP purge tool would clear our files and
 		// leave LiteSpeed serving the stale page, having reported success.
-		Cache::announce_purge( $cause, $entries );
+		// The announce also reaches caches in front of PHP, such as nginx
+		// through Nginx Helper; the row names them so the operator can tell
+		// they were reached. (#654)
+		$run = Cache::report_forwarding(
+			static function () use ( $cause, $entries ): void {
+				Cache::announce_purge( $cause, $entries );
+			}
+		);
+
+		$reason = '';
+		if ( array() !== $run['forwarded'] ) {
+			$reason = sprintf(
+				/* translators: %s: names of the caches in front of the site, e.g. "Nginx Helper". */
+				__( 'also sent the purge to %s', 'xspeed' ),
+				implode( ', ', $run['forwarded'] )
+			);
+		}
 
 		Cache_Inventory::invalidate();
 
@@ -358,6 +374,7 @@ final class Purge_Runner {
 		return array(
 			'entries' => $entries,
 			'bytes'   => (int) $removed['bytes'],
+			'reason'  => $reason,
 		);
 	}
 

@@ -64,12 +64,25 @@ final class ObjectCacheModule extends Module {
 				'description'   => __( 'The cache server your host provides. Ask your host if you are not sure.', 'xspeed' ),
 			),
 			'redis_host' => array(
-				'type'        => 'string',
-				'default'     => '127.0.0.1',
-				'constants'   => array( 'XSPEED_OC_HOST', 'WP_REDIS_HOST' ),
-				'label'       => __( 'Redis host', 'xspeed' ),
-				'description' => __( 'Address of the Redis server. Use 127.0.0.1 when Redis runs on the same server as your site.', 'xspeed' ),
-				'dependsOn'   => array( 'field' => 'backend', 'value' => 'redis' ),
+				'type'           => 'string',
+				'default'        => '127.0.0.1',
+				// WP_REDIS_PATH is Redis Object Cache's name for a unix socket,
+				// and it only means one when WP_REDIS_SCHEME says `unix` -- the
+				// same pair that plugin reads. It ranks above WP_REDIS_HOST
+				// because that plugin ignores the host once the scheme is unix,
+				// and hosts that write the pair often leave a stale host
+				// beside it. (#566)
+				'constants'      => array( 'XSPEED_OC_HOST', 'WP_REDIS_PATH', 'WP_REDIS_HOST' ),
+				'constants_when' => array(
+					'WP_REDIS_PATH' => array(
+						'constant'         => 'WP_REDIS_SCHEME',
+						'is'               => 'unix',
+						'case_insensitive' => true,
+					),
+				),
+				'label'          => __( 'Redis host', 'xspeed' ),
+				'description'    => __( 'Address of the Redis server, or the path to its socket file if your host gave you one (for example /run/redis/redis.sock). Use 127.0.0.1 when Redis runs on the same server as your site.', 'xspeed' ),
+				'dependsOn'      => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
 			'redis_port' => array(
 				'type'        => 'int',
@@ -78,7 +91,7 @@ final class ObjectCacheModule extends Module {
 				'max'         => 65535,
 				'constants'   => array( 'XSPEED_OC_PORT', 'WP_REDIS_PORT' ),
 				'label'       => __( 'Redis port', 'xspeed' ),
-				'description' => __( 'The default Redis port is 6379.', 'xspeed' ),
+				'description' => __( 'The default Redis port is 6379. Not used when the host is a socket path.', 'xspeed' ),
 				'advanced'    => true,
 				'dependsOn'   => array( 'field' => 'backend', 'value' => 'redis' ),
 			),
@@ -89,7 +102,9 @@ final class ObjectCacheModule extends Module {
 				// array form -- how xCloud and Cloudways hand out ACL
 				// credentials -- it carries the username too. It is pair-only:
 				// as a plain string it is a password, never a username.
-				'constants'           => array( 'XSPEED_OC_USER', 'WP_REDIS_USER', 'WP_REDIS_PASSWORD' ),
+				// WP_REDIS_USERNAME is Redis Object Cache's name for the same
+				// thing, and that plugin lets it win over the array form. (#566)
+				'constants'           => array( 'XSPEED_OC_USER', 'WP_REDIS_USERNAME', 'WP_REDIS_USER', 'WP_REDIS_PASSWORD' ),
 				'constants_pair_only' => array( 'WP_REDIS_PASSWORD' ),
 				'constant_pair'       => 'user',
 				'label'               => __( 'Redis username', 'xspeed' ),

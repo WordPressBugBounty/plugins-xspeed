@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.1
+Stable tag: 1.4.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -313,6 +313,38 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.2] – 2026-10-12 =
+
+**Combine CSS now works on Flywheel and Bedrock installs, Elementor Pro sticky headers stick under Delay JS, and a failed pass on the finished page can no longer cache an empty page.**
+
+Caching:
+- New: Every wp-admin page says when the page cache is off, and names the cache it would replace when another one already serves pages.
+- Improved: Purge All also clears Nginx Helper's Redis page cache, as used on GridPane, EasyEngine and WordOps.
+- Improved: `wp xspeed cache purge <url>` purges only that page, and the purge says which server cache it reached.
+- Fixed: When a filter on the finished page returns nothing, the rendered page is kept. An empty page is no longer sent or cached.
+- Fixed: Adding, moving or editing a widget clears the cached pages.
+- Fixed: With LiteSpeed Cache installed, the conflict check follows its page-cache setting, including its 24-hour pause.
+- Fixed: An Nginx Helper that is installed but not set up is no longer taken for a server cache.
+- Fixed: Purging no longer leaves an expiry marker beside pages that carry a nonce, which flooded response headers with errors when Query Monitor was active.
+
+Optimization:
+- New: The Asset Manager has a card on the Optimization page.
+- Fixed: Combine CSS works when wp-content is outside the WordPress folder, as on Flywheel and Bedrock.
+- Fixed: Under Delay JS, jQuery ready callbacks wait for the replay, so Elementor Pro sticky headers attach and Elementor entrance animations show.
+- Fixed: Async CSS holds transitions until the stylesheets apply, keeps them when JavaScript is off, and skips entrance animations already on screen.
+- Fixed: Turbo Render works with the page cache off, and skips sections that break under containment.
+
+Object Cache:
+- Fixed: Redis connects over a unix socket, reading the same constants as Redis Object Cache.
+
+Dashboard & Admin UX:
+- Improved: The expert-setup offer links to the booking page on xspeedcache.com.
+- Fixed: Database Clean deletes posts and comments through WordPress, so trashed media files go too, and a clean that runs out of time says how much is left.
+- Fixed: Deleting a post detaches its child posts of another type.
+- Fixed: The scan report is stored as JSON, so a latin1 database table no longer loses it.
+- Fixed: The PageSpeed tab shows only with a licensed Pro, appears as soon as the licence is activated, and stays out of settings search while hidden.
+- Fixed: The xSpeed Cache menu is hidden from users who can't manage options.
 
 = [1.4.1] – 2026-10-08 =
 

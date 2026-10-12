@@ -39,6 +39,68 @@ final class Health {
 	);
 
 	/**
+	 * The server-level page cache row, or null on a site without one. Split
+	 * out of checks() so both Nginx Helper modes can be tested. (#573)
+	 *
+	 * @param bool $cache_enabled Whether xSpeed's own page cache is on.
+	 * @return array<string,string>|null
+	 */
+	public static function host_page_cache_row( bool $cache_enabled ): ?array {
+		$host_cache_mode = Host_Page_Caches::nginx_helper_page_cache();
+		if ( null === $host_cache_mode ) {
+			return null;
+		}
+		// Same wording in both modes; only where the copies live differs.
+		$where  = Host_Page_Caches::MODE_REDIS === $host_cache_mode ? 'in nginx (held in Redis)' : 'in nginx (FastCGI)';
+		$detail = $cache_enabled
+			? 'Your server is running its own full-page cache ' . $where . ', managed by the Nginx Helper plugin your host installed — so this site has TWO full-page caches stacked in front of it. xSpeed clears the server layer too on a Purge All, and on the changes that affect every page — settings, updates, themes, plugins, menus. It leaves the routine purge after a post or comment edit to Nginx Helper, which clears just the pages that changed, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too. The two caches expire on their own schedules, and your host decides how long the server side keeps each page, so a page can still be served from nginx after xSpeed has regenerated it. If edits keep looking stale, purge from your host\'s dashboard too, or turn xSpeed\'s page cache off and let the server layer do the work — it is the faster of the two, because it answers before PHP starts.'
+			: 'Your server is running a full-page cache ' . $where . ', managed by the Nginx Helper plugin your host installed. xSpeed\'s own page cache is off, so this is the only full-page cache in front of the site — and it is the fastest kind, answering before PHP starts. Purge All in xSpeed still clears it, as do settings changes and plugin, theme or core updates. The routine purge after editing a post or approving a comment is left to Nginx Helper, which clears just the pages that changed rather than all of them, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too.';
+
+		$redis = Host_Page_Caches::nginx_helper_redis_target();
+		if ( null !== $redis ) {
+			// Server and prefix, never credentials. The prefix is what
+			// Nginx Helper's purge deletes under, so it is the thing to
+			// check against the host's nginx config. (#573)
+			$detail .= sprintf( ' Redis server: %s, key prefix "%s".', $redis['server'], '' !== $redis['prefix'] ? $redis['prefix'] : '(none)' );
+		} else {
+			$host_cache_path = (string) Host_Page_Caches::nginx_helper_cache_path();
+			// Path prefix as a fingerprint for the WORDING only — never as
+			// a gate. Nginx Helper is not xCloud-only; other hosts and
+			// manual installs use it with a cache directory elsewhere.
+			if ( 0 === strpos( $host_cache_path, '/etc/nginx/cache/' ) ) {
+				$detail .= sprintf( ' Cache directory: %s (the layout xCloud provisions).', $host_cache_path );
+			} else {
+				$detail .= sprintf( ' Cache directory: %s.', $host_cache_path );
+			}
+		}
+
+		// The purge is a direct unlink by the PHP-FPM user against a
+		// directory nginx owns. Whether that user can write there is a
+		// property of the host we cannot test from here without deleting
+		// someone's cache to find out, so say what to check rather than
+		// claiming an outcome either way. FastCGI only: Redis has no files.
+		if ( null === $redis && 'unlink_files' === Host_Page_Caches::nginx_helper_purge_method() ) {
+			$detail .= ' The server cache is purged by deleting its files directly, which needs PHP to have write access to that directory — if a purge here never changes what nginx serves, that permission is the thing to check with your host.';
+		}
+
+		if ( is_multisite() ) {
+			// Nginx Helper's Redis purge_all() deletes only keys under this
+			// site's scheme, host and path; FastCGI unlinks the whole
+			// directory. (#573)
+			$detail .= null !== $redis
+				? ' On multisite, Nginx Helper clears only this site\'s pages from Redis, matched by its address. Other sites on the network keep their server copies until their own purge or expiry.'
+				: ' On multisite, nginx keys one cache per install rather than per site, so this purge clears every site on the network.';
+		}
+
+		return array(
+			'id'     => 'host_page_cache',
+			'tone'   => $cache_enabled ? self::WARN : self::INFO,
+			'label'  => Host_Page_Caches::MODE_REDIS === $host_cache_mode ? 'Server-level page cache (nginx Redis)' : 'Server-level page cache (nginx FastCGI)',
+			'detail' => $detail,
+		);
+	}
+
+	/**
 	 * Full check list used by the Health module's dashboard panel.
 	 *
 	 * @return array<int,array{id:string,tone:string,label:string,detail:string}>
@@ -400,40 +462,9 @@ final class Health {
 		 * still stale" report. With xSpeed's own page cache off there is only
 		 * one layer and nothing to warn about, so that case is INFO.
 		 */
-		$host_cache_path = Host_Page_Caches::nginx_helper_cache_path();
-		if ( null !== $host_cache_path ) {
-			$detail = $cache_enabled
-				? 'Your server is running its own full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed — so this site has TWO full-page caches stacked in front of it. xSpeed clears the server layer too on a Purge All, and on the changes that affect every page — settings, updates, themes, plugins, menus. It leaves the routine purge after a post or comment edit to Nginx Helper, which clears just the pages that changed, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too. The two caches expire on their own schedules (the server side is typically an hour), so a page can still be served from nginx after xSpeed has regenerated it. If edits keep looking stale, purge from your host\'s dashboard too, or turn xSpeed\'s page cache off and let the server layer do the work — it is the faster of the two, because it answers before PHP starts.'
-				: 'Your server is running a full-page cache in nginx (FastCGI), managed by the Nginx Helper plugin your host installed. xSpeed\'s own page cache is off, so this is the only full-page cache in front of the site — and it is the fastest kind, answering before PHP starts. Purge All in xSpeed still clears it, as do settings changes and plugin, theme or core updates. The routine purge after editing a post or approving a comment is left to Nginx Helper, which clears just the pages that changed rather than all of them, as long as Nginx Helper\'s own Enable Purge setting is on. With it off, xSpeed clears the server layer after those edits too.';
-
-			// Path prefix as a fingerprint for the WORDING only — never as a
-			// gate. Nginx Helper is not xCloud-only; other hosts and manual
-			// installs use it with a cache directory somewhere else entirely.
-			if ( 0 === strpos( $host_cache_path, '/etc/nginx/cache/' ) ) {
-				$detail .= sprintf( ' Cache directory: %s (the layout xCloud provisions).', $host_cache_path );
-			} else {
-				$detail .= sprintf( ' Cache directory: %s.', $host_cache_path );
-			}
-
-			// The purge is a direct unlink by the PHP-FPM user against a
-			// directory nginx owns. Whether that user can write there is a
-			// property of the host we cannot test from here without deleting
-			// someone's cache to find out, so say what to check rather than
-			// claiming an outcome either way.
-			if ( 'unlink_files' === Host_Page_Caches::nginx_helper_purge_method() ) {
-				$detail .= ' The server cache is purged by deleting its files directly, which needs PHP to have write access to that directory — if a purge here never changes what nginx serves, that permission is the thing to check with your host.';
-			}
-
-			if ( is_multisite() ) {
-				$detail .= ' On multisite, nginx keys one cache per install rather than per site, so this purge clears every site on the network.';
-			}
-
-			$out[] = array(
-				'id'     => 'host_page_cache',
-				'tone'   => $cache_enabled ? self::WARN : self::INFO,
-				'label'  => 'Server-level page cache (nginx FastCGI)',
-				'detail' => $detail,
-			);
+		$host_row = self::host_page_cache_row( $cache_enabled );
+		if ( null !== $host_row ) {
+			$out[] = $host_row;
 		}
 
 		// Cache expiry vs preloader schedule (deterministic rule, issue #31):

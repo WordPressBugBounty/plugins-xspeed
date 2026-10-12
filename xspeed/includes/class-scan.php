@@ -274,7 +274,7 @@ final class Scan {
 		}
 
 		$result = self::normalise( $body, self::visibility() );
-		update_option( self::RESULT_OPTION, $result, false );
+		self::store( $result );
 		delete_option( self::PENDING_OPTION );
 
 		return $result;
@@ -331,13 +331,90 @@ final class Scan {
 		return $p;
 	}
 
+	/**
+	 * Save the last completed report, as JSON.
+	 *
+	 * A PHP-serialized array did not survive a `latin1` options table (#468).
+	 * MySQL turned a multibyte character from an engine check name (`≤`)
+	 * into `?`, the byte counts inside the serialized string no longer
+	 * matched, unserialize() failed, and the dashboard said "Never scanned"
+	 * after the next reload. wp_json_encode() escapes every non-ASCII
+	 * character as `\uXXXX`, so the stored bytes are plain ASCII and no
+	 * table charset can change them.
+	 *
+	 * The array is stored as before only if encoding fails, which would need
+	 * a report the JSON encoder cannot represent at all.
+	 *
+	 * @param array<string,mixed> $result A normalised report.
+	 */
+	private static function store( array $result ): void {
+		$json = wp_json_encode( $result );
+		update_option( self::RESULT_OPTION, false === $json ? $result : $json, false );
+		self::$stored_state = 'ok';
+	}
+
+	/**
+	 * What latest() found the last time it read the option: 'none' (never
+	 * scanned), 'ok', or 'unreadable' (a report was stored but could not be
+	 * read back, and was discarded).
+	 *
+	 * @var string
+	 */
+	private static $stored_state = 'none';
+
 	/** The last completed report, or null. */
 	public static function latest(): ?array {
-		$r = get_option( self::RESULT_OPTION );
-		if ( ! is_array( $r ) || ! isset( $r['score'] ) ) {
+		// A sentinel default, because get_option() returns false both for
+		// a missing row and for a stored serialized value that no longer
+		// unserializes. Only the second one is a lost report.
+		$r = get_option( self::RESULT_OPTION, '__none__' );
+
+		if ( '__none__' === $r ) {
+			self::$stored_state = 'none';
 			return null;
 		}
-		return self::with_devices( $r );
+
+		// A report stored before #468, as a serialized array.
+		if ( is_array( $r ) ) {
+			self::$stored_state = isset( $r['score'] ) ? 'ok' : 'none';
+			return isset( $r['score'] ) ? self::with_devices( $r ) : null;
+		}
+
+		if ( is_string( $r ) ) {
+			$decoded = json_decode( $r, true );
+			if ( is_array( $decoded ) && isset( $decoded['score'] ) ) {
+				self::$stored_state = 'ok';
+				return self::with_devices( $decoded );
+			}
+			if ( is_array( $decoded ) && ! empty( $decoded['unreadable'] ) ) {
+				self::$stored_state = 'unreadable';
+				return null;
+			}
+			// Read back fine, but the scan graded nothing: treated like a
+			// stored array without a score, not as a lost report.
+			if ( is_array( $decoded ) ) {
+				self::$stored_state = 'none';
+				return null;
+			}
+		}
+
+		// Stored, but not readable: a serialized array mangled by the table
+		// charset (get_option() gives false), or a string that is not a
+		// report. Replace it with a small marker, which also replaces the
+		// mangled copy in a persistent object cache. The dashboard then says
+		// the last report was lost, until the next scan overwrites it.
+		update_option( self::RESULT_OPTION, (string) wp_json_encode( array( 'unreadable' => true ) ), false );
+		self::$stored_state = 'unreadable';
+		return null;
+	}
+
+	/**
+	 * The state latest() found. Call latest() first.
+	 *
+	 * @return string 'none' | 'ok' | 'unreadable'
+	 */
+	public static function stored_state(): string {
+		return self::$stored_state;
 	}
 
 	/**
