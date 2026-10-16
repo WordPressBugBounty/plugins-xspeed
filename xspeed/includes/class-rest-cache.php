@@ -255,18 +255,33 @@ class Rest_Cache {
 	 * the blog namespace lives inside the md5 rather than in a path segment.
 	 * Called by Cache::purge_local() and by purge_type( 'rest' ). Returns the
 	 * count removed.
+	 *
+	 * @param bool|null $complete Receives false if a directory read or deletion failed.
 	 */
-	public static function purge(): int {
+	public static function purge( ?bool &$complete = null ): int {
+		$complete = true;
 		$dir = self::dir();
 		if ( ! is_dir( $dir ) ) {
 			return 0;
 		}
+		if ( ! is_readable( $dir ) ) {
+			$complete = false;
+			return 0;
+		}
 		$files = glob( $dir . '/*.json' );
+		if ( false === $files ) {
+			$complete = false;
+			return 0;
+		}
 		if ( ! $files ) {
 			return 0;
 		}
 		foreach ( $files as $f ) {
 			wp_delete_file( $f );
+			clearstatcache( true, $f );
+			if ( file_exists( $f ) ) {
+				$complete = false;
+			}
 		}
 		return count( $files );
 	}

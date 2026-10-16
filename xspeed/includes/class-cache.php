@@ -89,6 +89,9 @@ class Cache {
 	 */
 	private static $sweep_bytes = 0;
 
+	/** A surviving page must keep a security migration pending. */
+	private static bool $sweep_complete = true;
+
 	/**
 	 * The `X-XSpeed-Cache` value decided for this request, and — when the
 	 * decision was BYPASS — the slug of the gate that made it.
@@ -1152,7 +1155,7 @@ class Cache {
 	 * keeps a separate copy for every query string, and a purge of the plain
 	 * URL never reaches them. With no edge in front there are no copies.
 	 */
-	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split' );
+	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split', 'markdown' );
 
 	/**
 	 * True only while query_variant_edge_headers() bakes the drop-in's
@@ -1165,6 +1168,36 @@ class Cache {
 	 * @var bool
 	 */
 	private static $baking_query_variant = false;
+
+	/**
+	 * True only while edge_device_dropin() bakes the drop-in's answer for a
+	 * HIT without the edge's device signal. Never true outside that call.
+	 *
+	 * @var bool
+	 */
+	private static $baking_device_hold = false;
+
+	/**
+	 * Evidence file: a cacheable request came through Cloudflare without
+	 * `CF-Device-Type` while the keying filter said yes. Sits next to the
+	 * cache files, where the drop-in reads and writes it too.
+	 */
+	public const EDGE_DEVICE_UNKEYED_FLAG = '.edge-device-unkeyed';
+
+	/** Seconds that evidence blocks trust in the edge's device signal. */
+	public const EDGE_DEVICE_UNKEYED_FOR = 600;
+
+	/**
+	 * True once wp_is_mobile() answered for a request that carries the
+	 * edge's device signal without trusting it, most often because it ran
+	 * before the add-on hooked the keying filter. The page was then built by
+	 * the origin's answer, so the request stays untrusted to the end and is
+	 * stored and held as the origin's copy. Per request; reset_edge_render()
+	 * clears it.
+	 *
+	 * @var bool
+	 */
+	private static $edge_render_untrusted = false;
 
 	/**
 	 * Is a module still going to change this page after this response?
@@ -1346,7 +1379,7 @@ class Cache {
 	 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 	 * @param string $context       `request`, `store` or `bake`.
 	 * @param string $bypass_reason The gate slug, for BYPASS only.
-	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|pending|query-variant.
+	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|markdown|pending|query-variant.
 	 */
 	private static function edge_hold_reason( string $status, string $context, string $bypass_reason ): string {
 		$reason = '';
@@ -1375,8 +1408,18 @@ class Cache {
 		// wrong page. The static path is switched off in this mode anyway
 		// (static_rewrite_allowed()), so these hits come from the drop-in,
 		// which carries the same baked answer.
-		if ( self::mobile_cache_splits_html() ) {
+		//
+		// Unless the edge keeps a copy per device: then each device's page
+		// has its own copy there, and the hold is lifted for the requests
+		// that came through it (see edge_lifts_device_hold()).
+		if ( self::mobile_cache_splits_html() && ! self::edge_lifts_device_hold( $status, $context ) ) {
 			$reason = 'mobile-split';
+		} elseif ( 'bake' !== $context && 'BYPASS' !== $status && self::markdown_variant_request() ) {
+			// The Markdown entry shares its URL with the HTML page, and edges
+			// key on the URL. Holding it keeps an edge from storing Markdown
+			// and handing it to browsers. Request and store only: a bake
+			// answers for the HTML pages, which this does not touch.
+			$reason = 'markdown';
 		} elseif ( 'BYPASS' === $status ) {
 			$shaped = in_array( $bypass_reason, array( 'excluded-url', 'query-param' ), true )
 				? ! self::path_is_a_personal_exclusion( $bypass_reason )
@@ -1398,7 +1441,7 @@ class Cache {
 		 *
 		 * Return '' to veto a hold, or a reason string to force one.
 		 *
-		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|pending|query-variant.
+		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|markdown|pending|query-variant.
 		 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 		 * @param string $context       `request`, `store` or `bake`.
 		 * @param string $bypass_reason The gate slug, for BYPASS only.
@@ -1944,8 +1987,125 @@ class Cache {
 		return in_array( $reason, self::VISITOR_SCOPED_BYPASS, true );
 	}
 
+	/** Option holding the home page's last cache verdict, for `/signals`. */
+	public const HOME_VERDICT_OPTION = 'xspeed_home_cache_verdict';
+
+	/**
+	 * Bypass gates that say nothing about whether the home page is cached
+	 * for an ordinary visitor.
+	 *
+	 * The visitor gates (a login, a cart cookie) and the request-shape gates
+	 * (a POST, a query string, a bot's user agent) are true for one request
+	 * and false for the next. Recording them would make the verdict flip on
+	 * every visit to a busy store's home page, and each flip is a database
+	 * write. What is left describes the site: the cache is off, the home
+	 * page is excluded, or something refuses it on every request.
+	 */
+	private const HOME_VERDICT_SKIP = array( 'logged-in', 'excluded-cookie', 'non-get', 'query-param', 'user-agent', 'non-frontend' );
+
+	/** At most one write of the home verdict per this many seconds. */
+	private const HOME_VERDICT_MIN_GAP = 60;
+
+	/**
+	 * Remember whether the home page was cached, and if not, why.
+	 *
+	 * The bypass reason only leaves the site as `X-XSpeed-Reason` under
+	 * WP_DEBUG (#10), so support and the speed scanner could not tell "page
+	 * cache off" from any other bypass (#598). This keeps the last verdict
+	 * for `/signals`. It writes only when the verdict changes, and a change
+	 * to a bypass not more than once a minute, so a home page served by PHP
+	 * on every request does not add a write per visitor.
+	 *
+	 * A change to "cacheable" is always written. Once it is, the next
+	 * visitors get the cached copy and never reach PHP, so a write held back
+	 * here would never come: turning the cache on within a minute of a
+	 * "cache off" verdict left `/signals` saying "off" until the cached home
+	 * page expired (QA on #626). It cannot flap either, since every second
+	 * write is a bypass, and those still wait a minute.
+	 *
+	 * @param string $reason The bypass slug, or '' when the page is cacheable.
+	 */
+	private static function note_home_verdict( string $reason ): void {
+		if ( in_array( $reason, self::HOME_VERDICT_SKIP, true ) || ! self::request_is_home() ) {
+			return;
+		}
+
+		$now  = time();
+		$last = get_option( self::HOME_VERDICT_OPTION );
+		if ( is_array( $last ) && isset( $last['bypass'] ) ) {
+			if ( $last['bypass'] === $reason ) {
+				return;
+			}
+			if ( '' !== $reason && $now - (int) ( $last['since'] ?? 0 ) < self::HOME_VERDICT_MIN_GAP ) {
+				return;
+			}
+		}
+
+		// Autoloaded: it is a few bytes, and an autoloaded read costs nothing
+		// on the request that compares against it.
+		update_option(
+			self::HOME_VERDICT_OPTION,
+			array(
+				'bypass' => $reason,
+				'since'  => $now,
+			),
+			true
+		);
+	}
+
+	/**
+	 * Whether this request is for the home page itself.
+	 *
+	 * Compares paths rather than asking is_front_page(): the buffer hook is
+	 * filterable (`xspeed_cache_buffer_hook`) and may run before the main
+	 * query exists.
+	 */
+	private static function request_is_home(): bool {
+		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- compared, never stored or echoed.
+		$path = (string) strtok( $uri, '?' );
+		$home = (string) ( function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ), PHP_URL_PATH ) : parse_url( home_url( '/' ), PHP_URL_PATH ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- fallback for early-boot contexts only.
+
+		return '' !== $path && rtrim( $path, '/' ) === rtrim( $home, '/' );
+	}
+
+	/**
+	 * The home page's last recorded cache verdict.
+	 *
+	 * @return array{bypass:string,since:int}|null Null until an ordinary
+	 *     request for the home page has reached PHP. `bypass` is '' when the
+	 *     page was cacheable, otherwise the gate slug.
+	 */
+	public static function home_verdict(): ?array {
+		$last = get_option( self::HOME_VERDICT_OPTION );
+		if ( ! is_array( $last ) || ! isset( $last['bypass'] ) || ! is_string( $last['bypass'] ) ) {
+			return null;
+		}
+		return array(
+			'bypass' => $last['bypass'],
+			'since'  => (int) ( $last['since'] ?? 0 ),
+		);
+	}
+
 	public function maybe_start_cache() {
-		if ( ! self::should_cache() ) {
+		// The site's one 404 entry must not answer before the plugins that
+		// serve a virtual file have had their turn. They answer on this same
+		// hook at the default priority (ThinkRank's llms.txt, for one) and
+		// exit, while this runs at priority 0, so the cached 404 page went
+		// out for a URL that had a file. Look again last on the hook: a
+		// request still here then is a real 404. (#744)
+		if ( self::should_cache_404() && function_exists( 'current_action' ) ) {
+			$hook = (string) current_action();
+			if ( '' !== $hook && ! self::$deferred_404 ) {
+				self::$deferred_404 = true;
+				add_action( $hook, array( $this, 'maybe_start_cache' ), PHP_INT_MAX );
+				return;
+			}
+		}
+
+		$cacheable = self::should_cache();
+		self::note_home_verdict( $cacheable ? '' : self::bypass_reason() );
+
+		if ( ! $cacheable ) {
 			// PHP has just evaluated the FULL exclusion rule list — including
 			// the `~regex` patterns the server config can't express — and
 			// decided this response must not be served from cache. Record that
@@ -1975,6 +2135,12 @@ class Cache {
 		// Cacheable: clear any stale bypass cookie, or a visitor who once
 		// had a cart would keep skipping the fast path long after checkout.
 		self::sync_bypass_cookie( false );
+
+		// The Markdown entry answers the same URL as the HTML page; tell any
+		// cache downstream that the answer depends on Accept.
+		if ( self::markdown_variant_request() && ! headers_sent() ) {
+			header( 'Vary: Accept', false );
+		}
 
 		$key  = self::cache_key();
 		$file = self::cache_file_for( $key );
@@ -2232,6 +2398,12 @@ class Cache {
 			return;
 		}
 
+		// Same late-signal checks as finalize_buffer(). (#693)
+		if ( self::donotcachepage_blocks_write()
+			|| self::content_type_blocks_write( self::response_content_type() ) ) {
+			return;
+		}
+
 		// Same guard as finalize_buffer(): the translation plugin's buffer
 		// adds time between render and store, not less.
 		if ( self::assets_purged_since( $asset_stamp ) ) {
@@ -2349,6 +2521,14 @@ class Cache {
 		// treat these as pages. (Reported live on a customer site.)
 		if ( ( function_exists( 'is_robots' ) && is_robots() )
 			|| ( function_exists( 'is_favicon' ) && is_favicon() ) ) {
+			return self::bypass( 'non-html' );
+		}
+
+		// A client asking for a non-HTML representation of this URL must
+		// neither be handed the cached HTML nor have its answer stored. The
+		// write-side gate in finalize_buffer() keeps the store clean on its
+		// own; this keeps the negotiating client from receiving the page. (#693)
+		if ( self::accept_wants_non_html() && ! self::markdown_variant_request() ) {
 			return self::bypass( 'non-html' );
 		}
 
@@ -2475,9 +2655,20 @@ class Cache {
 	 * isn't a transient 404 we must never freeze — maintenance mode or a
 	 * 404 emitted while the DB/site is in an error state. The xspeed-pro
 	 * 404 cache flips the filter; Free never caches 404s on its own.
+	 *
+	 * The status being sent must be 404 as well. A plugin can answer a URL
+	 * WordPress has no route for (llms.txt, ads.txt, a virtual sitemap):
+	 * the main query is still is_404(), but the plugin sends 200 and its own
+	 * body. Read from is_404() alone, that file was stored as the site's
+	 * one 404 entry, served back with status 404, and handed to every
+	 * unknown URL on the site as its 404 page. (#744)
 	 */
 	public static function should_cache_404(): bool {
 		if ( ! function_exists( 'is_404' ) || ! is_404() ) {
+			return false;
+		}
+		$status = self::response_status();
+		if ( null !== $status && 404 !== $status ) {
 			return false;
 		}
 		// Never cache a 404 served because the site is down for
@@ -2538,6 +2729,133 @@ class Cache {
 			: '';
 
 		return '' !== trim( $query );
+	}
+
+	/**
+	 * Media types a client can ask for on an HTML URL to get another
+	 * representation of the same page. Matched as substrings of the Accept
+	 * header. The drop-in and the Apache rule carry a fixed copy
+	 * (`markdown`), because neither can run this filter.
+	 */
+	public const NON_HTML_ACCEPT_TYPES = array( 'text/markdown', 'text/x-markdown' );
+
+	/**
+	 * Does the request's Accept header ask for a non-HTML representation?
+	 */
+	public static function accept_wants_non_html(): bool {
+		$accept = isset( $_SERVER['HTTP_ACCEPT'] )
+			? strtolower( (string) wp_unslash( $_SERVER['HTTP_ACCEPT'] ) ) // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- substring-tested only; never echoed, stored or used as a path.
+			: '';
+		if ( '' === $accept ) {
+			return false;
+		}
+
+		/**
+		 * Filter: xspeed_non_html_accept_types
+		 *
+		 * Media types that, when named in the Accept header, mean the client
+		 * wants something other than the cached HTML page.
+		 *
+		 * @param string[] $types Lower-case media types.
+		 */
+		$types = (array) apply_filters( 'xspeed_non_html_accept_types', self::NON_HTML_ACCEPT_TYPES );
+		foreach ( $types as $type ) {
+			if ( is_string( $type ) && '' !== $type && false !== strpos( $accept, strtolower( $type ) ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Has the site opted into caching Markdown answers separately?
+	 *
+	 * Off by default. The drop-in reads the same choice from the
+	 * `.cache-markdown` flag, see sync_markdown_flag().
+	 */
+	public static function markdown_cache_enabled(): bool {
+		$opts = Settings_Manager::get( 'cache' );
+		return ! empty( $opts['cache_markdown'] );
+	}
+
+	/**
+	 * Is this a Markdown request that gets its own `|md` cache entry?
+	 *
+	 * Matches `markdown` in the Accept header, the same test the drop-in
+	 * and the Apache rule make, so all three agree on which requests are
+	 * the variant.
+	 */
+	public static function markdown_variant_request(): bool {
+		$accept = isset( $_SERVER['HTTP_ACCEPT'] ) ? (string) $_SERVER['HTTP_ACCEPT'] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- substring-tested only; never echoed, stored or used as a path.
+		if ( false === stripos( $accept, 'markdown' ) ) {
+			return false;
+		}
+		return self::markdown_cache_enabled();
+	}
+
+	/**
+	 * Is $content_type a Markdown media type?
+	 *
+	 * @param string $content_type Response Content-Type.
+	 */
+	public static function is_markdown_type( string $content_type ): bool {
+		$type = strtolower( trim( explode( ';', $content_type )[0] ) );
+		return 'text/markdown' === $type || 'text/x-markdown' === $type;
+	}
+
+	/**
+	 * Was DONOTCACHEPAGE defined after should_cache() ran?
+	 */
+	public static function donotcachepage_blocks_write(): bool {
+		return defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE;
+	}
+
+	/**
+	 * The Content-Type this response is about to be sent with, or '' when
+	 * nothing set one (PHP then sends its text/html default).
+	 */
+	public static function response_content_type(): string {
+		$content_type = '';
+		foreach ( headers_list() as $header ) {
+			if ( 0 === stripos( $header, 'content-type:' ) ) {
+				$content_type = trim( substr( $header, strlen( 'content-type:' ) ) );
+			}
+		}
+		return $content_type;
+	}
+
+	/**
+	 * Would storing a response of $content_type under this URL's key poison it?
+	 *
+	 * HTML is always storable. Anything else (Markdown, JSON, XML, plain
+	 * text) is storable only where the URL itself is non-HTML: an opted-in
+	 * feed or a core sitemap, whose type the .meta sidecar replays. Elsewhere
+	 * a non-HTML body means a plugin negotiated another representation of an
+	 * HTML page, and cache_key() has no way to keep the two apart. (#693)
+	 *
+	 * @param string $content_type Response Content-Type ('' = PHP default).
+	 */
+	public static function content_type_blocks_write( string $content_type ): bool {
+		$type = strtolower( trim( explode( ';', $content_type )[0] ) );
+		if ( '' === $type || 'text/html' === $type || 'application/xhtml+xml' === $type ) {
+			return false;
+		}
+
+		$non_html_url = ( function_exists( 'is_feed' ) && is_feed()
+				&& (bool) apply_filters( 'xspeed_should_cache_feed', false ) )
+			|| ( function_exists( 'get_query_var' )
+				&& ( '' !== (string) get_query_var( 'sitemap' ) || '' !== (string) get_query_var( 'sitemap-stylesheet' ) ) );
+
+		/**
+		 * Filter: xspeed_cache_non_html_allowed
+		 *
+		 * Whether a non-HTML response may be stored for this request. Default
+		 * true only for opted-in feeds and core sitemaps.
+		 *
+		 * @param bool   $allowed      Whether to store it.
+		 * @param string $content_type The response Content-Type.
+		 */
+		return ! (bool) apply_filters( 'xspeed_cache_non_html_allowed', $non_html_url, $content_type );
 	}
 
 	/**
@@ -2892,7 +3210,12 @@ class Cache {
 		// URL would let a scanner flood (millions of random paths) bloat
 		// the cache with identical 404 bodies. Both the write and the HIT
 		// lookup run through here, so they agree on the key automatically.
-		if ( self::should_cache_404() ) {
+		// A Markdown request gets its own entry beside the HTML one. It is
+		// never a shared 404 entry: finalize_buffer() stores only a 200
+		// Markdown answer under this key.
+		$variant = self::markdown_variant_request() ? '|md' : '';
+
+		if ( '' === $variant && self::should_cache_404() ) {
 			return md5( $host . '|404' );
 		}
 
@@ -2906,11 +3229,7 @@ class Cache {
 		// desktop responses live in different cache files so themes that
 		// serve different HTML by device (AMP, WPtouch, Jetpack mobile)
 		// can't poison each other.
-		$device = '';
-		$opts   = Settings_Manager::get( 'cache' );
-		if ( ! empty( $opts['mobile_separate'] ) ) {
-			$device = self::is_mobile_request() ? '|m' : '|d';
-		}
+		$device = self::device_suffix();
 
 		// Search-results requests fold the normalized term into the key so
 		// /?s=foo and /?s=bar get distinct entries (the query string is
@@ -2930,7 +3249,373 @@ class Cache {
 			}
 		}
 
-		return md5( $host . $uri . $device . $search . $feed );
+		return md5( $host . $uri . $device . $search . $feed . $variant );
+	}
+
+	/**
+	 * The device suffix of this request's cache key: '' while one copy
+	 * serves every device, else the suffix of the copy this request gets
+	 * (see Cache_Devices). Listing-page records key on it too, so a record
+	 * and the entry it describes always agree.
+	 */
+	public static function device_suffix(): string {
+		$opts = self::cache_settings();
+		if ( ! Cache_Devices::split( $opts ) ) {
+			return Cache_Devices::SHARED_SUFFIX;
+		}
+		// A request through an edge that keeps a copy per device goes in the
+		// copy that edge keys it under: by the user-agent, by Cloudflare's
+		// rules. See edge_device_trusted().
+		$edge = self::edge_device_bucket();
+		if ( '' !== $edge ) {
+			return $edge;
+		}
+		// Tablets first, and only while they have a copy of their own: with
+		// `tablet_separate` off a tablet goes wherever the phone test sends
+		// it, exactly as before tablets had a copy.
+		if ( Cache_Devices::tablet_split( $opts ) && self::is_tablet_request() ) {
+			return Cache_Devices::suffix( Cache_Devices::TABLET );
+		}
+		return Cache_Devices::suffix( self::is_mobile_request() ? Cache_Devices::MOBILE : Cache_Devices::DESKTOP );
+	}
+
+	/** The cache module's settings, always as an array. */
+	private static function cache_settings(): array {
+		$opts = Settings_Manager::get( 'cache' );
+		return is_array( $opts ) ? $opts : array();
+	}
+
+	/**
+	 * The device copies the cache keeps now, in purge order: an empty list
+	 * while one copy serves every device, else 'mobile', 'desktop' and,
+	 * with Separate tablet cache on, 'tablet' between them.
+	 *
+	 * @return string[] Cache_Devices::MOBILE, ::TABLET, ::DESKTOP.
+	 */
+	public static function device_list(): array {
+		return Cache_Devices::active( self::cache_settings() );
+	}
+
+	/**
+	 * What a tablet's page is built as, 'desktop' or 'mobile'
+	 * (`tablet_renders_as`). Read whether or not tablets have a copy of
+	 * their own: with Separate tablet cache off it still says which copy a
+	 * tablet belongs in when an edge reports one.
+	 */
+	public static function tablet_renders_as(): string {
+		return Cache_Devices::tablet_renders_as( self::cache_settings() );
+	}
+
+	/**
+	 * Mobile, tablet or desktop for a user-agent, in Cloudflare's words.
+	 * See Cache_Devices::from_user_agent() for the two rule sets.
+	 *
+	 * @param string      $ua               The raw user-agent.
+	 * @param string|null $sec_ch_ua_mobile The Sec-CH-UA-Mobile value, null when absent. Ignored by edge rules.
+	 * @param bool        $edge_rules       Cloudflare's published rules instead of the origin's.
+	 */
+	public static function device_from_user_agent( string $ua, ?string $sec_ch_ua_mobile = null, bool $edge_rules = false ): string {
+		return Cache_Devices::from_user_agent( $ua, $sec_ch_ua_mobile, $edge_rules );
+	}
+
+	/**
+	 * The cache-key suffix for a device class ('mobile', 'tablet' or
+	 * 'desktop', as device_from_user_agent() returns): 'mobile' is '|m',
+	 * 'desktop' is '|d', and 'tablet'
+	 * is '|t' while Separate tablet cache is on, else the suffix of the copy
+	 * `tablet_renders_as` names. An empty or unknown value returns '': no
+	 * answer, so use the origin's own detection. Whether to key by device at
+	 * all is the caller's decision; this does not read `mobile_separate`.
+	 */
+	public static function bucket_for_device( string $device ): string {
+		return Cache_Devices::bucket_for_device( $device, self::cache_settings() );
+	}
+
+	/**
+	 * Does the edge in front keep one copy of each page per device?
+	 *
+	 * True means the edge stores a copy per Cloudflare device type
+	 * (`CF-Device-Type`), keyed on the user-agent by Cloudflare's published
+	 * rules, and sends that header to the origin. Only then may a page cached
+	 * per device go to the edge, because each device gets its own copy there.
+	 *
+	 * Means nothing with Separate Mobile Cache off: one page serves every
+	 * device, there is no hold to lift, and the filter is not asked.
+	 *
+	 * Asked fresh on every call. An add-on's answer can change within a
+	 * request (the request that switches keying on re-bakes the drop-in), and
+	 * wp_is_mobile() can be called before the add-on has hooked in.
+	 *
+	 * @param string $context `request`, `store` or `bake`.
+	 */
+	public static function edge_keys_by_device( string $context = 'request' ): bool {
+		if ( ! self::mobile_cache_splits_html() ) {
+			return false;
+		}
+
+		/**
+		 * Filter: xspeed_edge_keys_by_device
+		 *
+		 * Return true when the edge in front of this site keeps one copy per
+		 * Cloudflare device type and sends `CF-Device-Type`. Read only while
+		 * Separate Mobile Cache is on.
+		 *
+		 * @param bool   $keyed   Default false.
+		 * @param string $context `request`, `store` or `bake`.
+		 */
+		return (bool) apply_filters( 'xspeed_edge_keys_by_device', false, $context );
+	}
+
+	/**
+	 * Did this request come through an edge that keeps a copy per device?
+	 *
+	 * All of: the keying filter says yes, Separate Mobile Cache is on, the
+	 * request carries a non-empty `CF-Device-Type`, its `CF-Ray` has
+	 * Cloudflare's shape, and nothing has shown the edge to be ignoring
+	 * device type lately (see note_edge_unkeyed()).
+	 *
+	 * A client can send both headers, and Cloudflare passes a client's
+	 * `CF-Device-Type` through when it is not keying. So trust never reads
+	 * the header's value. The copy and the render follow the user-agent, by
+	 * the same rules Cloudflare keys on, and a forged header cannot put one
+	 * device's page in another device's copy.
+	 */
+	public static function edge_device_trusted(): bool {
+		if ( self::$edge_render_untrusted || ! self::edge_device_signal() ) {
+			return false;
+		}
+		return ! self::edge_unkeyed_recently() && self::edge_keys_by_device( 'request' );
+	}
+
+	/**
+	 * The copy a trusted request belongs in, by Cloudflare's user-agent
+	 * rules, or '' when the request is not trusted.
+	 */
+	public static function edge_device_bucket(): string {
+		if ( ! self::edge_device_trusted() ) {
+			return '';
+		}
+		return self::bucket_for_device( self::device_from_user_agent( self::raw_user_agent(), null, true ) );
+	}
+
+	/**
+	 * What the drop-in needs for an edge that keeps a copy per device, as
+	 * baked into `@@XSPEED_EDGE_DEVICE@@`. Empty when the edge does not key
+	 * by device or the mobile cache is off, and the drop-in then behaves
+	 * exactly as before.
+	 *
+	 * - `cf_ray`: Edge_Provider::CF_RAY_PATTERN.
+	 * - `bucket`: the copy for each of Cloudflare's three device types under
+	 *   the current tablet settings.
+	 * - `unkeyed_flag`, `unkeyed_for`: the evidence file's absolute path and
+	 *   how long it blocks trust (see note_edge_unkeyed()). The path is baked
+	 *   like the hits log's, so the drop-in writes exactly where PHP reads.
+	 * - `hold`: the answer for a HIT without the signal. The ordinary bake
+	 *   lifts `mobile-split` while the filter says the edge keys, so the
+	 *   drop-in sends this instead for any request it does not trust. Empty
+	 *   when it would say the same as the ordinary bake.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public static function edge_device_dropin(): array {
+		if ( ! self::edge_keys_by_device( 'bake' ) ) {
+			return array();
+		}
+
+		$plain = self::edge_headers_for( 'HIT', 'bake' );
+		self::$baking_device_hold = true;
+		try {
+			$hold = self::edge_headers_for( 'HIT', 'bake' );
+		} finally {
+			self::$baking_device_hold = false;
+		}
+
+		$opts   = self::cache_settings();
+		$bucket = array();
+		foreach ( array( Cache_Devices::MOBILE, Cache_Devices::TABLET, Cache_Devices::DESKTOP ) as $device ) {
+			$bucket[ $device ] = Cache_Devices::bucket_for_device( $device, $opts );
+		}
+
+		return array(
+			'cf_ray'       => Edge_Provider::CF_RAY_PATTERN,
+			'bucket'       => $bucket,
+			'unkeyed_flag' => ( defined( 'XSPEED_CACHE_DIR' ) ? XSPEED_CACHE_DIR : WP_CONTENT_DIR . '/cache/xspeed' ) . '/' . self::EDGE_DEVICE_UNKEYED_FLAG,
+			'unkeyed_for'  => self::EDGE_DEVICE_UNKEYED_FOR,
+			'hold'         => $hold === $plain ? array() : $hold,
+		);
+	}
+
+	/**
+	 * Hook filter_wp_is_mobile() for a request that carries the edge's
+	 * device signal, so the page is built as the copy it is stored in.
+	 * Whether the request is trusted is decided when wp_is_mobile() runs,
+	 * because the keying filter may not be hooked yet at boot. A request
+	 * without the signal hooks nothing.
+	 */
+	public static function register_edge_device_render(): void {
+		// Stored read: this runs from CacheModule::boot(), before `init`.
+		$opts = self::stored_cache_opts();
+		if ( ! function_exists( 'add_filter' ) || ! Cache_Devices::split( $opts ) || ! self::edge_device_signal() ) {
+			return;
+		}
+		add_filter( 'wp_is_mobile', array( self::class, 'filter_wp_is_mobile' ), 999 );
+	}
+
+	/** Forget that this request's page was built untrusted. For tests. */
+	public static function reset_edge_render(): void {
+		self::$edge_render_untrusted = false;
+	}
+
+	/** Does the request carry `CF-Device-Type` and a Cloudflare-shaped `CF-Ray`? */
+	private static function edge_device_signal(): bool {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only tested for being non-empty, never stored or echoed.
+		$type = isset( $_SERVER['HTTP_CF_DEVICE_TYPE'] ) ? trim( (string) wp_unslash( $_SERVER['HTTP_CF_DEVICE_TYPE'] ) ) : '';
+		return '' !== $type && self::cf_ray_well_formed();
+	}
+
+	/** Does the request carry a `CF-Ray` of Cloudflare's shape? */
+	private static function cf_ray_well_formed(): bool {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only matched against a fixed pattern, never stored or echoed.
+		$ray = isset( $_SERVER['HTTP_CF_RAY'] ) ? (string) wp_unslash( $_SERVER['HTTP_CF_RAY'] ) : '';
+		return (bool) preg_match( Edge_Provider::CF_RAY_PATTERN, $ray );
+	}
+
+	/** The user-agent as sent, read the way the drop-in reads it. */
+	private static function raw_user_agent(): string {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only matched against fixed patterns, never stored or echoed. sanitize_text_field() would collapse the spaces the patterns read.
+		return isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) : '';
+	}
+
+	/**
+	 * Record that a cacheable request came through Cloudflare without
+	 * `CF-Device-Type` while the filter says the edge keys by device.
+	 *
+	 * A keyed edge sends the header with every request it could cache, so
+	 * such a request means the filter is stale: keying was switched off at
+	 * the edge and the add-on behind the filter has not caught up. Until then
+	 * a client could send its own `CF-Device-Type` (Cloudflare passes it
+	 * through when it is not keying) and lift the hold on a response the
+	 * edge would store as the one shared copy. So no request is trusted for
+	 * EDGE_DEVICE_UNKEYED_FOR seconds after this evidence. On a site whose
+	 * edge really stopped keying, ordinary visitors keep refreshing it.
+	 *
+	 * A zero-byte file, because the drop-in reads and writes the same one.
+	 * Refreshed at most once a minute.
+	 */
+	private static function note_edge_unkeyed(): void {
+		if ( ! defined( 'XSPEED_CACHE_DIR' ) ) {
+			return;
+		}
+		$flag = XSPEED_CACHE_DIR . '/' . self::EDGE_DEVICE_UNKEYED_FLAG;
+		clearstatcache( true, $flag );
+		if ( file_exists( $flag ) && time() - (int) filemtime( $flag ) < 60 ) {
+			return;
+		}
+		if ( ! is_dir( XSPEED_CACHE_DIR ) ) {
+			return;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.PHP.NoSilencedErrors.Discouraged -- a marker the pre-WP drop-in reads with filemtime(); must be a plain file, not WP_Filesystem.
+		@touch( $flag );
+	}
+
+	/** Has a request shown the edge to be ignoring device type lately? */
+	private static function edge_unkeyed_recently(): bool {
+		if ( ! defined( 'XSPEED_CACHE_DIR' ) ) {
+			return false;
+		}
+		$flag = XSPEED_CACHE_DIR . '/' . self::EDGE_DEVICE_UNKEYED_FLAG;
+		clearstatcache( true, $flag );
+		return file_exists( $flag ) && time() - (int) filemtime( $flag ) < self::EDGE_DEVICE_UNKEYED_FOR;
+	}
+
+	/**
+	 * May `mobile-split` be lifted in this context?
+	 *
+	 * - `bake` trusts the filter: there is no request to read, and the
+	 *   drop-in adds the hold back per request (edge_device_dropin()).
+	 * - `store` trusts the filter too. The hold belongs to the request, not
+	 *   the stored page; written into the page's sidecar it would be replayed
+	 *   to trusted requests as well. The serve paths hold untrusted requests
+	 *   for themselves.
+	 * - `request` needs a trusted request. A cacheable request through
+	 *   Cloudflare without the header is also recorded as evidence the edge
+	 *   is not keying.
+	 */
+	private static function edge_lifts_device_hold( string $status, string $context ): bool {
+		if ( 'bake' === $context ) {
+			return ! self::$baking_device_hold && self::edge_keys_by_device( 'bake' );
+		}
+		if ( 'store' === $context ) {
+			return self::edge_keys_by_device( 'store' );
+		}
+		if ( self::edge_device_signal() ) {
+			return self::edge_device_trusted();
+		}
+		if ( 'BYPASS' !== $status && self::cf_ray_well_formed() && self::edge_keys_by_device( 'request' ) ) {
+			self::note_edge_unkeyed();
+		}
+		return false;
+	}
+
+	/**
+	 * Is this request from a tablet, by the origin's tablet pattern? Reads
+	 * the user-agent raw, as the drop-in does, so both see the same string.
+	 */
+	private static function is_tablet_request(): bool {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only matched against a fixed pattern, never stored or echoed. sanitize_text_field() would collapse the spaces the pattern reads.
+		$ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) : '';
+		return Cache_Devices::is_tablet_user_agent( $ua );
+	}
+
+	/**
+	 * Build a trusted edge request's page as the copy the edge keys it under
+	 * (see edge_device_trusted()), and a tablet's page as
+	 * `tablet_renders_as` says. Hooked on `wp_is_mobile` while tablets have
+	 * a copy of their own or a request carries the edge's device signal, so a theme
+	 * branching on wp_is_mobile() renders the same page for every tablet and
+	 * the tablet copy never holds whichever variant arrived first. Other
+	 * requests keep core's answer.
+	 *
+	 * @param bool $is_mobile Core's answer.
+	 */
+	public static function filter_wp_is_mobile( $is_mobile ) {
+		// Stored read: wp_is_mobile() can run before `init`, and the schema
+		// path translates labels (see stored_cache_opts()).
+		$opts = self::stored_cache_opts();
+		// A trusted edge request is built as the copy the edge keys it
+		// under, so the edge copy, the origin file and the page agree.
+		if ( Cache_Devices::split( $opts ) && self::edge_device_trusted() ) {
+			$bucket = Cache_Devices::bucket_for_device(
+				self::device_from_user_agent( self::raw_user_agent(), null, true ),
+				$opts
+			);
+			if ( Cache_Devices::suffix( Cache_Devices::TABLET ) === $bucket ) {
+				return Cache_Devices::MOBILE === Cache_Devices::tablet_renders_as( $opts );
+			}
+			return Cache_Devices::suffix( Cache_Devices::MOBILE ) === $bucket;
+		}
+		// Built by the origin's answer while the signal is present: keep the
+		// request untrusted, so it is stored and held as that copy too.
+		if ( Cache_Devices::split( $opts ) && self::edge_device_signal() ) {
+			self::$edge_render_untrusted = true;
+		}
+		if ( Cache_Devices::tablet_split( $opts ) && self::is_tablet_request() ) {
+			return Cache_Devices::MOBILE === Cache_Devices::tablet_renders_as( $opts );
+		}
+		return $is_mobile;
+	}
+
+	/**
+	 * Hook filter_wp_is_mobile() when tablets have a copy of their own.
+	 * With Separate tablet cache off nothing is hooked, and wp_is_mobile()
+	 * answers exactly as core does.
+	 */
+	public static function register_tablet_render(): void {
+		// Stored read: this runs from CacheModule::boot(), before `init`.
+		if ( ! function_exists( 'add_filter' ) || ! Cache_Devices::tablet_split( self::stored_cache_opts() ) ) {
+			return;
+		}
+		add_filter( 'wp_is_mobile', array( self::class, 'filter_wp_is_mobile' ), 999 );
 	}
 
 	/**
@@ -2940,8 +3625,14 @@ class Cache {
 	 * detector if wp_is_mobile() isn't loaded (e.g. the drop-in path).
 	 */
 	private static function is_mobile_request(): bool {
+		// A tablet with a copy of its own is built as `tablet_renders_as`
+		// says, whatever wp_is_mobile() would answer.
+		$opts = self::cache_settings();
+		if ( Cache_Devices::tablet_split( $opts ) && self::is_tablet_request() ) {
+			return Cache_Devices::MOBILE === Cache_Devices::tablet_renders_as( $opts );
+		}
 		if ( function_exists( 'wp_is_mobile' ) ) {
-			return (bool) wp_is_mobile();
+			return Device_Check::own_lookup();
 		}
 		// Fallback for the rare context where wp_is_mobile() isn't loaded.
 		// Mirrors core's wp_is_mobile() EXACTLY — including the
@@ -2953,10 +3644,7 @@ class Cache {
 			return '?1' === $_SERVER['HTTP_SEC_CH_UA_MOBILE'];
 		}
 		$ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
-		if ( '' === $ua ) {
-			return false;
-		}
-		return (bool) preg_match( '/(Mobile|Android|Silk\/|Kindle|BlackBerry|Opera Mini|Opera Mobi)/i', $ua );
+		return Cache_Devices::MOBILE === Cache_Devices::from_hint_or_user_agent( null, $ua );
 	}
 
 	/**
@@ -3695,6 +4383,19 @@ class Cache {
 			}
 		}
 
+		// A body that is not HTML must not be stored under the page key, and
+		// must not go through the HTML transforms either. Plugins negotiate
+		// other representations on the same URL (SEOPress Pro answers
+		// `Accept: text/markdown` with Markdown); cache_key() cannot tell the
+		// variants apart, so whichever arrived first after a purge was replayed
+		// to every visitor. Pass it through untouched. (#693)
+		if ( self::markdown_variant_request() ) {
+			return self::store_markdown_variant( $buffer, $full, $status, $asset_stamp );
+		}
+		if ( self::content_type_blocks_write( self::response_content_type() ) ) {
+			return $buffer;
+		}
+
 		// If no mid-request flush happened, $buffer === $full and we can
 		// safely minify the on-wire bytes too. Otherwise earlier chunks have
 		// already been sent unminified, so we minify only what goes to disk —
@@ -3786,6 +4487,13 @@ class Cache {
 		// what this fix was always meant to do — and it is where the
 		// deferred writer has always placed its own copy of the guard.
 		if ( self::query_string_blocks_write() ) {
+			return $buffer;
+		}
+
+		// should_cache() read DONOTCACHEPAGE when the buffer opened, on
+		// template_redirect priority 0. A plugin that defines it later in the
+		// request (SEOPress does, at priority 10) was never seen. (#693)
+		if ( self::donotcachepage_blocks_write() ) {
 			return $buffer;
 		}
 
@@ -4381,14 +5089,73 @@ class Cache {
 		return (int) apply_filters( 'xspeed_cache_nonce_ttl_cap', $capped, $ttl, $nonce_life, $html );
 	}
 
-	private static function write_meta( string $key, string $html = '' ): void {
-		$content_type = '';
-		foreach ( headers_list() as $header ) {
-			if ( 0 === stripos( $header, 'content-type:' ) ) {
-				$content_type = trim( substr( $header, strlen( 'content-type:' ) ) );
+	/**
+	 * Store a Markdown answer under its own `|md` key, opt-in only.
+	 *
+	 * Only a 200 response the server actually sent as Markdown is kept. If
+	 * nothing on the site negotiates Markdown, WordPress answers with the
+	 * HTML page, and storing that again under a second key would only
+	 * double the cache. The HTML transforms (final-html filter, minify,
+	 * signature) are skipped: they would corrupt a Markdown body. Nothing
+	 * goes to the static tree, which the web server serves as HTML, so the
+	 * drop-in and the PHP path are the only ways back to this entry.
+	 *
+	 * @param string $buffer      This chunk, returned unchanged.
+	 * @param string $full        The whole response body.
+	 * @param int    $status      The response status.
+	 * @param ?string $asset_stamp Asset-purge stamp from when the buffer opened.
+	 */
+	private static function store_markdown_variant( string $buffer, string $full, int $status, ?string $asset_stamp ): string {
+		if ( 200 !== $status || ! self::is_markdown_type( self::response_content_type() ) ) {
+			return $buffer;
+		}
+		// The same write-time guards finalize_buffer() applies to HTML.
+		// A translation plugin's outer buffer has not run yet, so these
+		// bytes may be untranslated; the deferred writer handles HTML only.
+		if ( self::query_string_blocks_write()
+			|| self::assets_purged_since( $asset_stamp )
+			|| self::translation_plugin_active() ) {
+			return $buffer;
+		}
+
+		/*
+		 * A DONOTCACHEPAGE defined before the buffer opened was already
+		 * honoured by should_cache(), along with every visitor gate. One
+		 * defined during the render is, in practice, the Markdown plugin
+		 * protecting the HTML key from its own answer: SEOPress defines it on
+		 * every Markdown response. This entry has its own key, so that is the
+		 * one case the site opted into. A site that wants the constant to win
+		 * here as well can say so.
+		 */
+		if ( self::donotcachepage_blocks_write() ) {
+			/**
+			 * Filter: xspeed_markdown_cache_respects_donotcachepage
+			 *
+			 * Whether a DONOTCACHEPAGE defined during the render also stops the
+			 * opt-in Markdown entry from being stored. Default false.
+			 *
+			 * @param bool $respect Whether to skip the write.
+			 */
+			if ( (bool) apply_filters( 'xspeed_markdown_cache_respects_donotcachepage', false ) ) {
+				return $buffer;
 			}
 		}
-		$status = function_exists( 'http_response_code' ) ? (int) http_response_code() : 200;
+
+		self::ensure_host_dir();
+		$key = self::cache_key();
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context for credentials; cache writes happen on frontend requests where it's unavailable.
+		if ( false === file_put_contents( self::cache_file_for( $key ), $full, LOCK_EX ) ) {
+			return $buffer;
+		}
+		// Replays text/markdown on a HIT, and the per-entry edge hold.
+		self::write_meta( $key, $full );
+
+		return $buffer;
+	}
+
+	private static function write_meta( string $key, string $html = '' ): void {
+		$content_type = self::response_content_type();
+		$status       = function_exists( 'http_response_code' ) ? (int) http_response_code() : 200;
 
 		$meta            = array();
 		$is_default_type = ( '' === $content_type || false !== stripos( $content_type, 'text/html' ) );
@@ -5384,6 +6151,39 @@ class Cache {
 		return ! self::narrow_purge_applies( $post_type );
 	}
 
+	/**
+	 * Test seam for response_status(). Null reads http_response_code().
+	 *
+	 * @var int|null
+	 */
+	private static $response_status_override = null;
+
+	/**
+	 * Set once maybe_start_cache() has put a 404 off to the end of its hook,
+	 * so the second run goes ahead.
+	 *
+	 * @var bool
+	 */
+	private static $deferred_404 = false;
+
+	/**
+	 * The status this response is sending, or null when PHP has none to
+	 * report (WP-CLI, or before anything set one).
+	 */
+	private static function response_status(): ?int {
+		if ( null !== self::$response_status_override ) {
+			return self::$response_status_override;
+		}
+		$code = function_exists( 'http_response_code' ) ? http_response_code() : false;
+		return false === $code ? null : (int) $code;
+	}
+
+	/** Test seam: pretend the response is sending $status. Null clears it. */
+	public static function set_response_status_for_tests( ?int $status ): void {
+		self::$response_status_override = $status;
+		self::$deferred_404             = false;
+	}
+
 	/** Test seam: forget the post saves in progress. */
 	public static function reset_saves_under_way(): void {
 		self::$saves_under_way = array();
@@ -5878,8 +6678,15 @@ class Cache {
 
 		$count = 0;
 		foreach ( $forms as $uri ) {
-			// '' = mobile_separate off; '|m' / '|d' = the device buckets.
-			foreach ( array( '', '|m', '|d' ) as $device ) {
+			// '' = mobile_separate off; then every device copy. Entries from
+			// before a settings change are still on disk, so walk them all. A
+			// `|md` suffix is the opt-in Markdown entry for each of them.
+			$suffixes = array();
+			foreach ( Cache_Devices::stored_suffixes() as $suffix ) {
+				$suffixes[] = $suffix;
+				$suffixes[] = $suffix . '|md';
+			}
+			foreach ( $suffixes as $device ) {
 				$key  = md5( $host . $uri . $device );
 				$file = $base . '/' . $key . '.html';
 				if ( is_file( $file ) ) {
@@ -5907,7 +6714,10 @@ class Cache {
 				wp_delete_file( $file );
 				++$count;
 			}
-			foreach ( array( $file . '.br', self::brotli_size_sidecar( $file . '.br' ) ) as $sidecar ) {
+			// The expires marker goes too, as in rmtree_html(). Left behind,
+			// GC read its old deadline against a later copy of the page and
+			// evicted that copy early (#636).
+			foreach ( array( $file . '.br', self::brotli_size_sidecar( $file . '.br' ), $dir . '/' . self::EXPIRES_MARKER ) as $sidecar ) {
 				if ( is_file( $sidecar ) ) {
 					wp_delete_file( $sidecar );
 				}
@@ -6346,13 +7156,15 @@ class Cache {
 	 *                          Pass '*' to sweep the ENTIRE tree — network
 	 *                          admin's "purge all sites", and the migration
 	 *                          of pre-#6 entries that sit in the tree root.
-	 * @return array{pages:int,rest:int,assets:int,bytes:int} Entries removed
+	 * @return array{pages:int,rest:int,assets:int,bytes:int,complete:bool} Entries removed
 	 *               per store, and the bytes freed by the two file sweeps
-	 *               that measure themselves.
+	 *               that measure themselves. Complete is false if a page or REST cache
+	 *               directory could not be read or a cache file survived deletion.
 	 */
 	public static function purge_local( ?string $host = null ): array {
-		$network_wide      = ( '*' === $host );
-		self::$sweep_bytes = 0;
+		$network_wide        = ( '*' === $host );
+		self::$sweep_bytes    = 0;
+		self::$sweep_complete = true;
 		// The flat tree buckets by a flattened segment (host/a-b) while the
 		// static tree mirrors the URL (host/a/b), so they need separate
 		// scopes — see current_host_dir() vs current_static_scope().
@@ -6369,6 +7181,9 @@ class Cache {
 
 		$count = 0;
 		if ( is_dir( XSPEED_CACHE_DIR ) ) {
+			if ( ! is_readable( XSPEED_CACHE_DIR ) ) {
+				self::$sweep_complete = false;
+			}
 			// Scoped to one host directory, or the whole tree (including the
 			// legacy top-level entries written before #6) when network-wide.
 			/*
@@ -6386,8 +7201,8 @@ class Cache {
 			$roots = $network_wide
 				? array_merge(
 					array( XSPEED_CACHE_DIR ),
-					array_filter( (array) glob( XSPEED_CACHE_DIR . '/*', GLOB_ONLYDIR ) ),
-					array_filter( (array) glob( XSPEED_CACHE_DIR . '/*/*', GLOB_ONLYDIR ) )
+					self::sweep_glob( XSPEED_CACHE_DIR . '/*', GLOB_ONLYDIR ),
+					self::sweep_glob( XSPEED_CACHE_DIR . '/*/*', GLOB_ONLYDIR )
 				)
 				: array( XSPEED_CACHE_DIR . '/' . $scope );
 
@@ -6396,23 +7211,25 @@ class Cache {
 				 * min/ and rest/ are swept by their own purgers below; never
 				 * treat them as host buckets.
 				 *
-				 * Checked on every path SEGMENT, not just the basename: now
-				 * that the network-wide glob descends two levels it can reach
-				 * `min/combined`, whose basename is `combined` and would sail
-				 * past a basename-only test — deleting the combined
-				 * stylesheets out from under the pages that link them.
+				 * Only the first segment identifies a shared store. Later
+				 * segments can name legitimate subsites such as host/min.
+				 * Checking the first segment also keeps min/combined excluded.
 				 */
 				if ( ! $network_wide || XSPEED_CACHE_DIR !== $root ) {
 					$relative = trim( str_replace( XSPEED_CACHE_DIR, '', (string) $root ), '/' );
 					$segments = '' === $relative ? array() : explode( '/', $relative );
-					if ( array_intersect( $segments, array( 'min', 'rest' ) ) ) {
+					if ( isset( $segments[0] ) && in_array( $segments[0], array( 'min', 'rest' ), true ) ) {
 						continue;
 					}
 				}
 				if ( ! is_dir( $root ) ) {
 					continue;
 				}
-				$files = glob( $root . '/*.html' );
+				if ( ! is_readable( $root ) ) {
+					self::$sweep_complete = false;
+					continue;
+				}
+				$files = self::sweep_glob( $root . '/*.html' );
 				if ( $files ) {
 					$count += count( $files );
 					foreach ( $files as $f ) {
@@ -6422,7 +7239,7 @@ class Cache {
 				// Remove the .meta sidecars (content-type for feeds/sitemaps)
 				// alongside their .html entries. Not counted — they're not
 				// cache "pages", just per-entry metadata.
-				$meta = glob( $root . '/*.meta' );
+				$meta = self::sweep_glob( $root . '/*.meta' );
 				if ( $meta ) {
 					foreach ( $meta as $m ) {
 						self::sweep_delete( $m );
@@ -6432,7 +7249,7 @@ class Cache {
 				// Brotli module). Not counted — same as .meta. Without this a
 				// purge leaves stale .br bodies behind: disk bloat, and a
 				// staleness window if precompression is later disabled.
-				$br = glob( $root . '/*.br' );
+				$br = self::sweep_glob( $root . '/*.br' );
 				if ( $br ) {
 					foreach ( $br as $b ) {
 						self::sweep_delete( $b );
@@ -6441,7 +7258,7 @@ class Cache {
 				// `*.br` does not match `*.br.size` — same reason as the flat-root
 			// sweep above: a size record outliving its body would later be
 			// read against a different sibling's bytes.
-				$br_size = glob( $root . '/*.br.size' );
+				$br_size = self::sweep_glob( $root . '/*.br.size' );
 				if ( $br_size ) {
 					foreach ( $br_size as $b ) {
 						self::sweep_delete( $b );
@@ -6463,7 +7280,9 @@ class Cache {
 		}
 		// REST response cache (cache/xspeed/rest/*.json) — same purge
 		// triggers (publish, settings change) invalidate it too.
-		$rest   = Rest_Cache::purge();
+		$rest_complete = false;
+		$rest = Rest_Cache::purge( $rest_complete );
+		self::$sweep_complete = self::$sweep_complete && $rest_complete;
 		$count += $rest;
 
 		// Minified + combined CSS/JS (cache/xspeed/min/ and min/combined/)
@@ -6482,10 +7301,11 @@ class Cache {
 		$assets = ( $network_wide && class_exists( '\\XSpeed\\Minifier' ) ) ? Minifier::purge_minified() : 0;
 
 		return array(
-			'pages'  => $count - $rest,
-			'rest'   => $rest,
-			'assets' => $assets,
-			'bytes'  => self::$sweep_bytes,
+			'pages'    => $count - $rest,
+			'rest'     => $rest,
+			'assets'   => $assets,
+			'bytes'    => self::$sweep_bytes,
+			'complete' => self::$sweep_complete,
 		);
 	}
 
@@ -6529,9 +7349,11 @@ class Cache {
 	 *                                          is urls/site/network/none,
 	 *                                          `intent` explains why, and
 	 *                                          `urls` supplies exact targets.
+	 * @param bool|null   $local_complete Receives the local page and REST cache sweep outcome,
+	 *                                   captured before purge listeners run.
 	 * @return int Page + REST entries removed.
 	 */
-	public static function purge_all( string $cause = 'manual', ?string $host = null, array $invalidation = array() ) {
+	public static function purge_all( string $cause = 'manual', ?string $host = null, array $invalidation = array(), ?bool &$local_complete = null ) {
 		$network_wide  = ( '*' === $host );
 		$adapter_scope = isset( $invalidation['scope'] ) && is_string( $invalidation['scope'] )
 			? $invalidation['scope']
@@ -6562,6 +7384,8 @@ class Cache {
 		$fallback = isset( $invalidation['fallback'] ) && is_string( $invalidation['fallback'] ) ? $invalidation['fallback'] : '';
 
 		$removed = self::purge_local( $host );
+		// Capture before listeners can start another purge and reset the sweep state.
+		$local_complete = $removed['complete'];
 		$count   = $removed['pages'] + $removed['rest'];
 
 		self::flush_object_cache( $network_wide );
@@ -7764,6 +8588,20 @@ class Cache {
 			self::$sweep_bytes += $size;
 		}
 		wp_delete_file( $file );
+		clearstatcache( true, $file );
+		if ( file_exists( $file ) ) {
+			self::$sweep_complete = false;
+		}
+	}
+
+	/** A failed directory read must not look like an empty cache. */
+	private static function sweep_glob( string $pattern, int $flags = 0 ): array {
+		$files = glob( $pattern, $flags );
+		if ( false === $files ) {
+			self::$sweep_complete = false;
+			return array();
+		}
+		return $files;
 	}
 
 	private static function rmtree_html( string $dir ): int {
@@ -7775,6 +8613,7 @@ class Cache {
 		// the whole tree regardless of order.
 		$entries = @scandir( $dir, SCANDIR_SORT_NONE ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		if ( false === $entries ) {
+			self::$sweep_complete = false;
 			return 0;
 		}
 		foreach ( $entries as $entry ) {
@@ -8089,6 +8928,10 @@ class Cache {
 			 * filesystem sweep.
 			 */
 			if ( $changed ) {
+				// The home verdict described the state just left. Until the
+				// next home visit, "unknown" is true and "cache off" is not.
+				delete_option( self::HOME_VERDICT_OPTION );
+
 				/*
 				 * On shutdown, not inline. `purge_all()` sweeps the cache
 				 * directory and fires the purge actions, and a listener on
@@ -8294,6 +9137,7 @@ class Cache {
 			$rewrite_ok   = self::install_rewrite();
 			self::ensure_hits_log_file();
 			self::sync_mobile_flag();
+			self::sync_markdown_flag();
 			$snippet      = $wp_config_ok ? null : "define( 'WP_CACHE', true );";
 			Settings::update( array( 'cache_enabled' => true ) );
 			if ( empty( Settings::get()['cache_enabled'] ) ) {
@@ -8451,6 +9295,7 @@ class Cache {
 		// nothing left to read it, and leaving it behind would dirty a fresh
 		// re-enable (and leaks across test runs).
 		self::sync_mobile_flag( false );
+		self::sync_markdown_flag( false );
 		Settings::update( array( 'cache_enabled' => false ) );
 		if ( ! empty( Settings::get()['cache_enabled'] ) ) {
 			if ( $not_ours ) {
@@ -8936,12 +9781,50 @@ class Cache {
 	}
 
 	public static function sync_mobile_flag( $enabled = null ): void {
+		$stored = self::stored_cache_opts();
 		if ( null === $enabled ) {
-			$stored  = self::stored_cache_opts();
 			$enabled = ! empty( $stored['mobile_separate'] );
 		}
+		$dir = XSPEED_CACHE_DIR;
+		// The tablet flag only ever sits beside the phone flag: tablets get
+		// a copy of their own only on top of the phone split.
+		self::sync_flag_file( $dir, $dir . '/' . Cache_Devices::TABLET_FLAG, $enabled && ! empty( $stored['tablet_separate'] ) );
+		self::sync_flag_file( $dir, $dir . '/' . Cache_Devices::MOBILE_FLAG, (bool) $enabled );
+	}
+
+	/** Create or remove one zero-byte marker the drop-in reads. */
+	private static function sync_flag_file( string $dir, string $flag, bool $wanted ): void {
+		if ( $wanted ) {
+			if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+				return;
+			}
+			if ( ! file_exists( $flag ) ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.PHP.NoSilencedErrors.Discouraged -- read by the pre-WP drop-in via file_exists(); must be a plain marker, not WP_Filesystem.
+				@touch( $flag );
+			}
+			return;
+		}
+		if ( file_exists( $flag ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged -- plain marker removal; non-fatal.
+			@unlink( $flag );
+		}
+	}
+
+	/**
+	 * Keep the drop-in's `.cache-markdown` flag in step with the
+	 * `cache_markdown` setting. The drop-in runs before WordPress loads and
+	 * cannot read the option, so this marker is how it knows to serve a
+	 * Markdown request from its `|md` entry rather than fall through.
+	 *
+	 * @param bool|null $enabled Force a state; null reads the stored setting.
+	 */
+	public static function sync_markdown_flag( $enabled = null ): void {
+		if ( null === $enabled ) {
+			$stored  = self::stored_cache_opts();
+			$enabled = ! empty( $stored['cache_markdown'] );
+		}
 		$dir  = XSPEED_CACHE_DIR;
-		$flag = $dir . '/.mobile-separate';
+		$flag = $dir . '/.cache-markdown';
 		if ( $enabled ) {
 			if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
 				return;
@@ -8989,6 +9872,67 @@ class Cache {
 	}
 
 	/**
+	 * The flag the drop-in requires before it serves anything (#597).
+	 *
+	 * Its name carries ABSPATH, so a copy of the site at another path does
+	 * not inherit it. The drop-in removes it on a request where WordPress
+	 * loaded and xSpeed did not, which is how a database restore that left
+	 * the plugin inactive stops the old pages being served.
+	 */
+	public static function active_flag_path(): string {
+		return WP_CONTENT_DIR . '/cache/xspeed/.active-' . md5( ABSPATH );
+	}
+
+	/**
+	 * The marker the drop-in leaves when it removes the active flag because
+	 * xSpeed was off. The cache was not purged while it was off.
+	 */
+	public static function stale_marker_path(): string {
+		return WP_CONTENT_DIR . '/cache/xspeed/.stale-' . md5( ABSPATH );
+	}
+
+	/**
+	 * Write the drop-in's active flag when it is missing.
+	 *
+	 * Runs on every request that boots the plugin with the page cache on, so
+	 * the cost when the flag exists is one file_exists(). The drop-in may
+	 * have removed it on a request where the plugin was off (a database
+	 * restore, recovery mode), and the next request that boots puts it back.
+	 * The flag holds the plugin's basename, which the drop-in compares with
+	 * the stored active_plugins list.
+	 */
+	public static function sync_active_flag(): void {
+		$flag = self::active_flag_path();
+		if ( file_exists( $flag ) ) {
+			return;
+		}
+		$dir = dirname( $flag );
+		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+			return;
+		}
+		// The drop-in found xSpeed off, so nothing purged a page while its
+		// post changed, and a restore may have replaced every post. Empty
+		// the cache before serving from it again.
+		$stale = self::stale_marker_path();
+		if ( file_exists( $stale ) ) {
+			self::purge_all( 'xspeed was off' );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged -- plain marker removal; non-fatal.
+			@unlink( $stale );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents, WordPress.PHP.NoSilencedErrors.Discouraged -- read by the pre-WP drop-in; must be a plain file, not WP_Filesystem.
+		@file_put_contents( $flag, basename( dirname( XSPEED_FILE ) ) . '/' . basename( XSPEED_FILE ) );
+	}
+
+	/** Remove the drop-in's active flag, so it stops serving at once. */
+	public static function clear_active_flag(): void {
+		$flag = self::active_flag_path();
+		if ( file_exists( $flag ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged -- plain marker removal; non-fatal.
+			@unlink( $flag );
+		}
+	}
+
+	/**
 	 * Reconcile every mobile_separate-dependent artifact to the current
 	 * setting. Called on boot and whenever the cache settings are saved, so
 	 * flipping mobile_separate at runtime can't leave the install in a
@@ -9006,6 +9950,7 @@ class Cache {
 	 */
 	public static function reconcile_mobile_separate(): void {
 		self::sync_mobile_flag();
+		self::sync_markdown_flag();
 		if ( defined( 'XSPEED_CACHE_DIR' ) ) {
 			// Keep the drop-in's view of the network's blog paths current — a
 			// site added or removed changes which bucket its URLs belong to. (#6)
@@ -9054,7 +9999,25 @@ class Cache {
 			update_option( 'xspeed_last_mobile_separate', $mobile_now ? '1' : '0', false );
 		}
 
+		// The tablet copy, tracked the same way. Its state names both the
+		// split and what tablets are built as: a tablet entry built as the
+		// desktop page is wrong once tablets are to get the phone page.
+		// Nothing changes for a site that never turned tablets on: no option
+		// is written and nothing is purged until the first flip.
+		$tablet_now     = Cache_Devices::tablet_split( $cache_opts ) ? 't:' . Cache_Devices::tablet_renders_as( $cache_opts ) : '0';
+		$tablet_last    = get_option( 'xspeed_last_tablet_split', null );
+		$tablet_flipped = ( null === $tablet_last ? '0' : (string) $tablet_last ) !== $tablet_now;
+		if ( $tablet_flipped ) {
+			update_option( 'xspeed_last_tablet_split', $tablet_now, false );
+		}
+
 		if ( $rewrite_present === $rewrite_wanted ) {
+			// The rewrite never changes with the tablet copy: tablets are
+			// split only on top of the phone split, which already keeps it
+			// off. So a tablet flip purges here.
+			if ( $tablet_flipped ) {
+				self::purge_all( 'tablet_separate changed' );
+			}
 			// Already consistent — nothing flipped, leave caches intact so a
 			// plain settings save (e.g. expiry change) doesn't blow the cache.
 			return;
@@ -9070,6 +10033,8 @@ class Cache {
 		// Only discard cache contents when the device bucketing changed.
 		if ( $mobile_flipped ) {
 			self::purge_all( 'mobile_separate changed' );
+		} elseif ( $tablet_flipped ) {
+			self::purge_all( 'tablet_separate changed' );
 		}
 	}
 
@@ -9356,18 +10321,18 @@ class Cache {
 	}
 
 	/**
-	 * On-demand probe: does the homepage serve materially the same HTML to a
-	 * desktop and a mobile browser? Fetches home_url() twice over loopback —
-	 * once with a desktop User-Agent, once with a mobile one — strips
-	 * per-request noise (nonces, CSRF tokens, session ids, inline timestamps),
-	 * and compares. When identical, Separate Mobile Cache is almost certainly
-	 * unnecessary and the user can turn it off to regain the static fast path.
+	 * On-demand probe: does the site send phones different HTML? Compares the
+	 * home page fetched as a desktop and as a phone (Device_Check::compare()),
+	 * and adds the pages the background check found differing. When the
+	 * answer is "identical", Separate Mobile Cache is unnecessary and the user
+	 * can turn it off to regain the static fast path.
 	 *
-	 * NEVER run automatically (no page-load cost) — only from the dashboard
-	 * "Check now" button. Result is cached for 10 minutes so a double-click or
-	 * a re-render doesn't fire two more self-requests. (FBS-83145)
+	 * Runs only from the dashboard "Check now" button, never on a page load.
+	 * Result is cached for a minute so a double-click or a re-render doesn't
+	 * fire two more self-requests. Not longer: someone who has just fixed a
+	 * page clicks Check now again and must see the new answer (#618 QA). (FBS-83145, #595, #618)
 	 *
-	 * @return array{ identical:bool, checked:bool, reason?:string, desktop_bytes?:int, mobile_bytes?:int }
+	 * @return array{ identical:bool, checked:bool, asked?:bool, reason?:string, desktop_bytes?:int, mobile_bytes?:int, differing_pages?:string[] }
 	 */
 	public static function probe_mobile_equality(): array {
 		$cached = get_transient( 'xspeed_mobile_equality_probe' );
@@ -9376,61 +10341,39 @@ class Cache {
 		}
 
 		$home = home_url( '/' );
-		$host = (string) wp_parse_url( $home, PHP_URL_HOST );
-		if ( '' === $host ) {
+		if ( '' === (string) wp_parse_url( $home, PHP_URL_HOST ) ) {
 			$result = array( 'identical' => false, 'checked' => false, 'reason' => 'home_url has no host' );
 			set_transient( 'xspeed_mobile_equality_probe', $result, MINUTE_IN_SECONDS );
 			return $result;
 		}
 
-		// Match WP core's own mobile detection (wp_is_mobile) so the probe
-		// reflects what the site would actually branch on. iPhone Safari for
-		// mobile; a current desktop Chrome UA for desktop.
-		$desktop_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-		$mobile_ua  = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
-
-		$is_local = function_exists( 'wp_get_environment_type' )
-			&& in_array( wp_get_environment_type(), array( 'local', 'development' ), true );
-
-		$fetch = static function ( string $ua ) use ( $home, $is_local ) {
-			$resp = wp_remote_get(
-				$home,
-				array(
-					'timeout'     => 5,
-					'sslverify'   => ! $is_local,
-					'redirection' => 2,
-					// Bust any per-device cache so we compare freshly-rendered
-					// HTML, and pass the device UA the site would branch on.
-					'user-agent'  => $ua,
-					// A real device UA by design, so only the header marks
-					// this as ours to analytics and the hit ratio.
-					'headers'     => Self_Traffic::headers( array( 'Cache-Control' => 'no-cache' ) ),
-				)
-			);
-			if ( is_wp_error( $resp ) || 200 !== (int) wp_remote_retrieve_response_code( $resp ) ) {
-				return null;
-			}
-			return (string) wp_remote_retrieve_body( $resp );
-		};
-
-		$desktop = $fetch( $desktop_ua );
-		$mobile  = $fetch( $mobile_ua );
-
-		if ( null === $desktop || null === $mobile ) {
-			$result = array( 'identical' => false, 'checked' => false, 'reason' => 'could not fetch homepage twice' );
+		// The home page, fetched once per device. Device_Check asks the
+		// render whether anything called wp_is_mobile() instead of trusting
+		// the HTML alone, which rotating content and per-render ids made
+		// read as "different" about one time in three. (#618 QA)
+		$result = Device_Check::compare( $home );
+		if ( empty( $result['checked'] ) ) {
 			set_transient( 'xspeed_mobile_equality_probe', $result, MINUTE_IN_SECONDS );
 			return $result;
 		}
 
-		$identical = self::normalize_html_for_diff( $desktop ) === self::normalize_html_for_diff( $mobile );
+		// Pages the background check found serving phones different HTML.
+		// The home page can match on both devices while a product page or a
+		// landing page does not. Compared again first: an old verdict for a
+		// page fixed since must not decide this answer (#618 QA).
+		Device_Check::recheck_differing();
+		$differing = Device_Check::differing_pages();
+		if ( ! empty( $differing ) ) {
+			// The byte counts are the home page's. When the home page matched,
+			// "76,798 vs 76,798 bytes" next to "differ" only confuses.
+			if ( ! empty( $result['identical'] ) ) {
+				unset( $result['desktop_bytes'], $result['mobile_bytes'] );
+			}
+			$result['identical']       = false;
+			$result['differing_pages'] = array_slice( $differing, 0, 10 );
+		}
 
-		$result = array(
-			'identical'     => $identical,
-			'checked'       => true,
-			'desktop_bytes' => strlen( $desktop ),
-			'mobile_bytes'  => strlen( $mobile ),
-		);
-		set_transient( 'xspeed_mobile_equality_probe', $result, 10 * MINUTE_IN_SECONDS );
+		set_transient( 'xspeed_mobile_equality_probe', $result, MINUTE_IN_SECONDS );
 		return $result;
 	}
 
@@ -9441,7 +10384,7 @@ class Cache {
 	 * handful of well-known noise sources and collapses whitespace, so a site
 	 * that truly serves different markup per device still compares as different.
 	 */
-	private static function normalize_html_for_diff( string $html ): string {
+	public static function normalize_html_for_diff( string $html ): string {
 		// Every rule here errs toward "they differ" being WRONG rather than
 		// "they match" being wrong: this check only ever tells a user it is
 		// SAFE to turn Separate Mobile Cache off, so a false "identical"
@@ -10056,6 +10999,13 @@ class Cache {
 			'  RewriteEngine On',
 			'  RewriteCond %{REQUEST_METHOD} ^GET$',
 			'  RewriteCond %{QUERY_STRING} ^$',
+			// A Markdown request wants another representation of the page,
+			// not the cached HTML. Fixed copy of Cache::NON_HTML_ACCEPT_TYPES.
+			// nginx_snippet() deliberately has no twin: a new line there moves
+			// the rules hash and flags every pasted block, including hosts
+			// that write it themselves, as stale. On nginx such a client gets
+			// the HTML page, and nothing it receives can be stored. (#693)
+			'  RewriteCond %{HTTP_ACCEPT} !markdown [NC]',
 			'  RewriteCond %{HTTP_COOKIE} !(' . $cookie_rule['regex'] . ') [NC]',
 		);
 
@@ -11075,9 +12025,28 @@ class Cache {
 			$source_contents
 		);
 
+		// The answer for an edge that keeps a copy per device: which copy
+		// each of its device types gets, and the hold for a request without
+		// its signal. `array()` when it does not key by device, and the
+		// drop-in then does what it did before. See edge_device_dropin().
+		$edge_device = self::edge_device_dropin();
+		$source_contents = str_replace(
+			"'@@XSPEED_EDGE_DEVICE@@'",
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- builds a PHP literal for the drop-in; nothing is printed.
+			var_export( $edge_device, true ),
+			$source_contents
+		);
+		self::track_edge_device_keying( array() !== $edge_device );
+
+		// The device list: the user-agent pattern and each copy's key
+		// suffix, from the same class Cache::cache_key() reads, so the
+		// drop-in cannot pick a copy PHP never writes.
+		$source_contents = Cache_Devices::bake( $source_contents );
+
 		if ( file_exists( $target ) ) {
 			$existing = $wp_filesystem->get_contents( $target );
 			if ( is_string( $existing ) && $existing === $source_contents ) {
+				self::sync_active_flag();
 				return true;
 			}
 		}
@@ -11085,8 +12054,45 @@ class Cache {
 		$written = (bool) $wp_filesystem->put_contents( $target, $source_contents, FS_CHMOD_FILE );
 		if ( $written ) {
 			self::forget_compiled_dropin( $target );
+			// In the same request, so the page cache serves from the next one.
+			self::sync_active_flag();
 		}
 		return $written;
+	}
+
+	/**
+	 * Purge the page cache once when the edge starts or stops keeping a copy
+	 * per device, the way reconcile_mobile_separate() does for the mobile
+	 * cache itself. Pages stored under one answer go, so no page or sidecar
+	 * from before the switch reaches the edge after it.
+	 *
+	 * Tracked here rather than in reconcile_mobile_separate(), because that
+	 * runs from CacheModule::boot(), before an add-on that answers the
+	 * filter has hooked in. The bake is where the answer is fixed, and an
+	 * add-on re-bakes when its answer changes.
+	 *
+	 * Tracked only while the mobile cache is on, since the answer means
+	 * nothing otherwise and the mobile cache's own flip purges. A site whose
+	 * edge never keyed writes no option.
+	 *
+	 * @param bool $keyed What this bake says.
+	 */
+	private static function track_edge_device_keying( bool $keyed ): void {
+		if ( ! self::mobile_cache_splits_html() ) {
+			return;
+		}
+		$now  = $keyed ? '1' : '0';
+		$last = (string) get_option( 'xspeed_last_edge_device_keyed', '0' );
+		if ( $now === $last ) {
+			return;
+		}
+		update_option( 'xspeed_last_edge_device_keyed', $now, false );
+		if ( $keyed && defined( 'XSPEED_CACHE_DIR' ) && file_exists( XSPEED_CACHE_DIR . '/' . self::EDGE_DEVICE_UNKEYED_FLAG ) ) {
+			// Evidence from before the switch says nothing about the edge now.
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged -- plain marker removal; non-fatal.
+			@unlink( XSPEED_CACHE_DIR . '/' . self::EDGE_DEVICE_UNKEYED_FLAG );
+		}
+		self::purge_all( 'edge device keying changed' );
 	}
 
 	/**
@@ -11125,6 +12131,7 @@ class Cache {
 	}
 
 	public static function remove_dropin() {
+		self::clear_active_flag();
 		$target = WP_CONTENT_DIR . '/advanced-cache.php';
 		if ( ! file_exists( $target ) ) {
 			return;

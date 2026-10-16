@@ -65,6 +65,7 @@ class ComposerStaticInit658ed90fed7749ed814442769ec5d073
         'XSpeed\\Modules\\Mcp\\Cli_Shim' => __DIR__ . '/../..' . '/includes/modules/Mcp/Cli_Shim.php',
         'XSpeed\\Modules\\Mcp\\McpModule' => __DIR__ . '/../..' . '/includes/modules/Mcp/McpModule.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Activity_Log' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Activity_Log.php',
+        'XSpeed\\Modules\\Mcp\\Mcp_Approvals' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Approvals.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Auth' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Auth.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Hub' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Hub.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Hub_Connect' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Hub_Connect.php',

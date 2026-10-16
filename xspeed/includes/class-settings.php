@@ -136,6 +136,7 @@ class Settings {
 			 * @param string $host    Whoever claimed the install, or ''.
 			 */
 			do_action( 'xspeed_conflict_profile_applied', $written, $state, self::installed_by() );
+			self::seed_new_install_delay();
 			update_option( self::PROFILE_OPTION, self::PROFILE_CONFLICT_SAFE, false );
 			return self::PROFILE_CONFLICT_SAFE;
 		}
@@ -146,11 +147,13 @@ class Settings {
 			// cases. Only what happens to page caching differs, and that is
 			// Plugin::activate()'s call, not a settings write.
 			self::apply_conflict_safe_profile();
+			self::seed_new_install_delay();
 			update_option( self::PROFILE_OPTION, self::PROFILE_HOST_PAGE_CACHE, false );
 			return self::PROFILE_HOST_PAGE_CACHE;
 		}
 
 		self::seed_recommended_modules();
+		self::seed_new_install_delay();
 		update_option( self::PROFILE_OPTION, self::PROFILE_RECOMMENDED, false );
 		return self::PROFILE_RECOMMENDED;
 	}
@@ -439,6 +442,44 @@ class Settings {
 			if ( $next !== $stored ) {
 				update_option( $key, $next, false );
 			}
+		}
+	}
+
+	/**
+	 * How Delay JS behaves on a new install once someone turns it on. Delay
+	 * JS itself stays off.
+	 *
+	 * - No failsafe timer: delayed scripts wait for a real interaction. The
+	 *   8 s timer fired inside Lighthouse's trace, so every delayed script
+	 *   ran during the test anyway. WP Rocket's delay has no timer either.
+	 * - Smart Delay on: without it, page builder scripts are barely delayed.
+	 *
+	 * These are written at activation, never as schema defaults: a schema
+	 * default is merged under stored values, so changing one would change
+	 * every existing site that never saved the Minify panel. Existing sites
+	 * keep the 8 s timer and Smart Delay off.
+	 *
+	 * @return array<string,int|bool>
+	 */
+	public static function new_install_delay_settings(): array {
+		return array(
+			'delay_js_timeout' => 0,
+			'delay_js_smart'   => true,
+		);
+	}
+
+	/**
+	 * Write new_install_delay_settings() where nothing is stored yet. The
+	 * conflict-safe sweep has already written Smart Delay off on the
+	 * profiles that switch everything off, so only the timeout lands there.
+	 */
+	private static function seed_new_install_delay(): void {
+		$key    = 'xspeed_module_minify';
+		$stored = get_option( $key, null );
+		$stored = is_array( $stored ) ? $stored : array();
+		$next   = $stored + self::new_install_delay_settings();
+		if ( $next !== $stored ) {
+			update_option( $key, $next, false );
 		}
 	}
 

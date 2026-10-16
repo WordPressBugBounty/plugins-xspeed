@@ -52,6 +52,21 @@ final class Mcp_Hub {
 	 */
 	public const SITE_ATTACHED_OPTION = 'xspeed_hub_site_attached';
 
+	/*
+	 * What proved a link, stored as `proof` in the hub-link meta. A link
+	 * without one came from the Hub answering by URL alone, which another
+	 * install on the same local URL also gets (xspeed-hub#370).
+	 */
+
+	/** Our own signed attach nonce came back. */
+	public const PROOF_NONCE = 'nonce';
+
+	/** A connect code the Hub started was redeemed with its PKCE verifier. */
+	public const PROOF_CODE = 'code';
+
+	/** The Hub matched this site's own token (`verified: true`). */
+	public const PROOF_HUB = 'hub';
+
 	/** Default hub dashboard base — where the user manages their account. */
 	public const DEFAULT_HUB_URL = 'https://app.xspeedcache.com';
 
@@ -191,7 +206,8 @@ final class Mcp_Hub {
 	 * @return array<string,mixed>
 	 */
 	public static function public_status( ?int $user_id = null ): array {
-		$state = self::state( $user_id );
+		$state    = self::state( $user_id );
+		$is_local = self::is_local_site();
 		return array(
 			'attached'            => $state['attached'],
 			'account_email'       => $state['account_email'],
@@ -204,11 +220,11 @@ final class Mcp_Hub {
 			// Where the user goes to paste the URL + token (Add site form).
 			'add_site_url'        => self::hub_url() . '/sites/add',
 			// Method 2 (OAuth attach) — one-click redirect with a fresh nonce.
-			'attach_url'          => self::attach_url(),
-			// Non-public site? Connecting still works (token returns via the
-			// browser redirect), but Hub-initiated AI control needs a public
-			// URL — surfaced as an honest note on the Connect surfaces.
-			'is_local'            => self::is_local_site(),
+			// None on a local site: the Hub refuses it (xspeed-hub#370).
+			'attach_url'          => $is_local ? '' : self::attach_url(),
+			// Non-public site: the Connect surfaces explain why it cannot
+			// connect and point at this site's own MCP server instead.
+			'is_local'            => $is_local,
 			// Reasons this site should not be disconnected right now, so the
 			// card can warn BEFORE the click rather than after the POST.
 			'disconnect_blockers' => self::disconnect_blockers(),
@@ -304,15 +320,17 @@ final class Mcp_Hub {
 	}
 
 	/**
-	 * Heuristic: is this site NOT publicly reachable from the internet? A local /
-	 * dev / firewalled site can still CONNECT (the token comes back through the
-	 * admin's own browser redirect), but the Hub's servers can't reach it back,
-	 * so Hub-initiated AI control won't work until it's on a public URL. We use
-	 * this only to show an honest heads-up on the Connect surfaces — never to
-	 * block connecting.
+	 * Heuristic: is this site NOT publicly reachable from the internet?
 	 *
-	 * True when WP reports a local environment, or the host is a well-known dev
-	 * TLD / localhost / a private or loopback IP.
+	 * The Hub refuses to attach such a site (xspeed-hub#370): it could never
+	 * reach it, so the link stayed pending with nothing working, and a local
+	 * URL such as wp.test is shared by other people's installs. The Connect
+	 * surfaces hide Connect here and point at this site's own MCP server.
+	 * The suffix list matches the Hub's isLocalSite(), so neither side
+	 * refuses a site the other offers.
+	 *
+	 * True when the host is localhost, a local-dev TLD or a private or
+	 * loopback IP, or a bare hostname on a site WP calls local.
 	 */
 	public static function is_local_site(): bool {
 		$host = wp_parse_url( home_url( '/' ), PHP_URL_HOST );
@@ -324,9 +342,9 @@ final class Mcp_Hub {
 		if ( 'localhost' === $host ) {
 			return true;
 		}
-		// Common local/dev TLDs used by local WP stacks (sandbox .sb, Local by
-		// Flywheel .local, *.test, *.dev, *.example, *.invalid).
-		foreach ( array( '.sb', '.test', '.local', '.localhost', '.dev', '.example', '.invalid' ) as $suffix ) {
+		// Local-dev TLDs (sandbox .sb, Local by Flywheel .local, *.test) and
+		// names that never resolve publicly. Not .dev: it is a public TLD.
+		foreach ( array( '.sb', '.test', '.local', '.localhost', '.internal', '.lan', '.home', '.example', '.invalid' ) as $suffix ) {
 			if ( substr( $host, -strlen( $suffix ) ) === $suffix ) {
 				return true;
 			}
@@ -546,13 +564,26 @@ final class Mcp_Hub {
 		if ( empty( $body['attached'] ) && $uid && ! empty( self::state( $uid )['attached'] ) && self::keep_link_after_resync() ) {
 			return;
 		}
-		if ( ! empty( $body['attached'] ) ) {
+		$verified = $body['verified'] ?? null;
+		if ( ! empty( $body['attached'] ) && false === $verified ) {
+			/*
+			 * The Hub matched a pending row by URL only. Another install on
+			 * the same local URL (wp.test, localhost) gets the same answer, so
+			 * it proves nothing about this site and carries no email. A link
+			 * recorded from that answer before the Hub said so holds another
+			 * person's email, and goes. (xspeed-hub#370)
+			 */
+			if ( $uid ) {
+				self::drop_unproven_link( $uid );
+			}
+		} elseif ( ! empty( $body['attached'] ) ) {
 			// Any sync in flight has landed; the next mismatch deserves a new one.
 			delete_transient( self::RESYNC_SENT );
 			// The Hub says attached — mark THIS admin connected if not already.
+			// A Hub from before #370 sends no `verified`, so no proof is stored.
 			$state = self::state( $uid );
 			if ( empty( $state['attached'] ) ) {
-				self::mark_attached( (string) ( $body['account_email'] ?? '' ), $uid );
+				self::mark_attached( (string) ( $body['account_email'] ?? '' ), $uid, true === $verified ? self::PROOF_HUB : '' );
 			}
 		} elseif ( $uid ) {
 			// The Hub says NOT attached (e.g. removed on the dashboard) — clear
@@ -563,6 +594,25 @@ final class Mcp_Hub {
 				self::refresh_site_attached();
 			}
 		}
+	}
+
+	/**
+	 * Clear this admin's hub link if nothing proved it.
+	 *
+	 * Links recorded before proof was stored also have none, so a genuine
+	 * local link made before then is cleared once and the admin connects
+	 * again. The legacy site-wide option is left alone: reconcile never
+	 * wrote it.
+	 *
+	 * @param int $user_id The admin whose link is checked.
+	 */
+	private static function drop_unproven_link( int $user_id ): void {
+		$stored = get_user_meta( $user_id, self::USER_META, true );
+		if ( ! is_array( $stored ) || empty( $stored['attached'] ) || ! empty( $stored['proof'] ) ) {
+			return;
+		}
+		delete_user_meta( $user_id, self::USER_META );
+		self::refresh_site_attached();
 	}
 
 	/**
@@ -714,8 +764,10 @@ final class Mcp_Hub {
 	 *
 	 * @param string   $account_email The hub account the site was attached to.
 	 * @param int|null $user_id       The admin who attached (defaults to current).
+	 * @param string   $proof         What proved the attach: one of the PROOF_*
+	 *                                constants, or '' when nothing did.
 	 */
-	public static function mark_attached( string $account_email, ?int $user_id = null ): array {
+	public static function mark_attached( string $account_email, ?int $user_id = null, string $proof = '' ): array {
 		$user_id = $user_id ?? get_current_user_id();
 		if ( $user_id ) {
 			update_user_meta(
@@ -725,6 +777,7 @@ final class Mcp_Hub {
 					'attached'      => true,
 					'account_email' => sanitize_email( $account_email ),
 					'attached_at'   => time(),
+					'proof'         => $proof,
 				)
 			);
 		}
@@ -893,6 +946,259 @@ final class Mcp_Hub {
 	}
 
 	/**
+	 * Where finished scans' ids wait for the Hub, oldest first. Autoload off.
+	 *
+	 * Holds a list of `{scan_id, queued, attempts}`. The first build of #762
+	 * stored a single entry on its own; queued_scan_notices() still reads it.
+	 */
+	public const SCAN_NOTICE_OPTION = 'xspeed_hub_scan_notice';
+
+	/** The single cron event that sends them. */
+	public const SCAN_NOTICE_HOOK = 'xspeed_hub_scan_notice';
+
+	/**
+	 * How many ids wait at most. Scans are started by hand, so more than a
+	 * few unsent means the Hub has been away for a while; the oldest go.
+	 */
+	public const SCAN_NOTICE_MAX = 5;
+
+	/**
+	 * After this long with no attempt, WP-Cron is not running here and the
+	 * next admin page load sends the notices instead.
+	 */
+	private const SCAN_NOTICE_STALE = 10 * MINUTE_IN_SECONDS;
+
+	/**
+	 * Tell the Hub, soon, that this site finished an xSpeed Scan.
+	 *
+	 * Only the id goes: the Hub fetches the report from the engine itself and
+	 * checks its host, so a score sent from here would not be trusted anyway.
+	 * The call runs from a single cron event, not here, because this runs
+	 * inside the scan screen's poll and a slow or absent Hub must not slow it.
+	 *
+	 * Ids queue instead of replacing each other: a "before" scan whose notice
+	 * is still unsent when the "after" scan finishes is often the baseline
+	 * the Hub compares against. A fully cached site can go a long time
+	 * without a request that reaches PHP, so WP-Cron is started here
+	 * (spawn_cron() does not wait for it) rather than left for a visitor.
+	 *
+	 * @param string $scan_id The engine's scan id.
+	 */
+	public static function queue_scan_notice( string $scan_id ): void {
+		if ( '' === $scan_id || '' === Mcp_Pairing::site_token() || ! self::site_attached() ) {
+			return;
+		}
+		$queue = self::queued_scan_notices( get_option( self::SCAN_NOTICE_OPTION ) );
+		if ( ! in_array( $scan_id, array_column( $queue, 'scan_id' ), true ) ) {
+			$queue[] = array(
+				'scan_id'  => $scan_id,
+				'queued'   => time(),
+				'attempts' => 0,
+			);
+			update_option( self::SCAN_NOTICE_OPTION, array_slice( $queue, -self::SCAN_NOTICE_MAX ), false );
+		}
+		if ( ! wp_next_scheduled( self::SCAN_NOTICE_HOOK ) ) {
+			wp_schedule_single_event( time(), self::SCAN_NOTICE_HOOK );
+		}
+		if ( function_exists( 'spawn_cron' ) ) {
+			spawn_cron();
+		}
+	}
+
+	/**
+	 * Send every waiting scan id to the Hub (the cron event's handler).
+	 *
+	 * The queue is deleted before the calls, so a cron run and an admin page
+	 * load that arrive together send each id once. An id goes back only when
+	 * the Hub could not be reached or was busy (no answer, 429, 5xx), and
+	 * only for one more try. Any other answer is final: a 404 is a Hub
+	 * without the route yet, and a refusal will not change on a retry. The
+	 * run stops at the first unreachable or busy answer, and the ids it did
+	 * not reach go back unchanged.
+	 *
+	 * @return int 200 when the Hub took every id sent, otherwise the first
+	 *             failing HTTP status, or 0 when nothing was sent or the Hub
+	 *             was unreachable.
+	 */
+	public static function send_scan_notice(): int {
+		$queue = self::take_scan_notices();
+		if ( array() === $queue ) {
+			return 0;
+		}
+
+		$result = 200;
+		$keep   = array();
+		foreach ( $queue as $i => $notice ) {
+			$status = self::post_scan_notice( $notice['scan_id'] );
+			if ( 200 === $status ) {
+				continue;
+			}
+			if ( 200 === $result ) {
+				$result = $status;
+			}
+			if ( 0 === $status || 429 === $status || $status >= 500 ) {
+				if ( 0 === $notice['attempts'] ) {
+					$notice['attempts'] = 1;
+					$keep[]             = $notice;
+				}
+				$keep = array_merge( $keep, array_slice( $queue, $i + 1 ) );
+				break;
+			}
+		}
+
+		if ( array() !== $keep ) {
+			self::requeue_scan_notices( $keep );
+		}
+		return $result;
+	}
+
+	/**
+	 * POST one scan id to the Hub.
+	 *
+	 * @return int 200 when the Hub took it, the Hub's HTTP status when it did
+	 *             not, or 0 when the Hub was unreachable.
+	 */
+	private static function post_scan_notice( string $scan_id ): int {
+		$result = self::hub_request(
+			'POST',
+			'/api/site/scan',
+			array( 'scanId' => $scan_id ),
+			array( 'timeout' => 5 )
+		);
+		if ( ! is_wp_error( $result ) ) {
+			return 200;
+		}
+
+		$data   = $result->get_error_data();
+		$status = is_array( $data ) && isset( $data['status'] ) ? (int) $data['status'] : 0;
+		self::debug_log( sprintf( 'Hub scan notice for %s failed: %s (HTTP %d)', $scan_id, $result->get_error_code(), $status ) );
+		return $status;
+	}
+
+	/**
+	 * admin_init: send notices the cron event did not deliver.
+	 *
+	 * Two cases reach here: a cron attempt failed and left one retry, or
+	 * WP-Cron never ran. This is the last try, so it does not wait for the
+	 * answers and the admin page does not wait for the Hub.
+	 */
+	public static function maybe_retry_scan_notice(): void {
+		$queue = self::queued_scan_notices( get_option( self::SCAN_NOTICE_OPTION ) );
+		if ( array() === $queue ) {
+			return;
+		}
+		$due = false;
+		foreach ( $queue as $notice ) {
+			if ( $notice['attempts'] > 0 || time() - $notice['queued'] >= self::SCAN_NOTICE_STALE ) {
+				$due = true;
+				break;
+			}
+		}
+		if ( ! $due ) {
+			return; // The cron event still has them.
+		}
+
+		$queue = self::take_scan_notices();
+		if ( array() === $queue ) {
+			return;
+		}
+		wp_clear_scheduled_hook( self::SCAN_NOTICE_HOOK );
+		foreach ( $queue as $notice ) {
+			self::hub_request(
+				'POST',
+				'/api/site/scan',
+				array( 'scanId' => $notice['scan_id'] ),
+				array(
+					'timeout'  => 3,
+					'blocking' => false,
+				)
+			);
+		}
+	}
+
+	/**
+	 * Remove the waiting notices and return them, or an empty list when there
+	 * is none to send: none stored, another request took them first, or the
+	 * site is no longer attached.
+	 *
+	 * @return array<int,array{scan_id:string,queued:int,attempts:int}>
+	 */
+	private static function take_scan_notices(): array {
+		$queue = self::queued_scan_notices( get_option( self::SCAN_NOTICE_OPTION ) );
+		if ( array() === $queue ) {
+			return array();
+		}
+		if ( ! delete_option( self::SCAN_NOTICE_OPTION ) ) {
+			return array();
+		}
+		if ( '' === Mcp_Pairing::site_token() || ! self::site_attached() ) {
+			return array();
+		}
+		return $queue;
+	}
+
+	/**
+	 * Put unsent notices back ahead of any queued while they were being
+	 * sent, keeping the cap.
+	 *
+	 * @param array<int,array{scan_id:string,queued:int,attempts:int}> $keep
+	 */
+	private static function requeue_scan_notices( array $keep ): void {
+		$queue = $keep;
+		$seen  = array_column( $keep, 'scan_id' );
+		foreach ( self::queued_scan_notices( get_option( self::SCAN_NOTICE_OPTION ) ) as $notice ) {
+			if ( ! in_array( $notice['scan_id'], $seen, true ) ) {
+				$queue[] = $notice;
+				$seen[]  = $notice['scan_id'];
+			}
+		}
+		update_option( self::SCAN_NOTICE_OPTION, array_slice( $queue, -self::SCAN_NOTICE_MAX ), false );
+	}
+
+	/**
+	 * Read the stored queue, oldest first, without duplicates.
+	 *
+	 * Also reads the single entry an earlier version stored, so an id
+	 * waiting through an update is still sent.
+	 *
+	 * @param mixed $raw The option's value.
+	 * @return array<int,array{scan_id:string,queued:int,attempts:int}>
+	 */
+	private static function queued_scan_notices( $raw ): array {
+		if ( ! is_array( $raw ) ) {
+			return array();
+		}
+		if ( isset( $raw['scan_id'] ) ) {
+			$raw = array( $raw );
+		}
+		$queue = array();
+		$seen  = array();
+		foreach ( $raw as $notice ) {
+			if ( ! is_array( $notice ) || empty( $notice['scan_id'] ) || ! is_string( $notice['scan_id'] ) ) {
+				continue;
+			}
+			if ( in_array( $notice['scan_id'], $seen, true ) ) {
+				continue;
+			}
+			$seen[]  = $notice['scan_id'];
+			$queue[] = array(
+				'scan_id'  => $notice['scan_id'],
+				'queued'   => (int) ( $notice['queued'] ?? 0 ),
+				'attempts' => (int) ( $notice['attempts'] ?? 0 ),
+			);
+		}
+		return array_slice( $queue, -self::SCAN_NOTICE_MAX );
+	}
+
+	/** Write to the PHP error log, only when WP_DEBUG is on. */
+	private static function debug_log( string $message ): void {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic.
+			error_log( '[xspeed] ' . $message );
+		}
+	}
+
+	/**
 	 * Copy any finished Hub runs into THIS SITE's own score history.
 	 *
 	 * The Hub stores the result too, but that is its copy, not ours. Without
@@ -970,12 +1276,14 @@ final class Mcp_Hub {
 	 * divergence there would show up as the UI handling a quota error on one
 	 * path and not the other.
 	 *
-	 * @param string              $method HTTP method.
-	 * @param string              $path   Path under the hub base URL.
-	 * @param array<string,mixed> $body   Extra POST body fields beside site_url.
+	 * @param string              $method    HTTP method.
+	 * @param string              $path      Path under the hub base URL.
+	 * @param array<string,mixed> $body      Extra POST body fields beside site_url.
+	 * @param array<string,mixed> $transport `timeout` and `blocking` overrides,
+	 *                                       for calls that must not hold a request.
 	 * @return array<string,mixed>|\WP_Error
 	 */
-	private static function hub_request( string $method, string $path, array $body = array() ) {
+	private static function hub_request( string $method, string $path, array $body = array(), array $transport = array() ) {
 		$token = Mcp_Pairing::site_token();
 		if ( '' === $token ) {
 			return new \WP_Error(
@@ -995,6 +1303,7 @@ final class Mcp_Hub {
 			'redirection' => 0,
 			'headers'     => array( 'X-XSpeed-Site-Token' => $token ),
 		);
+		$args = array_merge( $args, array_intersect_key( $transport, array_flip( array( 'timeout', 'blocking' ) ) ) );
 
 		if ( 'POST' === $method ) {
 			$args['headers']['Content-Type'] = 'application/json';

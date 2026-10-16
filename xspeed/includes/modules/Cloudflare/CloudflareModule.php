@@ -835,6 +835,7 @@ final class CloudflareModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed cf',
+				'risk'      => array( 'verify' => 'read', 'purge' => 'write', 'dev-on' => 'write', 'dev-off' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Cloudflare verify / purge / dev-mode helpers.',
 				'ai_hint'   => 'Cloudflare operations: verify the API credentials work, purge the edge cache, or toggle development mode. Use when a change is live on the origin but visitors still see the old version — that is usually the edge, not the local cache.',

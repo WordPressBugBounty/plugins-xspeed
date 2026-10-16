@@ -111,6 +111,7 @@ final class AIPrivacyModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed ai-privacy',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show whether AI data collection is allowed for the current request context (CLI = no cookie).',
 				'ai_hint'   => 'May xSpeed send this site\'s data to an AI provider? Check before invoking any AI-backed feature — it reports the user\'s opt-in state, not a setting to change casually.',

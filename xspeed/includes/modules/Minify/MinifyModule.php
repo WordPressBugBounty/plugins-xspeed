@@ -213,6 +213,7 @@ final class MinifyModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed minify',
+				'risk'      => array( 'status' => 'read', 'purge' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Inspect or purge xSpeed minify cache.',
 				'ai_hint'   => 'Which CSS/JS optimizations are active (minify, combine, defer, delay, async)? Use for questions about render-blocking resources, unminified assets in PageSpeed, or when JavaScript broke after enabling optimizations.',

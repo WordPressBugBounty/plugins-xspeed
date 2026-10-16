@@ -808,6 +808,7 @@ final class ObjectCacheModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed objcache',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'flush' => 'write', 'snippet' => 'read', 'enable' => 'write', 'disable' => 'write', 'test' => 'read', 'get' => 'read', 'set' => 'write', 'override' => 'write', 'revert' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show object cache status, read or write a setting, flush, or print the wp-config snippet.',
 				'ai_hint'   => 'Is a persistent object cache (Redis/Memcached) connected and working? Use for slow admin pages, high database load, or "should I add Redis" questions — it reports the backend, connection health and hit rate. `get`/`set <key> [value]` read and write individual settings; `status` also reports whether each value comes from wp-config.php or the database.',

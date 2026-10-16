@@ -456,6 +456,7 @@ final class BloatModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed bloat',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show which bloat-removal toggles are active.',
 				'ai_hint'   => 'What unnecessary WordPress output is being stripped (emojis, embeds, jQuery Migrate, dashicons)? Use when asked why extra scripts still load on the frontend, or before recommending bloat removal.',

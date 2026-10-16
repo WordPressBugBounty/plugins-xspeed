@@ -104,6 +104,7 @@ final class GzipModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed gzip',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show GZIP status (server type, active, mode).',
 				'ai_hint'   => 'Is text compression (GZIP/Brotli) actually working on this site? Answers "why are my HTML/CSS/JS transfers so large" and whether the server is compressing at all. Reports the detected server, whether compression is active, and how it is applied.',

@@ -356,6 +356,11 @@ abstract class Module {
 			);
 		}
 
+		$refusal = $this->settings_refusal( is_array( $params ) ? $params : array() );
+		if ( null !== $refusal ) {
+			return $refusal;
+		}
+
 		return rest_ensure_response( $this->update_settings( $params ) );
 	}
 
@@ -378,6 +383,92 @@ abstract class Module {
 		 */
 		$reason = apply_filters( 'xspeed_module_blocked_by', null, static::SLUG );
 		return is_string( $reason ) && '' !== $reason ? $reason : null;
+	}
+
+	/**
+	 * A 400 naming each value the schema rejects, or null when every value
+	 * would be written.
+	 *
+	 * update() keeps the stored value for a rejected one, so a write of an
+	 * out-of-range number or an unknown option used to answer 200 while
+	 * changing nothing (#464). The CLI and MCP already refused; this gives the
+	 * REST routes the same answer. Unknown keys are not refused here: the
+	 * panels post the whole settings object back, and update() drops keys
+	 * that are not in the schema, as it always has. update() and coerce()
+	 * themselves are unchanged, so every internal caller behaves as before.
+	 *
+	 * @param array<string,mixed> $params The request's settings.
+	 */
+	public function settings_refusal( array $params ): ?\WP_Error {
+		$report = Settings_Manager::inspect_input( static::SLUG, $params );
+		if ( empty( $report['invalid'] ) ) {
+			return null;
+		}
+
+		// A panel posts its whole settings object back. A value that echoes
+		// what is already in effect asks for no change, so it is never the
+		// reason a save is refused, even if the schema would not accept it as
+		// new input (inspect_input() treats a pinned key the same way).
+		$current = Settings_Manager::get( static::SLUG );
+		$invalid = array();
+		foreach ( $report['invalid'] as $key ) {
+			if ( array_key_exists( $key, $current ) && $params[ $key ] === $current[ $key ] ) {
+				continue;
+			}
+			$invalid[] = $key;
+		}
+		if ( empty( $invalid ) ) {
+			return null;
+		}
+		$report['invalid'] = $invalid;
+
+		$schema  = $this->settings_schema();
+		$parts   = array();
+		$allowed = array();
+		foreach ( $report['invalid'] as $key ) {
+			$spec            = $schema[ $key ] ?? array();
+			$allowed[ $key ] = self::allowed_values( $spec );
+			$parts[]         = '' !== $allowed[ $key ] ? $key . ' (' . $allowed[ $key ] . ')' : $key;
+		}
+
+		return new \WP_Error(
+			'xspeed_settings_refused',
+			sprintf(
+				/* translators: %s: comma-separated list of "setting (what it accepts)". */
+				__( 'Nothing was saved. These values are not allowed: %s.', 'xspeed' ),
+				implode( '; ', $parts )
+			),
+			array(
+				'status'  => 400,
+				'invalid' => $report['invalid'],
+				'allowed' => $allowed,
+			)
+		);
+	}
+
+	/**
+	 * What a field accepts, in words, for a refusal message.
+	 *
+	 * @param array<string,mixed> $spec The field's schema.
+	 */
+	private static function allowed_values( array $spec ): string {
+		switch ( $spec['type'] ?? '' ) {
+			case 'enum':
+				/* translators: %s: comma-separated option values. */
+				return sprintf( __( 'one of: %s', 'xspeed' ), implode( ', ', array_map( 'strval', (array) ( $spec['options'] ?? array() ) ) ) );
+			case 'int':
+				if ( isset( $spec['min'], $spec['max'] ) ) {
+					/* translators: 1: minimum, 2: maximum. */
+					return sprintf( __( 'a whole number from %1$d to %2$d', 'xspeed' ), (int) $spec['min'], (int) $spec['max'] );
+				}
+				return __( 'a whole number', 'xspeed' );
+			case 'bool':
+				return __( 'true or false', 'xspeed' );
+			case 'list':
+				return __( 'a list', 'xspeed' );
+			default:
+				return '';
+		}
 	}
 
 	/**
@@ -601,9 +692,16 @@ abstract class Module {
 	/**
 	 * WP-CLI command definitions. Each entry: [
 	 *   'name'     => 'xspeed cache purge',
+	 *   'risk'     => 'write', // or array( 'status' => 'read', 'purge' => 'write', '' => 'read' )
 	 *   'callback' => callable,
 	 *   'synopsis' => array, // wp-cli synopsis spec
 	 * ]
+	 *
+	 * `risk` says what running the command can do over MCP: read, write,
+	 * destructive (waits for the site owner's approval) or owner (never over
+	 * MCP). A map
+	 * names every action, plus '' for a call with no action. See
+	 * Mcp_Tools::RISK_LEVELS.
 	 *
 	 * @return array[]
 	 */

@@ -480,7 +480,9 @@ final class Migration {
 		if ( null === $patch ) {
 			return array();
 		}
-		$results = array();
+		$sources      = self::sources();
+		$source_label = (string) ( $sources[ $source_id ]['label'] ?? $source_id );
+		$results      = array();
 		foreach ( $patch as $slug => $values ) {
 			if ( ! is_string( $slug ) || ! is_array( $values ) ) {
 				continue;
@@ -509,6 +511,15 @@ final class Migration {
 				$applied_enable = (bool) $meaningful['enabled'];
 				unset( $meaningful['enabled'] );
 			}
+
+			// Bring each value inside what xSpeed accepts before writing it,
+			// and record anything that cannot come across. Without this a
+			// value the schema rejects (LiteSpeed's default browser TTL is
+			// 31557600, a year and six hours, over our one-year cap) or one a
+			// wp-config.php constant pins was silently not saved, the whole
+			// group read back as failed, and the user saw "could not be
+			// applied" with no reason.
+			[ $meaningful, $skipped, $adjusted ] = self::fit_to_schema( $slug, $meaningful, $source_label );
 
 			// Union list values with what is already in EFFECT rather than
 			// overwriting them.
@@ -553,7 +564,7 @@ final class Migration {
 			// honest success signal: it reflects what is actually stored,
 			// where update_option()'s return value conflates "no change
 			// needed" with "write failed". (#218)
-			$stored = Settings_Manager::update( $slug, $meaningful );
+			$stored = empty( $meaningful ) ? array() : Settings_Manager::update( $slug, $meaningful );
 
 			// Did the intent land? Not "is the stored value identical" — for a
 			// list we deliberately UNION with the existing rules, so the stored
@@ -561,55 +572,81 @@ final class Migration {
 			// imported value is PRESENT instead, which is what "applied" means
 			// and what a lossy or rejected write would fail.
 			//
+			// Each key is judged on its own. Stopping at the first mismatch
+			// failed the whole group and kept the good keys in `applied`, so
+			// the result both overstated and understated what came across.
+			//
 			// Secrets come back masked in the public view, so they are taken on
 			// trust rather than compared against plaintext.
-			$ok = ! empty( $stored );
+			$ok      = empty( $meaningful ) || ! empty( $stored );
+			$applied = array();
 			foreach ( $meaningful as $key => $value ) {
 				if ( ! array_key_exists( $key, $stored ) ) {
 					// A key the module deliberately owns elsewhere (cache.enabled
 					// lives in xspeed_options and is applied via Cache::toggle)
 					// is not a failed write.
+					$applied[] = $key;
 					continue;
 				}
 				if ( is_string( $stored[ $key ] ) && Settings_Manager::is_masked_secret( $stored[ $key ] ) ) {
+					$applied[] = $key;
 					continue;
 				}
-				if ( is_array( $value ) ) {
-					if ( array_diff( $value, (array) $stored[ $key ] ) ) {
-						$ok = false;
-						break;
-					}
+				$landed = is_array( $value )
+					? ! array_diff( $value, (array) $stored[ $key ] )
+					: $stored[ $key ] == $value; // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison -- values round-trip through the DB and schema coercion, so a stored "1" must still count as an applied true.
+				if ( $landed ) {
+					$applied[] = $key;
 					continue;
 				}
-				if ( $stored[ $key ] != $value ) { // phpcs:ignore WordPress.PHP.StrictComparisons.LooseComparison -- values round-trip through the DB and schema coercion, so a stored "1" must still count as an applied true.
-					$ok = false;
-					break;
-				}
+				$ok        = false;
+				$skipped[] = self::skip_row(
+					$slug,
+					$key,
+					sprintf(
+						/* translators: 1: source plugin name, 2: the value it had, 3: the value xSpeed uses now. */
+						__( '%1$s had %2$s, but xSpeed still uses %3$s after saving.', 'xspeed' ),
+						$source_label,
+						self::describe_value( $value ),
+						self::describe_value( $stored[ $key ] )
+					)
+				);
 			}
-
-			$applied = array_keys( $meaningful );
 
 			if ( null !== $applied_enable ) {
 				$state = Cache::toggle( $applied_enable );
-				$applied[] = 'enabled';
 				// Enabling is only real if the transaction went through. The
 				// drop-in alone is not the test: a refusal reports the
 				// artifacts already on disk, so a site whose xSpeed drop-in
 				// was still installed read a refused write as success.
-				if ( ! empty( $state['blocked'] ) ) {
-					$ok = false;
-				} elseif ( $applied_enable && empty( $state['dropin_installed'] ) ) {
-					$ok = false;
+				if ( ! empty( $state['blocked'] ) || ( $applied_enable && empty( $state['dropin_installed'] ) ) ) {
+					$ok        = false;
+					$skipped[] = self::skip_row(
+						$slug,
+						'enabled',
+						! empty( $state['blocked_reason'] )
+							? (string) $state['blocked_reason']
+							: __( 'Page caching could not be switched on.', 'xspeed' )
+					);
+				} else {
+					$applied[] = 'enabled';
 				}
 			}
 
-			if ( empty( $applied ) ) {
+			if ( empty( $applied ) && empty( $skipped ) && empty( $adjusted ) ) {
 				continue;
 			}
 
+			// `skipped` and `adjusted` explain the row in words, so every
+			// caller (panel, notice, CLI, MCP) can say what did not come
+			// across instead of turning ok:false into a generic failure.
+			// A constant-pinned key is skipped without making the row fail:
+			// the site's own wp-config.php choice is the right outcome.
 			$results[ $slug ] = array(
-				'ok'      => $ok,
-				'applied' => $applied,
+				'ok'       => $ok,
+				'applied'  => $applied,
+				'skipped'  => $skipped,
+				'adjusted' => $adjusted,
 			);
 
 			// Importing an object-cache backend has to actually turn it on.
@@ -761,9 +798,145 @@ final class Migration {
 		if ( empty( $state['ok'] ) ) {
 			// Surfaced by the panel instead of a green "imported" message.
 			$result['message'] = (string) ( $state['message'] ?? 'Could not enable the object cache.' );
+			// Also as a skipped row, the one list every caller reads. The
+			// engine's "Could not enable: " prefix is dropped because the
+			// label already names what was being switched on.
+			$result['skipped'][] = self::skip_row(
+				'object-cache',
+				'enabled',
+				(string) preg_replace( '/^could not enable:\s*/i', '', $result['message'] )
+			);
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Fit one module's import to what xSpeed will store, before writing it.
+	 *
+	 * Two cases used to fail silently. A number outside the field's range was
+	 * rejected by Settings_Manager::update() and the old value kept; sources
+	 * do not share our limits, so a sensible value (a year and six hours of
+	 * browser cache) failed the whole group. Clamping keeps the user's intent
+	 * as closely as xSpeed allows and says so. A field pinned by a
+	 * wp-config.php constant or global is never written by update(); the
+	 * site's own choice wins, so it is reported and not attempted.
+	 *
+	 * @param string              $slug         Module slug.
+	 * @param array<string,mixed> $values       Meaningful values to import.
+	 * @param string              $source_label Source plugin name, for the reasons.
+	 * @return array{0: array<string,mixed>, 1: array<int,array<string,string>>, 2: array<int,array<string,mixed>>}
+	 *         The values to write, the skipped rows and the adjusted rows.
+	 */
+	private static function fit_to_schema( string $slug, array $values, string $source_label ): array {
+		$module = Module_Registry::get( $slug );
+		$schema = $module ? $module->settings_schema() : array();
+
+		$skipped  = array();
+		$adjusted = array();
+		foreach ( $values as $key => $value ) {
+			$spec = $schema[ $key ] ?? null;
+			if ( ! is_array( $spec ) ) {
+				continue;
+			}
+
+			$pinned = Settings_Manager::write_blocking_constant( $slug, (string) $key, $spec );
+			if ( null !== $pinned ) {
+				unset( $values[ $key ] );
+				$skipped[] = self::skip_row(
+					$slug,
+					(string) $key,
+					sprintf(
+						/* translators: %s: constant or global name, e.g. XSPEED_OC_HOST. */
+						__( 'Set by %s in wp-config.php, which takes priority over imported settings.', 'xspeed' ),
+						$pinned
+					),
+					true
+				);
+				continue;
+			}
+
+			if ( 'int' !== ( $spec['type'] ?? '' ) || ! is_numeric( $value ) ) {
+				continue;
+			}
+			$fitted = (int) $value;
+			if ( isset( $spec['max'] ) && $fitted > (int) $spec['max'] ) {
+				$fitted = (int) $spec['max'];
+				/* translators: 1: source plugin name, 2: its value, 3: the value saved. */
+				$reason = __( '%1$s had %2$s, above the most xSpeed allows, so %3$s was saved.', 'xspeed' );
+			} elseif ( isset( $spec['min'] ) && $fitted < (int) $spec['min'] ) {
+				$fitted = (int) $spec['min'];
+				/* translators: 1: source plugin name, 2: its value, 3: the value saved. */
+				$reason = __( '%1$s had %2$s, below the least xSpeed allows, so %3$s was saved.', 'xspeed' );
+			} else {
+				continue;
+			}
+			$values[ $key ] = $fitted;
+			$adjusted[]     = array(
+				'key'    => (string) $key,
+				'label'  => self::field_label( $slug, (string) $key ),
+				'from'   => (int) $value,
+				'to'     => $fitted,
+				'reason' => sprintf(
+					$reason,
+					$source_label,
+					number_format_i18n( (int) $value ),
+					number_format_i18n( $fitted )
+				),
+			);
+		}
+
+		return array( $values, $skipped, $adjusted );
+	}
+
+	/**
+	 * One "did not come across" row: which setting, and why.
+	 *
+	 * @param string $slug   Module slug.
+	 * @param string $key    Setting key.
+	 * @param string $reason Plain sentence a person can act on.
+	 * @param bool   $pinned True when wp-config.php holds the value, which is
+	 *                       not a failure of the import.
+	 * @return array<string,mixed>
+	 */
+	private static function skip_row( string $slug, string $key, string $reason, bool $pinned = false ): array {
+		return array(
+			'key'    => $key,
+			'label'  => self::field_label( $slug, $key ),
+			'reason' => $reason,
+			'pinned' => $pinned,
+		);
+	}
+
+	/**
+	 * "Browser Cache › File lifetime (seconds)": the module and field names
+	 * the user sees in the dashboard, so a skipped setting can be found.
+	 */
+	private static function field_label( string $slug, string $key ): string {
+		$module = Module_Registry::get( $slug );
+		if ( ! $module ) {
+			return $slug . ' › ' . $key;
+		}
+		$meta   = $module->ui_metadata();
+		$schema = $module->settings_schema();
+		$group  = (string) ( $meta['label'] ?? $slug );
+		$field  = (string) ( $schema[ $key ]['label'] ?? $key );
+		if ( 'enabled' === $key && ! isset( $schema[ $key ] ) ) {
+			return $group;
+		}
+		return $group . ' › ' . $field;
+	}
+
+	/** Short human form of an imported value, for a reason sentence. */
+	private static function describe_value( $value ): string {
+		if ( is_bool( $value ) ) {
+			return $value ? __( 'on', 'xspeed' ) : __( 'off', 'xspeed' );
+		}
+		if ( is_array( $value ) ) {
+			return implode( ', ', array_map( 'strval', $value ) );
+		}
+		$str = (string) $value;
+		return strlen( $str ) > 60 ? substr( $str, 0, 59 ) . '…' : $str;
 	}
 
 	// ─────────────────────────── WP Rocket ───────────────────────────

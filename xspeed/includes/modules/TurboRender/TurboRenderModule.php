@@ -799,6 +799,7 @@ final class TurboRenderModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed turbo-render status',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_status' ),
 				'shortdesc' => 'Show Turbo Render status.',
 				'ai_hint'   => 'Is Turbo Render (content-visibility stamping of below-fold sections) on, and how many sections render immediately? Use when diagnosing TBT / main-thread style & layout cost on long builder pages.',

@@ -122,29 +122,81 @@ final class Preloader {
 	}
 
 	/**
-	 * The copies of a page a warm fills: the desktop one, and the phone one
-	 * too when Separate Mobile Cache keeps one per device. Before #596 every
-	 * warm sent a desktop user-agent, so the first phone visitor to each
-	 * page got an uncached render.
+	 * An Android tablet's Chrome user-agent, which the warmer's own is
+	 * appended to for the tablet copy. It has no "Mobile" token, so the
+	 * tablet pattern matches it, as it matches a real Android tablet.
+	 */
+	public const TABLET_UA_PREFIX = 'Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+	/** The user-agent the tablet warm sends. */
+	public static function tablet_user_agent(): string {
+		$default = self::TABLET_UA_PREFIX . ' ' . self::user_agent();
+		/**
+		 * Filter the user-agent the preloader sends when it warms the tablet
+		 * copy of a page (Separate tablet cache on).
+		 *
+		 * It must still read as a tablet: the cache files the response by
+		 * its tablet pattern (Cache_Devices::TABLET_UA_REGEX), which a
+		 * client hint cannot override. An empty return is ignored.
+		 *
+		 * @param string $user_agent Default: an Android tablet Chrome string followed by the warmer's user-agent.
+		 */
+		$ua = apply_filters( 'xspeed_preloader_tablet_user_agent', $default );
+
+		return ( is_string( $ua ) && '' !== trim( $ua ) ) ? trim( $ua ) : $default;
+	}
+
+	/**
+	 * How many pages of a crawl, from the top of the queue, also get a
+	 * tablet warm. 0 means every page.
+	 */
+	public static function tablet_page_limit(): int {
+		/**
+		 * Filter how many pages of a crawl get their tablet copy warmed.
+		 *
+		 * The queue is in sitemap order, so a limit of N warms the tablet
+		 * copy of the first N pages and leaves the rest to fill on their
+		 * first tablet visit. Single-page warms (a post published, a
+		 * comment approved) always include the tablet copy. 0, the default,
+		 * means every page; a negative value counts as 0.
+		 *
+		 * @param int $limit Default 0.
+		 */
+		return max( 0, (int) apply_filters( 'xspeed_preloader_tablet_pages', 0 ) );
+	}
+
+	/**
+	 * The copies of a page a warm fills: the desktop one, the phone one too
+	 * when Separate Mobile Cache keeps one per device, and the tablet one
+	 * last when Separate tablet cache is on as well. Before #596 every warm
+	 * sent a desktop user-agent, so the first phone visitor to each page got
+	 * an uncached render.
 	 *
-	 * @return string[] 'desktop', then 'mobile' when it applies.
+	 * @return string[] 'desktop', then 'mobile' and 'tablet' when they apply.
 	 */
 	public static function devices(): array {
 		$cache   = Settings_Manager::get( 'cache' );
-		$devices = empty( $cache['mobile_separate'] ) ? array( 'desktop' ) : array( 'desktop', 'mobile' );
+		$cache   = is_array( $cache ) ? $cache : array();
+		$devices = Cache_Devices::split( $cache )
+			? array_values( array_intersect( Cache_Devices::warm_order(), Cache_Devices::active( $cache ) ) )
+			: array( Cache_Devices::DESKTOP );
 		/**
 		 * Filter which copies of a page the preloader warms.
 		 *
-		 * Return array( 'desktop' ) to skip the phone copy, for example on a
-		 * host where the extra requests cost too much. Unknown values are
-		 * dropped; an empty list means desktop.
+		 * Return array( 'desktop' ) to skip the phone and tablet copies, for
+		 * example on a host where the extra requests cost too much. Unknown
+		 * values are dropped, and so is 'tablet' while tablets have no copy
+		 * of their own; an empty list means desktop.
 		 *
-		 * @param string[] $devices 'desktop', plus 'mobile' when Separate Mobile Cache is on.
+		 * @param string[] $devices 'desktop', plus 'mobile' when Separate Mobile Cache is on, plus 'tablet' when Separate tablet cache is on.
 		 */
 		$filtered = apply_filters( 'xspeed_preloader_devices', $devices );
-		$filtered = is_array( $filtered ) ? array_values( array_intersect( array( 'desktop', 'mobile' ), $filtered ) ) : $devices;
+		$allowed  = Cache_Devices::tablet_split( $cache )
+			? Cache_Devices::warm_order()
+			: array_values( array_diff( Cache_Devices::warm_order(), array( Cache_Devices::TABLET ) ) );
+		$filtered = is_array( $filtered ) ? array_values( array_intersect( $allowed, $filtered ) ) : $devices;
 
-		return empty( $filtered ) ? array( 'desktop' ) : $filtered;
+		return empty( $filtered ) ? array( Cache_Devices::DESKTOP ) : $filtered;
 	}
 
 	/**
@@ -156,11 +208,18 @@ final class Preloader {
 	 * @param array<string,string> $headers Extra request headers.
 	 */
 	private static function warm_args( string $device, array $headers = array() ): array {
-		$headers['Sec-CH-UA-Mobile'] = 'mobile' === $device ? '?1' : '?0';
+		$headers['Sec-CH-UA-Mobile'] = Cache_Devices::MOBILE === $device ? '?1' : '?0';
+		if ( Cache_Devices::MOBILE === $device ) {
+			$user_agent = self::mobile_user_agent();
+		} elseif ( Cache_Devices::TABLET === $device ) {
+			$user_agent = self::tablet_user_agent();
+		} else {
+			$user_agent = self::user_agent();
+		}
 		return array(
 			'timeout'    => self::REQUEST_TIMEOUT,
 			'sslverify'  => false,
-			'user-agent' => 'mobile' === $device ? self::mobile_user_agent() : self::user_agent(),
+			'user-agent' => $user_agent,
 			'headers'    => Self_Traffic::headers( $headers ),
 			'blocking'   => true,
 		);
@@ -169,14 +228,18 @@ final class Preloader {
 	/**
 	 * Warm every copy of $url that devices() names.
 	 *
-	 * @param array<string,string> $headers Extra request headers.
+	 * @param array<string,string> $headers     Extra request headers.
+	 * @param bool                 $with_tablet False skips the tablet copy (past tablet_page_limit()).
 	 * @return array{failures: array<int,array{device:string,error:string}>, body: string}
 	 *         The failures, and the desktop response body ('' when it failed).
 	 */
-	private static function warm_devices( string $url, array $headers = array() ): array {
+	private static function warm_devices( string $url, array $headers = array(), bool $with_tablet = true ): array {
 		$failures = array();
 		$body     = '';
 		foreach ( self::devices() as $device ) {
+			if ( ! $with_tablet && Cache_Devices::TABLET === $device ) {
+				continue;
+			}
 			$args     = self::warm_args( $device, $headers );
 			$response = wp_remote_get( $url, $args );
 			if ( is_wp_error( $response ) ) {
@@ -204,9 +267,12 @@ final class Preloader {
 		return array( 'failures' => $failures, 'body' => $body );
 	}
 
-	/** "phone: " for a failure of the phone copy, so the log says which copy failed. */
+	/** "phone: " or "tablet: " for a failure of that copy, so the log says which copy failed. */
 	private static function device_prefix( string $device ): string {
-		return 'mobile' === $device ? 'phone: ' : '';
+		if ( Cache_Devices::MOBILE === $device ) {
+			return 'phone: ';
+		}
+		return Cache_Devices::TABLET === $device ? 'tablet: ' : '';
 	}
 
 	/**
@@ -554,7 +620,12 @@ final class Preloader {
 	}
 
 	private static function warm_url( string $url, array &$state ): void {
-		$result = self::warm_devices( $url, array( 'Accept' => 'text/html,application/xhtml+xml' ) );
+		$limit  = self::tablet_page_limit();
+		$result = self::warm_devices(
+			$url,
+			array( 'Accept' => 'text/html,application/xhtml+xml' ),
+			0 === $limit || (int) ( $state['processed'] ?? 0 ) < $limit
+		);
 		foreach ( $result['failures'] as $failure ) {
 			$state['errors'][] = array(
 				'url'   => $url,

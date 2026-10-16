@@ -273,6 +273,7 @@ final class ResourceHintsModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed resource-hints',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show LCP-preload / preconnect resource-hint settings.',
 				'ai_hint'   => 'Browser resource hints — preload, prefetch, preconnect — for the resources that block first paint. Use for LCP problems or "preconnect to required origins" in PageSpeed. Not the same as the Preloader, which warms the page cache.',

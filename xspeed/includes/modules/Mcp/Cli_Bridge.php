@@ -66,6 +66,10 @@ final class Cli_Bridge {
 					// rewriting shortdesc would degrade `--help`. (#184)
 					'ai_hint'   => isset( $cmd['ai_hint'] ) ? (string) $cmd['ai_hint'] : '',
 					'synopsis'  => isset( $cmd['synopsis'] ) && is_array( $cmd['synopsis'] ) ? $cmd['synopsis'] : array(),
+					// What running it can do: one level for the whole command,
+					// or a map of action => level. Read by Mcp_Tools; see
+					// Mcp_Tools::RISK_LEVELS.
+					'risk'      => $cmd['risk'] ?? null,
 					'module'    => $module->slug(),
 				);
 			}

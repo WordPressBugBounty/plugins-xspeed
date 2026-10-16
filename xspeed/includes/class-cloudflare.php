@@ -50,22 +50,38 @@ final class Cloudflare {
 		if ( '' === $zone ) {
 			return self::fail( 0, 'Zone ID is empty.' );
 		}
-		return self::request(
+		$result = self::request(
 			$opts,
 			'POST',
 			'/zones/' . rawurlencode( $zone ) . '/purge_cache',
 			array( 'purge_everything' => true )
 		);
+		if ( ! empty( $result['ok'] ) ) {
+			Plugin::clear_security_edge_pending( $zone );
+		}
+		return $result;
 	}
 
 	/**
-	 * Files sent per `purge_cache` call.
+	 * URLs sent per `purge_cache` call.
 	 *
-	 * Cloudflare's own limit is higher and varies by plan; 30 is what its
-	 * official WordPress plugin chunks at, and staying there keeps the
-	 * request body small on hosts with a modest `max_execution_time`.
+	 * Each URL goes out as one entry per device type (see DEVICE_TYPES), so a
+	 * call carries 90 entries. Cloudflare's Free plan accepts 100 per call;
+	 * a 101st is rejected with error 1094.
 	 */
 	private const PURGE_FILES_PER_CALL = 30;
+
+	/**
+	 * Device types a cached page can be stored under.
+	 *
+	 * With "Cache by device type" on in a Cache Rule, Cloudflare keeps a
+	 * desktop, a mobile and a tablet copy of each page, and a URL purge only
+	 * removes the copy whose `CF-Device-Type` it names. A plain URL is treated
+	 * as desktop, so a mobile visitor kept the old page after an edit. With
+	 * the setting off, the header is ignored and any one entry clears the
+	 * single copy, so sending all three is correct either way.
+	 */
+	private const DEVICE_TYPES = array( 'desktop', 'mobile', 'tablet' );
 
 	/**
 	 * Purge a specific list of URLs.
@@ -100,7 +116,7 @@ final class Cloudflare {
 				$opts,
 				'POST',
 				'/zones/' . rawurlencode( $zone ) . '/purge_cache',
-				array( 'files' => $chunk )
+				array( 'files' => self::device_entries( $chunk ) )
 			);
 			if ( empty( $result['ok'] ) ) {
 				return $result;
@@ -108,6 +124,25 @@ final class Cloudflare {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * One purge entry per URL and device type.
+	 *
+	 * @param string[] $urls
+	 * @return array<int,array{url:string,headers:array{CF-Device-Type:string}}>
+	 */
+	private static function device_entries( array $urls ): array {
+		$entries = array();
+		foreach ( $urls as $url ) {
+			foreach ( self::DEVICE_TYPES as $device ) {
+				$entries[] = array(
+					'url'     => $url,
+					'headers' => array( 'CF-Device-Type' => $device ),
+				);
+			}
+		}
+		return $entries;
 	}
 
 	/**

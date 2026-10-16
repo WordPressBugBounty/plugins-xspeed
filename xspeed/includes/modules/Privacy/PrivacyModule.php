@@ -56,6 +56,8 @@ final class PrivacyModule extends Module {
 			'usage_tracking' => array(
 				'type'        => 'bool',
 				'default'     => false,
+				// Only the site owner can opt in; an MCP call may only opt out.
+				'consent'     => true,
 				'label'       => __( 'Share usage data', 'xspeed' ),
 				'description' => __( 'Sends your WordPress and PHP versions, theme, plugins, server type and the features you use, never page content. Turn it off to stop all sending.', 'xspeed' ),
 			),
@@ -109,9 +111,14 @@ final class PrivacyModule extends Module {
 	/**
 	 * Route a save through the tracker so the cron follows the flag.
 	 *
-	 * Only acts when the key was actually part of the save: a write to some
-	 * other module, or a partial save that never mentioned consent, must not
-	 * be read as the admin revoking it.
+	 * Acts only on this module's saves. $clean is always the full stored
+	 * settings (Settings_Manager::update() starts from the current values),
+	 * so it always holds `usage_tracking`, and a save that never mentioned
+	 * consent carries the stored value. What keeps such a save, or a save of
+	 * another field on this panel, from opting in or out is the
+	 * is_opted_in() comparison below: the tracker is only called when the
+	 * value actually changes. The key check only guards against a caller
+	 * that ever passes something else. (#460)
 	 *
 	 * @param string              $slug  Module whose settings were saved.
 	 * @param array<string,mixed> $clean Settings as stored.
@@ -143,6 +150,7 @@ final class PrivacyModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed privacy',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'enable' => 'owner', 'disable' => 'write' ),
 				'callback'  => array( $this, 'cli_privacy' ),
 				'shortdesc' => 'Show or change usage-analytics consent.',
 				'ai_hint'   => 'Whether this site shares usage analytics, and the way to turn that on or off. Use for "am I sending telemetry", "stop sharing usage data", or any consent/privacy question about analytics.',

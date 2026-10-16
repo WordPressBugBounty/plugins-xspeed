@@ -1,10 +1,11 @@
 /**
  * Delay bootstrap: the inline script Delay JS prints once, on wp_footer.
  *
- * It waits for the visitor's first interaction (or the failsafe timeout),
- * then runs the replay: every delayed script is put back, in page order,
- * and each one hears DOMContentLoaded, readystatechange and load once, as
- * if it had run while the page loaded (#494).
+ * It waits for the visitor's first interaction (or the failsafe timeout)
+ * and for the real DOMContentLoaded, then runs the replay: every delayed
+ * script is put back, in page order, and each one hears DOMContentLoaded,
+ * readystatechange and load once, as if it had run while the page loaded
+ * (#494).
  *
  * This is the readable source. `npm run build` minifies it into
  * assets/delay-bootstrap.min.js with scripts/minify-delay-bootstrap.mjs,
@@ -35,7 +36,27 @@
  * - _xw: where the next write from that script goes.
  */
 (function (timeout) {
-  var TRIGGERS = ['mousemove', 'keydown', 'touchstart', 'scroll', 'wheel'];
+  // Any of these is the visitor acting. click covers a screen reader or
+  // switch device activating a link, pointerdown a pen, touchmove a drag
+  // that began before the listeners, input voice or IME typing.
+  var TRIGGERS = [
+    'mousemove',
+    'mousedown',
+    'pointerdown',
+    'click',
+    'keydown',
+    'touchstart',
+    'touchmove',
+    'scroll',
+    'wheel',
+    'input',
+  ];
+  // Page code fires these five itself: el.click() to open a first tab,
+  // jQuery's .trigger('click') on a checkbox, an input event a form script
+  // sends to sync its state. So they count only when the browser marks
+  // them as the visitor's. A screen reader's click is trusted. The older
+  // five keep counting a dispatched event, as they always have.
+  var TRUSTED_ONLY = { mousedown: 1, pointerdown: 1, click: 1, touchmove: 1, input: 1 };
   var PRIVATE = {
     DOMContentLoaded: 'xs-DOMContentLoaded',
     load: 'xs-load',
@@ -55,16 +76,39 @@
   // the real event; Navigation Timing covers a bootstrap that ran later.
   // The same for load.
   var started = false;
+  var triggered = false;
   var dclFired = realReadyState() === 'complete';
   var loadFired = dclFired;
-  var onRealDcl;
+  // A trigger held for DOMContentLoaded starts the replay on the next task,
+  // once every listener of the real event has run, so the page's own
+  // DOMContentLoaded handlers run before any delayed script. load is the
+  // fallback for a page handler that stopped the event before ours.
   document.addEventListener('DOMContentLoaded', function () {
     dclFired = true;
-    if (onRealDcl) onRealDcl();
+    if (triggered) setTimeout(whenStyled, 0);
   });
   window.addEventListener('load', function () {
     loadFired = true;
+    if (triggered) whenStyled();
   });
+
+  // Stylesheets another xSpeed component still holds back mark the root
+  // data-xspeed-styles="pending" until it dispatches xspeed:styles-applied.
+  // A slider or carousel that initialises before then measures unstyled
+  // markup and keeps the wrong size: applying a stylesheet fires no resize.
+  // So the replay waits for them, 3 s at most. xspeed:styles-needed tells
+  // the holder to load them now: what started the replay (a click, the
+  // timer) may not be an input the holder listens for. Without the marker
+  // this starts at once, as before.
+  var styleWait;
+  function whenStyled() {
+    if (started || styleWait) return;
+    if (document.documentElement.getAttribute('data-xspeed-styles') !== 'pending') return start();
+    styleWait = 1;
+    document.addEventListener('xspeed:styles-applied', start);
+    setTimeout(start, 3000);
+    document.dispatchEvent(new Event('xspeed:styles-needed'));
+  }
 
   // Dispatch the private copy of a lifecycle event under its real type.
   // The dispatched load reports document as its target, as the real one
@@ -94,12 +138,24 @@
     return !script.noModule && /^$|^module$|^(text|application)\/(x-)?(java|ecma|j|live)script$/.test(type);
   }
 
+  // The first interaction or the timer. Before the real DOMContentLoaded
+  // the page's own defer scripts have not run, and a delayed script put
+  // back then could run ahead of one it needs, so the replay waits for it.
+  // Navigation Timing covers a bootstrap that ran after it.
+  function trigger(event) {
+    if (triggered) return;
+    if (event && event.isTrusted === false && TRUSTED_ONLY[event.type]) return;
+    triggered = true;
+    TRIGGERS.forEach(function (name) {
+      window.removeEventListener(name, trigger, { passive: true, capture: true });
+    });
+    var nav = window.performance && performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    if (dclFired || (nav && nav.domContentLoadedEventEnd > 0)) whenStyled();
+  }
+
   function start() {
     if (started) return;
     started = true;
-    TRIGGERS.forEach(function (name) {
-      window.removeEventListener(name, start, { passive: true, capture: true });
-    });
     // Marks the start, before any delayed script is put back. The Elementor
     // entrance-animation reveal listens for it to settle the widgets the
     // visitor has already seen.
@@ -121,19 +177,6 @@
     var phase = 0;
     var heldInlines = 0;
     var modules = {};
-
-    // When the replay starts before the real DOMContentLoaded, wait for it
-    // before sending our own copy, so a script that registered after it
-    // still gets one.
-    if (!dclFired) {
-      pending++;
-      onRealDcl = function () {
-        onRealDcl = 0;
-        Promise.resolve().then(function () {
-          if (!phase) done();
-        });
-      };
-    }
 
     // A readystatechange 'complete' still to come is forwarded to the
     // private name when it happens. This is registered before our wrappers,
@@ -728,9 +771,9 @@
   }
 
   TRIGGERS.forEach(function (name) {
-    window.addEventListener(name, start, { passive: true, capture: true });
+    window.addEventListener(name, trigger, { passive: true, capture: true });
   });
   // The failsafe timer, for visitors who never interact. 0 means
   // interaction only.
-  if (timeout > 0) setTimeout(start, timeout);
+  if (timeout > 0) setTimeout(trigger, timeout);
 })(XSPEED_DELAY_TIMEOUT);

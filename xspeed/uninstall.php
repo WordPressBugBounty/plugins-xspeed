@@ -46,6 +46,31 @@ function xspeed_uninstall_cleanup() {
 		}
 	}
 	delete_option( 'xspeed_data_version' );
+	delete_option( 'xspeed_security_edge_pending' );
+	delete_site_option( 'xspeed_security_network_purged_1_4_3' );
+	delete_option( 'xspeed_security_purge_attempt_1_4_3' );
+	delete_site_option( 'xspeed_security_purge_attempt_1_4_3' );
+	if ( is_multisite() ) {
+		$offset = 0;
+		do {
+			$ids = get_sites( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
+			foreach ( $ids as $id ) {
+				delete_blog_option( $id, 'xspeed_security_edge_pending' );
+				delete_blog_option( $id, 'xspeed_security_purge_attempt_1_4_3' );
+			}
+			$offset += 100;
+		} while ( count( $ids ) === 100 );
+		// Plugin files are shared by every network in this installation.
+		$offset = 0;
+		do {
+			$networks = get_networks( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
+			foreach ( $networks as $network_id ) {
+				delete_network_option( $network_id, 'xspeed_security_network_purged_1_4_3' );
+				delete_network_option( $network_id, 'xspeed_security_purge_attempt_1_4_3' );
+			}
+			$offset += 100;
+		} while ( count( $networks ) === 100 );
+	}
 	delete_option( 'xspeed_activity_log' );
 	delete_option( 'xspeed_server_type' );
 	delete_option( 'xspeed_oc_dropin_synced' );
@@ -53,6 +78,9 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_oc_sync_attempts' );
 	delete_option( 'xspeed_overridden_constants' );
 	delete_option( 'xspeed_last_mobile_separate' );
+	delete_option( 'xspeed_home_cache_verdict' );
+	delete_option( 'xspeed_last_tablet_split' );
+	delete_option( 'xspeed_last_edge_device_keyed' );
 	delete_option( 'xspeed_rules_inputs' );
 	// Per-user, so it needs the meta sweep rather than delete_option: every
 	// admin who ever confirmed they pasted the server rules has one.
@@ -80,6 +108,9 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_mcp_rl_gen' );
 	wp_clear_scheduled_hook( 'xspeed_gc' );
 	delete_option( 'xspeed_cache_off_notice_dismissed' );
+	// Device_Check's notes of pages that ask for the device, and their check.
+	delete_option( 'xspeed_device_pages' );
+	wp_clear_scheduled_hook( 'xspeed_device_check_pages' );
 
 	global $wpdb;
 
@@ -91,6 +122,9 @@ function xspeed_uninstall_cleanup() {
 	delete_transient( 'xspeed_hit_buffer' );
 	delete_option( 'xspeed_hit_daily' );
 	delete_option( 'xspeed_hub_site_attached' );
+	// A finished scan's id waiting to be sent to the Hub, and its event.
+	delete_option( 'xspeed_hub_scan_notice' );
+	wp_clear_scheduled_hook( 'xspeed_hub_scan_notice' );
 
 	// Usage-tracking state, which lives in the shared WP Insights rows rather
 	// than under our own prefix. Left behind, the consent key survives an

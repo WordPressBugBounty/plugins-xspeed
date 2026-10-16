@@ -291,6 +291,7 @@ final class HealthModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed health',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Print diagnostic checks + cache stats + recent activity.',
 				'ai_hint'   => 'Full diagnostic sweep: what is misconfigured or degraded on this site right now, plus cache stats and recent activity. The best FIRST call for open-ended "why is my site slow" or "is anything wrong" questions.',
@@ -298,6 +299,7 @@ final class HealthModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed recommend',
+				'risk'      => array( '' => 'read', 'list' => 'read', 'apply' => 'write' ),
 				'callback'  => array( $this, 'cli_recommend' ),
 				'shortdesc' => 'List ranked next-best-action recommendations, or apply one by id.',
 				'ai_hint'   => 'The ranked list of what to do next to make this site faster, and the way to apply one. Use when asked "what should I improve" or "what\'s the biggest win" — each item is actionable and ordered by impact.',

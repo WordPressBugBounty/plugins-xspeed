@@ -91,6 +91,7 @@ final class SupportModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed support',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Print the support snapshot.',
 				'ai_hint'   => 'Generate a diagnostic snapshot (environment, settings, active plugins, recent errors) to attach to a support request. Use when a problem needs escalating and the user is asked for their configuration.',

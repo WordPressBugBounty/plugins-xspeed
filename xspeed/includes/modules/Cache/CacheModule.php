@@ -281,6 +281,34 @@ final class CacheModule extends Module {
 				'label'       => __( 'Separate mobile cache', 'xspeed' ),
 				'description' => __( 'Keep a separate cached copy for phones. Turn on only if your theme or plugins show different pages on mobile.', 'xspeed' ),
 			),
+			'tablet_separate' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Separate tablet cache', 'xspeed' ),
+				'description' => __( 'Keep a third cached copy for tablets, so every tablet gets the same page. Without it, a tablet gets the phone or the desktop copy depending on its browser.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'mobile_separate' ),
+				'info_title'  => __( 'Which devices count as tablets', 'xspeed' ),
+				'info'        => __( 'iPads that report themselves as iPads, Android tablets, Kindle and PlayBook devices. iPads on iPadOS 13 or later identify as a Mac, so they get the desktop copy, as they do everywhere else. Each page is cached and warmed three times, and the tablet copy fills more slowly because fewer visitors use tablets.', 'xspeed' ),
+			),
+			'tablet_renders_as' => array(
+				'type'          => 'enum',
+				'default'       => 'desktop',
+				'options'       => array( 'desktop', 'mobile' ),
+				'option_labels' => array(
+					'desktop' => __( 'Desktop page', 'xspeed' ),
+					'mobile'  => __( 'Phone page', 'xspeed' ),
+				),
+				'label'         => __( 'Tablets get', 'xspeed' ),
+				'description'   => __( 'The page WordPress builds for tablets. Most themes fit the desktop page to a tablet screen. Pick the phone page if your theme has a separate phone layout you want tablets to use.', 'xspeed' ),
+				'dependsOn'     => array( 'field' => 'tablet_separate' ),
+			),
+			'cache_markdown'  => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Cache Markdown versions', 'xspeed' ),
+				'advanced'    => true,
+				'description' => __( 'Some SEO plugins send AI agents a Markdown version of a page when they ask for one. Turn this on to cache that version separately from the HTML page. When it is off, those requests are never cached.', 'xspeed' ),
+			),
 			'edge_provider'   => array(
 				'type'          => 'enum',
 				'default'       => 'auto',
@@ -333,7 +361,8 @@ final class CacheModule extends Module {
 		// LiteSpeed-only opt-in (#509): meaningless on any other server, so
 		// the field only exists in the schema where it can act — elsewhere the
 		// stored value survives via preserved_keys(). Inserted right after
-		// mobile_separate, its sibling static-fast-path trade-off.
+		// the device-copy fields, beside mobile_separate, its sibling
+		// static-fast-path trade-off.
 		if ( \XSpeed\Server::LITESPEED === \XSpeed\Server::type() ) {
 			$litespeed = array(
 				'litespeed_static_rewrite' => array(
@@ -344,7 +373,7 @@ final class CacheModule extends Module {
 					'description' => __( 'LiteSpeed serves cached pages without running PHP, which is faster on slow hosts. These visits are not counted in the dashboard hit ratio.', 'xspeed' ),
 				),
 			);
-			$pos    = (int) array_search( 'mobile_separate', array_keys( $schema ), true ) + 1;
+			$pos    = (int) array_search( 'tablet_renders_as', array_keys( $schema ), true ) + 1;
 			$schema = array_slice( $schema, 0, $pos, true ) + $litespeed + array_slice( $schema, $pos, null, true );
 		}
 
@@ -390,6 +419,20 @@ final class CacheModule extends Module {
 		// whenever the cache settings are saved. The drop-in can't read WP
 		// options, so it reads the sidecar marker Cache maintains here.
 		\XSpeed\Cache::reconcile_mobile_separate();
+		// Whether pages ask for the device while they render: the evidence
+		// the mobile check (Separate Mobile Cache banner) answers from.
+		\XSpeed\Device_Check::boot();
+		// The drop-in serves only while this flag exists (#597).
+		if ( ! empty( \XSpeed\Settings::get()['cache_enabled'] ) ) {
+			\XSpeed\Cache::sync_active_flag();
+		}
+		// With Separate tablet cache on, build a tablet's page as
+		// `tablet_renders_as` says. Hooks nothing while it is off.
+		\XSpeed\Cache::register_tablet_render();
+		// A request through an edge that keeps a copy per device is built as
+		// the copy that edge keys it under. Hooks nothing for a request
+		// without the edge's device signal.
+		\XSpeed\Cache::register_edge_device_render();
 		// Both write paths matter. On a fresh install `xspeed_module_cache`
 		// does not exist yet, so core's update_option() delegates to
 		// add_option() and fires `add_option_…` INSTEAD of
@@ -484,6 +527,7 @@ final class CacheModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed optimize',
+				'risk'      => 'write',
 				'callback'  => array( $this, 'cli_optimize' ),
 				'shortdesc' => 'Measure, apply the recommended settings one at a time, verify the page still works after each, and report what changed. Use --dry-run to see the plan without touching anything.',
 				'synopsis'  => array(
@@ -517,6 +561,7 @@ final class CacheModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed purge',
+				'risk'      => 'write',
 				'callback'  => array( $this, 'cli_purge' ),
 				'shortdesc' => 'Clear every cache xSpeed manages — page and static files, REST responses, minified assets, the object cache and the configured edge — and report per store what was cleared, what was skipped and why. Use --type to clear just one.',
 				'ai_hint'   => 'Clear the cache after a change is live on the server but visitors still see the old version. Purges everything by default; --type=page for the local HTML only, --type=cloudflare for the edge only. Exits non-zero if a store that IS configured refused to purge, so its output can be trusted rather than assumed.',
@@ -544,6 +589,7 @@ final class CacheModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed cache',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'inventory' => 'read', 'size' => 'read', 'purge' => 'write', 'purge-log' => 'read', 'purge-url' => 'write', 'recheck-rewrite' => 'write', 'nginx-config' => 'read', 'edge' => 'read', 'listings' => 'read' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Inspect the Cache module: `status` (settings), `inventory` (which pages are cached, and how old), `size` (where the disk usage goes), `purge-log` (what cleared the cache, when and why), `purge` to clear everything (same as `wp xspeed purge`), `purge <url>` or `purge-url <url>` to clear one page, `recheck-rewrite` to re-run the static-rewrite probe, or `nginx-config` to print the unified nginx server-block for pasting into a vhost, or `edge` to show which cache is in front of the site and what xSpeed tells it, or `listings` to show which pages were recorded running a post list of their own (cleared by a narrow purge when a save may change that list). To clear the whole site use `wp xspeed purge`.',
 				'synopsis'  => array(
@@ -1079,6 +1125,11 @@ final class CacheModule extends Module {
 		}
 		$edge = \XSpeed\Edge_Provider::detect();
 		\WP_CLI::log( 'edge          ' . ( '' !== $edge['provider'] ? $edge['provider'] : $edge['confidence'] ) . ' (' . $edge['source'] . ')' );
+		// Only while tablets have a copy of their own, so every other site
+		// prints what it always printed.
+		if ( \XSpeed\Cache_Devices::tablet_split( $opts ) ) {
+			\WP_CLI::log( 'devices       ' . implode( ', ', \XSpeed\Cache_Devices::active( $opts ) ) . ' (tablets get the ' . \XSpeed\Cache_Devices::tablet_renders_as( $opts ) . ' page)' );
+		}
 	}
 
 	/**

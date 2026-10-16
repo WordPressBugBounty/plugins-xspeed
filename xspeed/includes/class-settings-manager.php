@@ -855,6 +855,14 @@ final class Settings_Manager {
 			}
 		}
 
+		// Consent belongs to the site owner. An MCP call, whatever its scope,
+		// may withdraw it but never grant it: switching usage analytics on
+		// sends data off the site on the owner's behalf. Same choke point, so
+		// update_settings, `settings update` and any later route are covered.
+		foreach ( self::consent_grants_in( $slug, $input ) as $key ) {
+			unset( $input[ $key ] );
+		}
+
 		$clean = $current;
 		foreach ( $schema as $key => $spec ) {
 			if ( ! array_key_exists( $key, $input ) ) {
@@ -1286,6 +1294,34 @@ final class Settings_Manager {
 	 * @param string $key  Schema field key.
 	 * @param array  $spec Field spec from settings_schema().
 	 */
+	/**
+	 * Consent fields this input would switch ON during an MCP call.
+	 *
+	 * A field is a consent field when its schema says `'consent' => true`.
+	 * Empty outside an MCP dispatch: the dashboard and real wp-cli are the
+	 * owner's own hands.
+	 *
+	 * @param string              $slug  Module slug.
+	 * @param array<string,mixed> $input Incoming values.
+	 * @return string[]
+	 */
+	public static function consent_grants_in( string $slug, array $input ): array {
+		if ( ! class_exists( '\\XSpeed\\Modules\\Mcp\\Mcp_Tools' ) || ! \XSpeed\Modules\Mcp\Mcp_Tools::in_dispatch() ) {
+			return array();
+		}
+		$module = Module_Registry::get( $slug );
+		if ( ! $module ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $module->settings_schema() as $key => $spec ) {
+			if ( ! empty( $spec['consent'] ) && array_key_exists( $key, $input ) && ! empty( $input[ $key ] ) && 'false' !== $input[ $key ] && '0' !== $input[ $key ] ) {
+				$out[] = (string) $key;
+			}
+		}
+		return $out;
+	}
+
 	public static function is_secret_field( string $key, array $spec ): bool {
 		return ( ( $spec['type'] ?? '' ) === 'secret' ) || self::is_secret_key( $key );
 	}

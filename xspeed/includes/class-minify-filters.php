@@ -593,6 +593,10 @@ final class Minify_Filters {
 		if ( self::is_excluded_script( (string) $handle, (string) $src, true ) ) {
 			return $tag;
 		}
+		// A never-delayed script needs this one first. See needed_by_excluded().
+		if ( isset( self::needed_by_excluded()[ (string) $handle ] ) ) {
+			return $tag;
+		}
 		// The tag itself asked to be left alone. (#456)
 		if ( self::tag_opts_out( $tag ) ) {
 			return $tag;
@@ -1016,6 +1020,10 @@ final class Minify_Filters {
 					&& ! self::is_user_named_target( $tag_handle, $src ) ) {
 					return $tag;
 				}
+				// Mirror of the enqueue path: a never-delayed script needs it.
+				if ( '' !== $tag_handle && isset( self::needed_by_excluded()[ $tag_handle ] ) ) {
+					return $tag;
+				}
 
 				return (string) preg_replace(
 					'#(?<![-\w])src\s*=\s*(["\'][^"\']*["\'])#i',
@@ -1437,7 +1445,9 @@ final class Minify_Filters {
 		if ( self::smart_delay_enabled() ) {
 			return self::smart_delays_handle( $handle );
 		}
-		return ! self::is_excluded_script( $handle, $src, true ) && self::is_user_named_target( $handle, $src );
+		return ! self::is_excluded_script( $handle, $src, true )
+			&& ! isset( self::needed_by_excluded()[ $handle ] )
+			&& self::is_user_named_target( $handle, $src );
 	}
 
 	/**
@@ -2435,7 +2445,12 @@ final class Minify_Filters {
 		if ( '' === $url || ! function_exists( 'home_url' ) ) {
 			return $url;
 		}
-		$host = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+		// Read once per request: the dependency walk in needed_by_excluded()
+		// calls this for every consent token on every registered script.
+		if ( null === self::$own_host ) {
+			self::$own_host = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+		}
+		$host = self::$own_host;
 		if ( '' === $host ) {
 			return $url;
 		}
@@ -2573,7 +2588,7 @@ final class Minify_Filters {
 		if ( '' === $src ) {
 			$src = self::registered_src( $handle );
 		}
-		if ( self::is_excluded_script( $handle, $src, true ) ) {
+		if ( self::is_excluded_script( $handle, $src, true ) || isset( self::needed_by_excluded()[ $handle ] ) ) {
 			return false;
 		}
 		return self::is_delay_target( $handle, $src );
@@ -2830,6 +2845,8 @@ final class Minify_Filters {
 		self::$has_critical_css        = null;
 		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
+		self::$needed_by_excluded      = null;
+		self::$own_host                = null;
 		self::$pristine_tag            = array();
 		self::$our_late_attrs          = array();
 	}
@@ -2840,6 +2857,63 @@ final class Minify_Filters {
 	 * @var array<string,true>|null
 	 */
 	private static $inline_bound_handles = null;
+
+	/**
+	 * Per-request memo for needed_by_excluded(). Null = not resolved.
+	 *
+	 * @var array<string,true>|null
+	 */
+	private static $needed_by_excluded = null;
+
+	/** How many scripts were registered when $needed_by_excluded was built. */
+	private static $needed_by_excluded_count = 0;
+
+	/** The site's own host for without_own_host(). Null = not read yet. */
+	private static $own_host = null;
+
+	/**
+	 * Handles a never-delayed script depends on, transitively.
+	 *
+	 * An excluded script runs at load, so everything it depends on has to
+	 * run before it, with Smart Delay or without. The inline-bound guard
+	 * covers only dependencies that inline code reads: plain Delay JS left
+	 * underscore delayed under an excluded wp-util ("_ is not defined"), and
+	 * Smart Delay, which lifts that guard, parked WordPress 7.1's
+	 * wp-private-apis under the never-delayed wp-api-fetch.
+	 *
+	 * Read from the registry, so a tag kept eager only by its own opt-out
+	 * attribute is not covered: that is decided when the tag prints.
+	 *
+	 * @return array<string,true> Handle => true.
+	 */
+	private static function needed_by_excluded(): array {
+		$scripts = function_exists( 'wp_scripts' ) ? wp_scripts() : null;
+		$count   = $scripts instanceof \WP_Scripts ? count( (array) $scripts->registered ) : 0;
+		// A block or shortcode can register an excluded script while the
+		// page renders, after the first decision in wp_head.
+		if ( null !== self::$needed_by_excluded && $count === self::$needed_by_excluded_count ) {
+			return self::$needed_by_excluded;
+		}
+		$needed = array();
+		if ( $scripts instanceof \WP_Scripts ) {
+			foreach ( (array) $scripts->registered as $handle => $reg ) {
+				$handle = (string) $handle;
+				$src    = self::original_src( $handle );
+				if ( '' === $src ) {
+					$src = self::registered_src( $handle );
+				}
+				if ( ! isset( $reg->deps ) || ! self::is_excluded_script( $handle, $src, true ) ) {
+					continue;
+				}
+				foreach ( (array) $reg->deps as $dep ) {
+					self::mark_with_deps( $scripts, (string) $dep, $needed );
+				}
+			}
+		}
+		self::$needed_by_excluded       = $needed;
+		self::$needed_by_excluded_count = $count;
+		return $needed;
+	}
 
 	/**
 	 * Handles that cannot be deferred because inline code depends on them.

@@ -108,6 +108,7 @@ final class HeartbeatModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed heartbeat',
+				'risk'      => array( 'show' => 'read', 'set' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Inspect or modify xSpeed heartbeat settings.',
 				'ai_hint'   => 'Inspect or change WordPress Heartbeat (admin-ajax polling) frequency. Use for high admin-ajax.php CPU load, or hosting warnings about too many background requests.',
@@ -257,10 +258,18 @@ final class HeartbeatModule extends Module {
 				$patch[ 'behavior_' . $assoc['for'] ] = $assoc['behavior'];
 			}
 			if ( isset( $assoc['frequency'] ) ) {
-				$patch['frequency'] = (int) $assoc['frequency'];
+				// Raw, not (int): "abc" cast to 0, which is out of range, so the
+				// write was dropped and the command still said it updated. The
+				// schema check below refuses it by name instead. (#464)
+				$patch['frequency'] = (string) $assoc['frequency'];
 			}
 			if ( empty( $patch ) ) {
 				\WP_CLI::error( 'Nothing to set. Provide --for= --behavior= and/or --frequency=' );
+				return;
+			}
+			$refusal = $this->settings_refusal( $patch );
+			if ( null !== $refusal ) {
+				\WP_CLI::error( $refusal->get_error_message() );
 				return;
 			}
 			$this->update_settings( $patch );

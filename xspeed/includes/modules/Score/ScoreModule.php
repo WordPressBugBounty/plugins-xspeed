@@ -752,6 +752,7 @@ final class ScoreModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed score',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'run' => 'write', 'history' => 'read', 'hub-test' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'External performance scores: `run` a PageSpeed Insights / GTmetrix audit (use --target=<url>, not --url, which WP-CLI reserves), `status` for an in-flight GTmetrix test, `history` for past runs.',
 				'ai_hint'   => 'Measure real-world performance with an external audit (PageSpeed Insights / GTmetrix), or read past scores. Use to answer "did that change actually help" with a measured before/after instead of an assumption, and to get Core Web Vitals for a specific page. `run` starts an audit (pass --target=<url> for a page other than the home page; --url is reserved by WP-CLI), `status` polls an in-flight GTmetrix test, `history` returns previous runs. An audit takes up to a couple of minutes, so say so before starting one.',
@@ -794,6 +795,7 @@ final class ScoreModule extends Module {
 			 */
 			array(
 				'name'      => 'xspeed scan',
+				'risk'      => array( '' => 'read', 'run' => 'write', 'status' => 'read', 'fixes' => 'read' ),
 				'callback'  => array( $this, 'cli_scan_handler' ),
 				'shortdesc' => 'xSpeed Scan: `run` a full graded site report, `status` to poll one or read the last, `fixes` for what to do next.',
 				'ai_hint'   => 'Run a full xSpeed Scan and read the graded result. This is BROADER than `xspeed score`: it grades four weighted dimensions (speed, delivery, assets, platform) over ~20 checks and returns what to fix ranked by how many points each recovers, which a raw PageSpeed score cannot tell you. The scan score and a Lighthouse score are DIFFERENT SCALES - never present them as the same number or compare one to the other. `run` starts a scan (20-60s; poll with `status`), `fixes` lists the ranked remediations. Reports are published to a public per-host list unless the site is connected to the Hub, so say so before starting one.',

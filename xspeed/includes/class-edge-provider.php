@@ -203,6 +203,13 @@ final class Edge_Provider {
 	);
 
 	/**
+	 * The shape of a Cloudflare `CF-Ray`: sixteen hex digits, a hyphen, and
+	 * the three-letter code of the data centre. The one copy of the pattern
+	 * in Free. Cache::edge_device_trusted() and the drop-in read it too.
+	 */
+	public const CF_RAY_PATTERN = '/^[0-9a-f]{16}-[A-Z]{3}$/';
+
+	/**
 	 * Request headers that name their provider outright, in probe order.
 	 *
 	 * `CF-Ray` is checked by shape rather than presence because it is the one
@@ -220,7 +227,7 @@ final class Edge_Provider {
 	 * @var array<int,array{key:string,provider:string,pattern?:string}>
 	 */
 	private const SIGNALS = array(
-		array( 'key' => 'HTTP_CF_RAY', 'provider' => 'cloudflare', 'pattern' => '/^[0-9a-f]{16}-[A-Z]{3}$/' ),
+		array( 'key' => 'HTTP_CF_RAY', 'provider' => 'cloudflare', 'pattern' => self::CF_RAY_PATTERN ),
 		array( 'key' => 'HTTP_CF_CONNECTING_IP', 'provider' => 'cloudflare' ),
 		array( 'key' => 'HTTP_X_VARNISH', 'provider' => 'varnish' ),
 		// AWS documents this one explicitly: "CloudFront adds the header to

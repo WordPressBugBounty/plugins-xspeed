@@ -156,6 +156,7 @@ final class PreloaderModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed preloader',
+				'risk'      => array( 'start' => 'write', 'stop' => 'write', 'status' => 'read' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Drive the cache preloader (start | stop | status).',
 				'ai_hint'   => 'Cache warming: crawl the site so visitors hit a warm cache instead of paying for the first render. Use after a full purge, or when the first visitor to each page reports a slow load.',

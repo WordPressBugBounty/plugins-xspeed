@@ -420,6 +420,7 @@ final class CdnModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed cdn',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'test' => 'read' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show CDN settings + test rewriting a URL.',
 				'ai_hint'   => 'Is a CDN configured, and does URL rewriting work? Use to check whether assets are served from the CDN, or to test what a given URL rewrites to before trusting the setting.',

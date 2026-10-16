@@ -610,7 +610,15 @@ final class MigrationModule extends Module {
 		// notice that only ever said "Done" would hide a half-applied import.
 		$failed = array();
 		foreach ( (array) ( $data['results'] ?? array() ) as $slug => $r ) {
-			if ( empty( $r['ok'] ) ) {
+			// Name each setting that did not come across or was changed to
+			// fit, with the reason apply() gave. A row that failed without
+			// explaining itself still falls through to the generic line.
+			$explained = false;
+			foreach ( array_merge( (array) ( $r['skipped'] ?? array() ), (array) ( $r['adjusted'] ?? array() ) ) as $row ) {
+				$failed[]  = (string) ( $row['label'] ?? '' ) . ' — ' . rtrim( trim( (string) ( $row['reason'] ?? '' ) ), '. ' );
+				$explained = true;
+			}
+			if ( empty( $r['ok'] ) && ! $explained ) {
 				// Human label, not the raw slug — "Object Cache", not
 				// "object-cache" — and the message trimmed of its own
 				// terminator so the sentence does not end in "6379..".
@@ -664,7 +672,7 @@ final class MigrationModule extends Module {
 	 *             optional module could not enable itself (no Redis for the
 	 *             object cache, say): the migration did what it was asked,
 	 *             and the server's own limits are not a failure of it. That
-	 *             detail rides along in the meta line as "Skipped: …",
+	 *             detail rides along in the meta line as "Not imported as-is: …",
 	 *             which is a footnote rather than a task.
 	 *   partial — kept for a genuinely mixed result.
 	 *   error   — nothing was imported
@@ -736,7 +744,7 @@ final class MigrationModule extends Module {
 						(d.deactivated
 							? '<?php echo esc_js( __( 'It has been switched off, so the two page caches cannot conflict.', 'xspeed' ) ); ?>'
 							: (d.refused || '<?php echo esc_js( __( 'It is still active — switch it off when you are ready.', 'xspeed' ) ); ?>')),
-						'<?php echo esc_js( __( 'Skipped:', 'xspeed' ) ); ?> ' + d.failed.join('; ') + '. ' + panel
+						'<?php echo esc_js( __( 'Not imported as-is:', 'xspeed' ) ); ?> ' + d.failed.join('; ') + '. ' + panel
 					);
 					return;
 				}
@@ -1200,6 +1208,7 @@ final class MigrationModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed migrate',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'preview' => 'read', 'apply' => 'destructive' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Import settings from another caching plugin.',
 				'ai_hint'   => 'Import settings from another caching plugin (WP Rocket, W3 Total Cache, LiteSpeed, WP Super Cache). Use when a site is switching to xSpeed and the user does not want to reconfigure by hand.',
@@ -1258,14 +1267,21 @@ final class MigrationModule extends Module {
 					 * happened instead. (#189)
 					 */
 					$applied = (array) ( $info['applied'] ?? array() );
+					$notes   = array_merge( (array) ( $info['skipped'] ?? array() ), (array) ( $info['adjusted'] ?? array() ) );
+					// apply() now judges each key and names what did not land,
+					// so ok:false is a real partial result, not a re-import of
+					// unchanged values: report it as such, with the reasons.
 					if ( empty( $applied ) ) {
-						$state = 'nothing to import';
-					} elseif ( ! empty( $info['ok'] ) ) {
+						$state = empty( $notes ) ? 'nothing to import' : 'not imported';
+					} elseif ( ! empty( $info['ok'] ) && empty( $info['skipped'] ) ) {
 						$state = 'imported';
 					} else {
-						$state = 'already up to date';
+						$state = 'partly imported';
 					}
 					\WP_CLI::log( sprintf( '%-20s %-18s %s', $mod, $state, implode( ',', $applied ) ) );
+					foreach ( $notes as $note ) {
+						\WP_CLI::log( sprintf( '%-20s   - %s: %s', '', (string) ( $note['label'] ?? '' ), (string) ( $note['reason'] ?? '' ) ) );
+					}
 				}
 
 				/*

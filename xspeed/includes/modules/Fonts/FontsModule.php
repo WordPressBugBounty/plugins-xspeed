@@ -280,6 +280,7 @@ final class FontsModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed fonts',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show font-optimization settings.',
 				'ai_hint'   => 'How are web fonts being optimized (font-display swap, preloading, local hosting)? Use for questions about invisible text while loading (FOIT/FOUT) or render-blocking fonts.',

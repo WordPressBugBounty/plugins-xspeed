@@ -276,17 +276,23 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'scan_database' ),
 			),
 			'clean_database'   => array(
-				'description' => 'PERMANENTLY DELETE database bloat — post revisions, trashed posts, spam comments and the other categories enabled in the Database module settings. This is not a cache purge: it destroys real content and CANNOT be undone. Requires a confirm_token from scan_database, which shows the caller exactly what would be removed; the call is refused without one.',
+				'description' => 'PERMANENTLY DELETE database bloat — post revisions, trashed posts, spam comments and the other categories enabled in the Database module settings. This is not a cache purge: it destroys real content and CANNOT be undone. Requires a confirm_token from scan_database, which shows the caller exactly what would be removed, and the site owner\'s approval: the first call is refused with an approval_id, the owner approves or denies it in wp-admin, and the same call with that approval_id then runs once.',
 				'inputSchema' => self::object_schema(
 					array(
 						'confirm_token' => array(
 							'type'        => 'string',
 							'description' => 'The token returned by scan_database. Required — it proves the caller has seen what will be deleted. Expires after 5 minutes and is invalidated if the database changes.',
 						),
+						'approval_id'   => array(
+							'type'        => 'string',
+							'description' => 'The id from an earlier refusal, once the site owner has approved that exact call in wp-admin. One approval covers one run.',
+						),
 					),
 					array( 'confirm_token' )
 				),
 				'write'       => true,
+				// Typed, so no `risk` to read: say it here for the destructiveHint.
+				'destructive' => true,
 				'handler'     => array( self::class, 'clean_database' ),
 			),
 			'flush_object_cache' => array(
@@ -583,7 +589,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'list_commands' ),
 			),
 			'run_command'      => array(
-				'description' => 'Run any xSpeed command — the full CLI surface (~50 commands across every module: cache, cloudflare, database, critical/unused CSS, pagespeed, images, migration, preloader, object cache, analytics, RUM, smart-* and more). Call list_commands first to discover names + options. Examples: run_command("cloudflare purge"), run_command("psi", {}, {"url":"https://site.com","strategy":"mobile"}). Permanently destructive commands additionally require a confirm_token and are refused without one — this gateway is not a way around that confirmation. "database clean" takes its token from scan_database, which previews exactly what would be deleted; every other destructive command is refused once and the refusal carries a token, so repeating the same call with it confirms the action.',
+				'description' => 'Run any xSpeed command — the full CLI surface (~50 commands across every module: cache, cloudflare, database, critical/unused CSS, pagespeed, images, migration, preloader, object cache, analytics, RUM, smart-* and more). Call list_commands first to discover names + options. Examples: run_command("cloudflare purge"), run_command("psi", {}, {"url":"https://site.com","strategy":"mobile"}). Permanently destructive commands need the site owner\'s approval, and this gateway is not a way around it: the first call is refused with an approval_id, the owner approves or denies it in wp-admin, and the same call with that approval_id then runs once. "database clean" also needs the confirm_token from scan_database, which previews exactly what would be deleted.',
 				'inputSchema' => self::object_schema(
 					array(
 						'command' => array(
@@ -601,7 +607,11 @@ final class Mcp_Tools {
 						),
 						'confirm_token' => array(
 							'type'        => 'string',
-							'description' => 'Required ONLY for permanently destructive commands. For "database clean" obtain it from scan_database, which previews exactly what would be deleted; for any other destructive command, make the call once without this argument and the refusal returns the token to repeat it with. Without it those commands are refused.',
+							'description' => 'For "database clean" only: the token from scan_database, which previews exactly what would be deleted. On a site that has switched owner approval off, every destructive command takes one, returned by the first refusal.',
+						),
+						'approval_id'   => array(
+							'type'        => 'string',
+							'description' => 'The id from an earlier refusal, once the site owner has approved that exact call in wp-admin. One approval covers one run.',
 						),
 					),
 					array( 'command' )
@@ -615,27 +625,7 @@ final class Mcp_Tools {
 		// module is active (e.g. Pro): drop them if the command isn't
 		// registered, so we never advertise a tool that always fails. The
 		// action stays reachable via run_command if the command exists.
-		$conditional = array(
-			'generate_critical_css' => 'xspeed ccss',
-			'purge_cloudflare'      => 'xspeed cf',
-			'cloudflare_verify'     => 'xspeed cf',
-			'flush_object_cache'    => 'xspeed objcache',
-			'test_object_cache'     => 'xspeed objcache',
-			'start_preloader'       => 'xspeed preloader',
-			'scan_database'         => 'xspeed db',
-			'clean_database'        => 'xspeed db',
-			'purge_url'             => 'xspeed cache',
-			'get_cache_inventory'   => 'xspeed cache',
-			'get_purge_log'         => 'xspeed cache',
-			'recheck_rewrite_rules' => 'xspeed cache',
-			'set_cloudflare_dev_mode' => 'xspeed cf',
-			'optimize_database'     => 'xspeed db',
-			'get_object_cache_status' => 'xspeed objcache',
-			'toggle_object_cache'   => 'xspeed objcache',
-			'manage_critical_css'   => 'xspeed ccss',
-			'get_preloader_status'  => 'xspeed preloader',
-			'stop_preloader'        => 'xspeed preloader',
-		);
+		$conditional = self::CONDITIONAL_TOOL_COMMANDS;
 
 		/*
 		 * Tools that are ALWAYS in the catalog, mapped to the command they
@@ -652,14 +642,7 @@ final class Mcp_Tools {
 		 * split is what stops the class of bug recurring — an unconditional
 		 * tool can no longer be removed by a command going away. (#149/#153)
 		 */
-		$always = array(
-			'get_settings'      => 'xspeed settings',
-			'update_settings'   => 'xspeed settings',
-			'run_pagespeed'     => 'xspeed psi',
-			'get_health'        => 'xspeed health',
-			'get_score_history' => 'xspeed score',
-			'purge_cache'       => 'xspeed purge',
-		);
+		$always = self::ALWAYS_TOOL_COMMANDS;
 
 		$commands = Cli_Bridge::commands();
 		foreach ( $conditional as $tool => $command ) {
@@ -755,6 +738,11 @@ final class Mcp_Tools {
 			if ( isset( $covered[ $command ] ) ) {
 				continue;
 			}
+			// A command no MCP call may run is not offered as a tool.
+			// invoke() still refuses it by name.
+			if ( self::command_fully_blocked( (string) $command ) ) {
+				continue;
+			}
 			$tool_name = self::cli_tool_name( $command );
 			if ( '' === $tool_name ) {
 				continue;
@@ -799,7 +787,7 @@ final class Mcp_Tools {
 					? $spec['shortdesc']
 					: sprintf( 'Run the "%s" xSpeed command.', $command ) );
 
-			list( $write, $write_actions, $read_actions ) = self::cli_write_profile( $command, $spec['synopsis'] );
+			list( $write, $write_actions, $read_actions ) = self::cli_write_profile( $command, $spec['synopsis'], $spec['risk'] ?? null );
 
 			$tools[ $tool_name ] = array(
 				'description'   => $description,
@@ -815,6 +803,9 @@ final class Mcp_Tools {
 				// refused under a read-only grant until it has been
 				// classified, instead of silently becoming callable.
 				'read_actions'  => $read_actions,
+				// Published in tools/list (_meta.xspeed.risk) so the Hub can
+				// enforce the same levels without its own copy of them.
+				'risk'          => self::normalize_risk( $spec['risk'] ?? null ),
 				'handler'       => self::cli_handler_for( $command, $spec['synopsis'] ),
 			);
 		}
@@ -879,20 +870,21 @@ final class Mcp_Tools {
 			return true;
 		}
 
+		// Present but not a scalar names no action at all, so it can't be
+		// the declared no-action read either.
+		if ( isset( $args['action'] ) && ! is_scalar( $args['action'] ) ) {
+			return true;
+		}
 		$action = isset( $args['action'] ) && is_scalar( $args['action'] )
 			? strtolower( trim( (string) $args['action'] ) )
 			: '';
 
-		// No action supplied: the command's own default is unknown here, so
-		// treat it as a write rather than guessing.
-		if ( '' === $action ) {
-			return true;
-		}
-
 		// Only an action we positively recognise as read is allowed through.
 		// Anything unknown is refused, so a future action added to a command
 		// can't silently become callable under a read-only grant before it has
-		// been classified.
+		// been classified. A call with no action passes only when the command
+		// declares its default a read ('' => 'read'); otherwise the default
+		// is unknown here and it counts as a write.
 		$known = array_map(
 			static function ( $a ) {
 				return strtolower( trim( (string) $a ) );
@@ -903,7 +895,33 @@ final class Mcp_Tools {
 		return ! in_array( $action, $known, true );
 	}
 
-	private static function cli_write_profile( string $command, array $synopsis ): array {
+	private static function cli_write_profile( string $command, array $synopsis, $risk = null ): array {
+		$declared = self::normalize_risk( $risk );
+		if ( is_string( $declared ) ) {
+			return array( 'read' !== $declared, array(), array() );
+		}
+		if ( is_array( $declared ) ) {
+			$write_actions = array();
+			$read_actions  = array();
+			foreach ( $declared as $action => $level ) {
+				if ( 'read' === $level ) {
+					$read_actions[] = (string) $action;
+				} elseif ( '' !== (string) $action ) {
+					$write_actions[] = (string) $action;
+				}
+			}
+			// A command whose every named action reads still writes on a call
+			// with no action unless its default is declared a read.
+			$write = ! empty( $write_actions ) || ! isset( $declared[''] ) || 'read' !== $declared[''];
+			if ( empty( $write_actions ) && $write ) {
+				// No per-action profile would make action_writes() refuse
+				// every call; name the missing default instead.
+				$write_actions = array( '' );
+			}
+			return array( $write, $write_actions, $read_actions );
+		}
+
+		// Undeclared (an add-on that predates `risk`): guess from the verbs.
 		// Command with an action enum → classify each action.
 		foreach ( $synopsis as $arg ) {
 			if ( isset( $arg['type'], $arg['options'] ) && 'positional' === $arg['type'] && is_array( $arg['options'] ) ) {
@@ -949,8 +967,17 @@ final class Mcp_Tools {
 			$args  = array();
 			$assoc = $tool_args;
 			// Pull positionals out (in order) into $args; the rest are options.
+			// Stop at the first one missing, as a command line would: a gap
+			// must not let a later value slide into the action's place. The
+			// gates classify `action` as the first positional, so
+			// `{id: "apply"}` with no action would otherwise run `apply`
+			// after being judged a no-action call.
+			$gap = false;
 			foreach ( $positionals as $pname ) {
-				if ( array_key_exists( $pname, $assoc ) && '' !== (string) $assoc[ $pname ] ) {
+				$present = array_key_exists( $pname, $assoc ) && '' !== (string) $assoc[ $pname ];
+				if ( ! $present ) {
+					$gap = true;
+				} elseif ( ! $gap ) {
 					$args[] = (string) $assoc[ $pname ];
 				}
 				unset( $assoc[ $pname ] );
@@ -974,9 +1001,103 @@ final class Mcp_Tools {
 				'name'        => $name,
 				'description' => $spec['description'],
 				'inputSchema' => $spec['inputSchema'],
+				'annotations' => self::tool_annotations( (string) $name, $spec ),
+				'_meta'       => array( 'xspeed' => self::tool_contract( $spec ) ),
 			);
 		}
 		return $out;
+	}
+
+	/**
+	 * The MCP hints clients and directories read: a title for people, and
+	 * whether the tool only reads or may destroy something.
+	 *
+	 * @param string $name Tool name.
+	 * @param array  $spec Catalog entry.
+	 * @return array{title:string,readOnlyHint:bool,destructiveHint:bool}
+	 */
+	private static function tool_annotations( string $name, array $spec ): array {
+		$write = ! empty( $spec['write'] );
+		return array(
+			'title'           => self::tool_title( $name, $spec ),
+			'readOnlyHint'    => ! $write,
+			'destructiveHint' => $write && self::spec_is_destructive( $spec ),
+		);
+	}
+
+	/**
+	 * What a proxy needs to enforce this tool exactly as invoke() does: the
+	 * write flag, the actions a read-only grant may still run ('' is a call
+	 * with no action), and the declared risk. The xSpeed Hub builds its tool
+	 * list from this, so a new command reaches it with no Hub change.
+	 *
+	 * @param array $spec Catalog entry.
+	 * @return array{write:bool,readActions:string[],destructive:bool,risk:mixed}
+	 */
+	private static function tool_contract( array $spec ): array {
+		return array(
+			'write'       => ! empty( $spec['write'] ),
+			'readActions' => array_values( array_map( 'strval', (array) ( $spec['read_actions'] ?? array() ) ) ),
+			'destructive' => self::spec_is_destructive( $spec ),
+			'risk'        => $spec['risk'] ?? null,
+		);
+	}
+
+	/**
+	 * Whether any call to this tool can be destructive or owner-only.
+	 *
+	 * @param array $spec Catalog entry.
+	 */
+	private static function spec_is_destructive( array $spec ): bool {
+		if ( ! empty( $spec['destructive'] ) ) {
+			return true;
+		}
+		$risk = $spec['risk'] ?? null;
+		$levels = is_array( $risk ) ? array_values( $risk ) : array( $risk );
+		return (bool) array_intersect( array( 'destructive', 'owner' ), $levels );
+	}
+
+	/**
+	 * A short, sentence-case name for people: "get_cache_status" becomes
+	 * "Get cache status", "xspeed_cache-404_status" becomes "Cache 404 status".
+	 *
+	 * @param string $name Tool name.
+	 * @param array  $spec Catalog entry.
+	 */
+	private static function tool_title( string $name, array $spec ): string {
+		if ( ! empty( $spec['title'] ) && is_string( $spec['title'] ) ) {
+			return $spec['title'];
+		}
+		$words = 0 === strpos( $name, 'xspeed_' ) ? substr( $name, 7 ) : $name;
+		return ucfirst( trim( (string) preg_replace( '/[\s_-]+/', ' ', $words ) ) );
+	}
+
+	/**
+	 * Short fingerprint of the advertised catalog. A proxy that keeps a copy
+	 * of tools/list compares it with the X-XSpeed-Tools header and fetches
+	 * the list again when it changes: after an update, a module switched on
+	 * or off, or an add-on activated.
+	 */
+	public static function catalog_hash(): string {
+		static $hash = null;
+		if ( null === $hash ) {
+			$hash = substr( hash( 'sha256', (string) wp_json_encode( self::list() ) ), 0, 16 );
+		}
+		return $hash;
+	}
+
+	/**
+	 * Headers every successful MCP response carries, so a proxy learns the
+	 * plugin version and the catalog fingerprint from traffic it already
+	 * sends.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function catalog_headers(): array {
+		return array(
+			'X-XSpeed-Version' => defined( 'XSPEED_VERSION' ) ? (string) XSPEED_VERSION : '',
+			'X-XSpeed-Tools'   => self::catalog_hash(),
+		);
 	}
 
 	/**
@@ -988,6 +1109,32 @@ final class Mcp_Tools {
 	 */
 	public static function invoke( string $name, array $args ) {
 		$catalog = self::catalog();
+
+		/*
+		 * Actions no MCP call may run, whatever scope it carries. Checked
+		 * first: these commands are left out of tools/list, so an
+		 * unknown-tool answer would hide the reason. A write grant does not
+		 * unlock them either. `mcp rotate` run by the assistant revokes the
+		 * credential the site owner handed out and returns the new one in
+		 * the tool result; `privacy enable` records consent the owner never
+		 * gave.
+		 */
+		$blocked = self::blocked_action( $name, $args );
+		if ( '' !== $blocked ) {
+			$error = new \WP_Error(
+				'xspeed_mcp_blocked_action',
+				sprintf(
+					/* translators: %s: canonical "<command> <action>". */
+					__( '"%s" cannot be run from an MCP tool call. The site owner can do it from the xSpeed dashboard or from WP-CLI on the server.', 'xspeed' ),
+					$blocked
+				),
+				array( 'status' => 403 )
+			);
+			Mcp_Activity_Log::record( $name, $args, false, $error->get_error_message(), 'write', self::$channel );
+
+			return $error;
+		}
+
 		if ( ! isset( $catalog[ $name ] ) ) {
 			$error = new \WP_Error(
 				'xspeed_mcp_unknown_tool',
@@ -1078,15 +1225,44 @@ final class Mcp_Tools {
 		 */
 		$destructive = self::destructive_action( $name, $args );
 		if ( ! empty( $destructive ) ) {
-			$confirmed = self::verify_confirm_token( $args, $name, $destructive );
-			if ( is_wp_error( $confirmed ) ) {
-				// The refusal message can carry a freshly minted token (see
-				// confirm_required()); the log gets the redacted twin so a
-				// live token is never persisted in wp_options twice over.
-				Mcp_Activity_Log::record( $name, $args, false, self::loggable_error( $confirmed ), 'write', self::$channel );
-				return $confirmed;
+			$approval = Mcp_Approvals::required();
+
+			/*
+			 * With approval on, the site owner decides, not the caller. The
+			 * approval is only LOOKED at here and claimed last, so a refusal
+			 * further down (a stale database preview) doesn't use it up.
+			 */
+			if ( $approval ) {
+				$approved = self::verify_approval( $args, $name, $destructive, false );
+				if ( is_wp_error( $approved ) ) {
+					Mcp_Activity_Log::record( $name, $args, false, $approved->get_error_message(), 'write', self::$channel );
+					return $approved;
+				}
+			}
+
+			// The database clean keeps its preview token either way: it seals
+			// what the scan showed, which an approval alone does not. Without
+			// approval, every destructive action falls back to the token.
+			if ( ! $approval || self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $destructive ) ) {
+				$confirmed = self::verify_confirm_token( $args, $name, $destructive );
+				if ( is_wp_error( $confirmed ) ) {
+					// The refusal message can carry a freshly minted token (see
+					// confirm_required()); the log gets the redacted twin so a
+					// live token is never persisted in wp_options twice over.
+					Mcp_Activity_Log::record( $name, $args, false, self::loggable_error( $confirmed ), 'write', self::$channel );
+					return $confirmed;
+				}
+			}
+
+			if ( $approval ) {
+				$claimed = self::verify_approval( $args, $name, $destructive, true );
+				if ( is_wp_error( $claimed ) ) {
+					Mcp_Activity_Log::record( $name, $args, false, $claimed->get_error_message(), 'write', self::$channel );
+					return $claimed;
+				}
 			}
 		}
+		unset( $args['approval_id'] );
 
 		/*
 		 * The token authorised the call; it is not an argument any handler
@@ -1674,6 +1850,25 @@ final class Mcp_Tools {
 				);
 			}
 		}
+		// Consent fields can be withdrawn over MCP but never granted.
+		// Settings_Manager::update() drops them as the backstop; say so here
+		// instead of reporting a save that silently skipped the field.
+		$consent_fields = Settings_Manager::consent_grants_in( $module, $values );
+		if ( ! empty( $consent_fields ) ) {
+			return new \WP_Error(
+				'xspeed_mcp_consent_owner_only',
+				sprintf(
+					/* translators: 1: comma-separated field names, 2: module slug. */
+					__( 'Turning on %1$s in "%2$s" records the site owner\'s consent, so it can\'t be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed.', 'xspeed' ),
+					implode( ', ', $consent_fields ),
+					$module
+				),
+				array(
+					'status'         => 403,
+					'refused_fields' => $consent_fields,
+				)
+			);
+		}
 		// The Pro licence WRITE gate. `settings_module_reachable()` above already
 		// hides locked Pro modules, but that is a VISIBILITY check answered by
 		// the `xspeed_module_descriptor` filter — a different question from "may
@@ -1835,7 +2030,15 @@ final class Mcp_Tools {
 	 */
 	public static function list_commands( array $args ) {
 		unset( $args );
-		return array( 'commands' => Cli_Bridge::catalog() );
+		$commands = array_values(
+			array_filter(
+				Cli_Bridge::catalog(),
+				static function ( $entry ) {
+					return ! self::command_fully_blocked( (string) ( $entry['command'] ?? '' ) );
+				}
+			)
+		);
+		return array( 'commands' => $commands );
 	}
 
 	/**
@@ -1939,10 +2142,269 @@ final class Mcp_Tools {
 		 * @since 1.1.6
 		 * @param array<string, string[]> $actions Action names keyed by command.
 		 */
-		return (array) apply_filters(
+		$declared = self::declared_at( Cli_Bridge::commands(), 'destructive' );
+		$filtered = (array) apply_filters(
 			'xspeed_mcp_destructive_actions',
-			array( 'xspeed db' => array( 'clean' ) )
+			self::merge_action_maps( array( 'xspeed db' => array( 'clean' ) ), $declared )
 		);
+
+		// A command's own declaration is a floor: the filter can add to the
+		// set, not drop an action its module calls destructive.
+		return self::merge_action_maps( $filtered, $declared );
+	}
+
+	/**
+	 * Typed tools that exist only while the command they wrap is registered,
+	 * mapped to that command. See catalog().
+	 */
+	private const CONDITIONAL_TOOL_COMMANDS = array(
+		'generate_critical_css' => 'xspeed ccss',
+		'purge_cloudflare'      => 'xspeed cf',
+		'cloudflare_verify'     => 'xspeed cf',
+		'flush_object_cache'    => 'xspeed objcache',
+		'test_object_cache'     => 'xspeed objcache',
+		'start_preloader'       => 'xspeed preloader',
+		'scan_database'         => 'xspeed db',
+		'clean_database'        => 'xspeed db',
+		'purge_url'             => 'xspeed cache',
+		'get_cache_inventory'   => 'xspeed cache',
+		'get_purge_log'         => 'xspeed cache',
+		'recheck_rewrite_rules' => 'xspeed cache',
+		'set_cloudflare_dev_mode' => 'xspeed cf',
+		'optimize_database'     => 'xspeed db',
+		'get_object_cache_status' => 'xspeed objcache',
+		'toggle_object_cache'   => 'xspeed objcache',
+		'manage_critical_css'   => 'xspeed ccss',
+		'get_preloader_status'  => 'xspeed preloader',
+		'stop_preloader'        => 'xspeed preloader',
+	);
+
+	/**
+	 * Typed tools that are always in the catalog, mapped to the command they
+	 * cover. See catalog().
+	 */
+	private const ALWAYS_TOOL_COMMANDS = array(
+		'get_settings'      => 'xspeed settings',
+		'update_settings'   => 'xspeed settings',
+		'run_pagespeed'     => 'xspeed psi',
+		'get_health'        => 'xspeed health',
+		'get_score_history' => 'xspeed score',
+		'purge_cache'       => 'xspeed purge',
+	);
+
+	/**
+	 * The risk levels a CLI command declares, least to most severe.
+	 *
+	 * - read: inspects only.
+	 * - write: changes state that can be changed back.
+	 * - destructive: can't be undone, or overwrites settings; an MCP call
+	 *   waits for the site owner's approval (Mcp_Approvals), or a
+	 *   confirm_token where approval is switched off.
+	 * - owner: never from an MCP call (credentials, consent).
+	 */
+	public const RISK_LEVELS = array( 'read', 'write', 'destructive', 'owner' );
+
+	/**
+	 * Validate a command's `risk` declaration.
+	 *
+	 * A level outside RISK_LEVELS reads as destructive, so a typo asks for a
+	 * confirmation instead of opening a door.
+	 *
+	 * @param mixed $risk A level, a map of action => level, or null.
+	 * @return string|array<string,string>|null Null when nothing is declared.
+	 */
+	private static function normalize_risk( $risk ) {
+		$level = static function ( $value ): string {
+			$value = is_string( $value ) ? strtolower( trim( $value ) ) : '';
+			return in_array( $value, self::RISK_LEVELS, true ) ? $value : 'destructive';
+		};
+		if ( is_string( $risk ) ) {
+			return $level( $risk );
+		}
+		if ( ! is_array( $risk ) || empty( $risk ) ) {
+			return null;
+		}
+		$out = array();
+		foreach ( $risk as $action => $value ) {
+			$out[ strtolower( trim( (string) $action ) ) ] = $level( $value );
+		}
+		return $out;
+	}
+
+	/**
+	 * The command actions declared at one risk level, in the shape the
+	 * destructive and blocked maps use: command => actions, `*` for a whole
+	 * command declared at that level.
+	 *
+	 * A map's '' entry (the call with no action) is left out: every default
+	 * is a read today, and `*` would wrongly cover the named actions too.
+	 *
+	 * @param array<string,array<string,mixed>> $commands Cli_Bridge::commands().
+	 * @param string                            $level    One of RISK_LEVELS.
+	 * @return array<string,string[]>
+	 */
+	private static function declared_at( array $commands, string $level ): array {
+		$out = array();
+		foreach ( $commands as $command => $spec ) {
+			$risk = self::normalize_risk( $spec['risk'] ?? null );
+			if ( $level === $risk ) {
+				$out[ (string) $command ] = array( '*' );
+			} elseif ( is_array( $risk ) ) {
+				$actions = array_keys(
+					array_filter(
+						$risk,
+						static function ( $l, $a ) use ( $level ) {
+							return $level === $l && '' !== (string) $a;
+						},
+						ARRAY_FILTER_USE_BOTH
+					)
+				);
+				if ( ! empty( $actions ) ) {
+					$out[ (string) $command ] = array_map( 'strval', $actions );
+				}
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Union two command => actions maps.
+	 *
+	 * @param array<string,string[]> $a First map.
+	 * @param array<string,string[]> $b Second map.
+	 * @return array<string,string[]>
+	 */
+	private static function merge_action_maps( array $a, array $b ): array {
+		foreach ( $b as $command => $actions ) {
+			$a[ $command ] = array_values( array_unique( array_merge( $a[ $command ] ?? array(), (array) $actions ) ) );
+		}
+		return $a;
+	}
+
+	/**
+	 * Command actions an MCP call may never run, keyed by canonical command
+	 * name. `*` covers every action of the command, including a call with no
+	 * action at all.
+	 *
+	 * These are the site owner's decisions, not the assistant's: the
+	 * credentials an AI client connects with, and consent to send data off
+	 * the site. Turning usage analytics OFF stays allowed; only the opt-in is
+	 * blocked.
+	 *
+	 * @return array<string, string[]>
+	 */
+	private static function blocked_actions(): array {
+		$blocked = array(
+			'xspeed mcp connect'    => array( '*' ),
+			'xspeed mcp rotate'     => array( '*' ),
+			'xspeed mcp disconnect' => array( '*' ),
+			'xspeed privacy'        => array( 'enable' ),
+		);
+		$blocked = self::merge_action_maps( $blocked, self::declared_at( Cli_Bridge::commands(), 'owner' ) );
+
+		/**
+		 * Add command actions that an MCP call may never run.
+		 *
+		 * Receives an EMPTY map and may only add: an entry can't lift one of
+		 * the defaults above. Keys are full command names ("xspeed foo"),
+		 * values are action names or `*` for the whole command.
+		 *
+		 * @param array<string, string[]> $actions Extra blocked actions.
+		 */
+		$extra = apply_filters( 'xspeed_mcp_blocked_actions', array() );
+		if ( is_array( $extra ) ) {
+			foreach ( $extra as $command => $actions ) {
+				if ( ! is_string( $command ) || ! is_array( $actions ) ) {
+					continue;
+				}
+				$actions = array_values( array_filter( array_map( 'strval', $actions ), 'strlen' ) );
+				$actions = array_map( 'strtolower', $actions );
+				$blocked[ $command ] = array_values( array_unique( array_merge( $blocked[ $command ] ?? array(), $actions ) ) );
+			}
+		}
+
+		return $blocked;
+	}
+
+	/**
+	 * Whether a command is blocked outright, for every action.
+	 *
+	 * @param string $command Canonical command name.
+	 */
+	private static function command_fully_blocked( string $command ): bool {
+		return in_array( '*', self::blocked_actions()[ $command ] ?? array(), true );
+	}
+
+	/**
+	 * Name the blocked action a call would run, or '' when it may run.
+	 *
+	 * Resolves every door the same way destructive_action() does: run_command
+	 * through Cli_Bridge::classify(), a generated tool back to its command.
+	 * An action the call does not name still matches a `*` entry, so a
+	 * command with no action argument can't slip past.
+	 *
+	 * @param string $name Tool name.
+	 * @param array  $args Decoded tool arguments.
+	 * @return string Canonical "<command> <action>", or ''.
+	 */
+	private static function blocked_action( string $name, array $args ): string {
+		if ( 'run_command' === $name ) {
+			$command = isset( $args['command'] ) ? (string) $args['command'] : '';
+			if ( '' === trim( $command ) ) {
+				return '';
+			}
+			$positional = isset( $args['args'] ) && is_array( $args['args'] ) ? $args['args'] : array();
+			$resolved   = Cli_Bridge::classify( $command, $positional );
+			$hit        = self::blocked_hit( $resolved['name'], $resolved['action'] );
+			if ( '' === $hit && '' !== $resolved['action'] ) {
+				// With no registry, classify() splits "mcp rotate" into
+				// "xspeed mcp" + "rotate". A three-word command name is
+				// still blocked when read that way.
+				$hit = self::blocked_hit( $resolved['name'] . ' ' . $resolved['action'], '' );
+			}
+			return $hit;
+		}
+
+		$candidates = self::cli_commands_by_tool_name()[ $name ] ?? array();
+		if ( empty( $candidates ) ) {
+			// Same fail-closed fallback as destructive_action(): an
+			// unresolvable registry must not answer "allowed".
+			$candidates = array( str_replace( '_', ' ', $name ) );
+		}
+
+		$action = isset( $args['action'] ) && is_scalar( $args['action'] )
+			? strtolower( trim( (string) $args['action'] ) )
+			: '';
+
+		foreach ( $candidates as $command ) {
+			$hit = self::blocked_hit( $command, $action );
+			if ( '' !== $hit ) {
+				return $hit;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Match one resolved (command, action) pair against blocked_actions().
+	 *
+	 * @param string $command Canonical command name.
+	 * @param string $action  Lower-cased action, or ''.
+	 * @return string Canonical "<command> <action>", or ''.
+	 */
+	private static function blocked_hit( string $command, string $action ): string {
+		$actions = self::blocked_actions()[ $command ] ?? null;
+		if ( null === $actions ) {
+			return '';
+		}
+		if ( in_array( '*', $actions, true ) ) {
+			return trim( $command . ' ' . $action );
+		}
+		if ( '' !== $action && in_array( $action, $actions, true ) ) {
+			return $command . ' ' . $action;
+		}
+		return '';
 	}
 
 	/**
@@ -1962,7 +2424,7 @@ final class Mcp_Tools {
 				return array();
 			}
 			$positional = isset( $args['args'] ) && is_array( $args['args'] ) ? $args['args'] : array();
-			return self::destructive_hit( Cli_Bridge::classify( $command, $positional ) );
+			return self::destructive_resolved( Cli_Bridge::classify( $command, $positional ) );
 		}
 
 		if ( 'clean_database' === $name ) {
@@ -1981,10 +2443,10 @@ final class Mcp_Tools {
 		 * back to a command and classify that action exactly as the gateway
 		 * classifies its own.
 		 */
+		// An absent action is still classified: a command registered with
+		// `*` is destructive whatever it is called with, and many commands
+		// take no action argument at all.
 		$action = isset( $args['action'] ) ? (string) $args['action'] : '';
-		if ( '' === $action ) {
-			return array();
-		}
 
 		$candidates = self::cli_commands_by_tool_name()[ $name ] ?? array();
 		if ( empty( $candidates ) ) {
@@ -2013,13 +2475,36 @@ final class Mcp_Tools {
 		}
 
 		foreach ( $candidates as $command ) {
-			$hit = self::destructive_hit( Cli_Bridge::classify( $command, array( $action ) ) );
+			$hit = self::destructive_resolved( Cli_Bridge::classify( $command, array( $action ) ) );
 			if ( ! empty( $hit ) ) {
 				return $hit;
 			}
 		}
 
 		return array();
+	}
+
+	/**
+	 * destructive_hit(), plus the reading an unresolved registry needs.
+	 *
+	 * With no registry, classify() splits "widget import" into "xspeed
+	 * widget" + "import". A three-word command registered with `*` must
+	 * still be found, so the joined name is tried when the split misses.
+	 *
+	 * @param array{name:string,action:string} $resolved Output of Cli_Bridge::classify().
+	 * @return array{name?:string,action?:string}
+	 */
+	private static function destructive_resolved( array $resolved ): array {
+		$hit = self::destructive_hit( $resolved );
+		if ( empty( $hit ) && '' !== $resolved['name'] && '' !== $resolved['action'] ) {
+			$hit = self::destructive_hit(
+				array(
+					'name'   => $resolved['name'] . ' ' . $resolved['action'],
+					'action' => '',
+				)
+			);
+		}
+		return $hit;
 	}
 
 	/**
@@ -2050,7 +2535,8 @@ final class Mcp_Tools {
 		if ( ! isset( $destructive[ $resolved['name'] ] ) ) {
 			return array();
 		}
-		if ( ! in_array( $resolved['action'], (array) $destructive[ $resolved['name'] ], true ) ) {
+		$actions = (array) $destructive[ $resolved['name'] ];
+		if ( ! in_array( '*', $actions, true ) && ! in_array( $resolved['action'], $actions, true ) ) {
 			return array();
 		}
 
@@ -2116,6 +2602,51 @@ final class Mcp_Tools {
 	 * another door onto the same rows.
 	 */
 	private const PREVIEW_CONFIRMED_ACTION = 'xspeed db clean';
+
+	/**
+	 * The site owner's approval for a destructive action.
+	 *
+	 * A call without approval_id files a request and is refused with the id
+	 * and where the owner decides. The id travels in the MESSAGE, because
+	 * Mcp_Server::call_tool() renders a WP_Error as its message alone.
+	 *
+	 * @param array  $args    Decoded tool arguments.
+	 * @param string $tool    Tool name the call arrived on.
+	 * @param array  $action  Classified pair from destructive_action().
+	 * @param bool   $consume Claim the approval (the last check before running).
+	 * @return true|\WP_Error
+	 */
+	private static function verify_approval( array $args, string $tool, array $action, bool $consume ) {
+		$id = isset( $args['approval_id'] ) && is_scalar( $args['approval_id'] )
+			? strtolower( trim( (string) $args['approval_id'] ) )
+			: '';
+		if ( '' !== $id ) {
+			return Mcp_Approvals::check( $id, $tool, $args, $consume );
+		}
+
+		$canonical = self::canonical_action( $action );
+		$request   = Mcp_Approvals::request( $tool, $canonical, $args, self::$channel );
+		if ( is_wp_error( $request ) ) {
+			return $request;
+		}
+
+		return new \WP_Error(
+			'xspeed_mcp_approval_required',
+			sprintf(
+				/* translators: 1: the action, such as "xspeed migrate apply". 2: wp-admin URL. 3: approval id. 4: minutes until it expires. */
+				__( '"%1$s" can\'t be undone, so the site owner has to approve it first. Ask them to approve or deny it in wp-admin: %2$s. After they approve, repeat this exact call with approval_id: %3$s. The request expires in %4$d minutes.', 'xspeed' ),
+				$canonical,
+				admin_url( 'admin.php?page=xspeed' ),
+				$request['id'],
+				(int) ceil( ( $request['expires'] - time() ) / MINUTE_IN_SECONDS )
+			),
+			array(
+				'status'      => 403,
+				'action'      => $canonical,
+				'approval_id' => $request['id'],
+			)
+		);
+	}
 
 	/**
 	 * Verify (and consume) the confirm_token for a destructive action.
@@ -2218,13 +2749,20 @@ final class Mcp_Tools {
 				__( 'Call run_command again with the same command plus confirm_token: %s', 'xspeed' ),
 				$token
 			)
-			: sprintf(
-				/* translators: 1: tool name, 2: action value, 3: the confirm_token to send back. */
-				__( 'Call %1$s again with action: %2$s plus confirm_token: %3$s', 'xspeed' ),
-				$tool,
-				(string) ( $action['action'] ?? '' ),
-				$token
-			);
+			: ( '' === (string) ( $action['action'] ?? '' )
+				? sprintf(
+					/* translators: 1: tool name, 2: the confirm_token to send back. */
+					__( 'Call %1$s again with the same arguments plus confirm_token: %2$s', 'xspeed' ),
+					$tool,
+					$token
+				)
+				: sprintf(
+					/* translators: 1: tool name, 2: action value, 3: the confirm_token to send back. */
+					__( 'Call %1$s again with action: %2$s plus confirm_token: %3$s', 'xspeed' ),
+					$tool,
+					(string) ( $action['action'] ?? '' ),
+					$token
+				) );
 
 		return new \WP_Error(
 			'xspeed_mcp_confirm_required',

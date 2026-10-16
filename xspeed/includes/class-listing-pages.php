@@ -229,7 +229,7 @@ final class Listing_Pages {
 			// `/page/` is not.
 			$url = self::current_url();
 			if ( '' !== $url ) {
-				foreach ( array( '', '|m', '|d' ) as $device ) {
+				foreach ( Cache_Devices::stored_suffixes() as $device ) {
 					self::forget_page( md5( $url . $device ) );
 				}
 			}
@@ -1403,11 +1403,7 @@ final class Listing_Pages {
 	 * posts, so each keeps its own record.
 	 */
 	private static function device(): string {
-		$opts = Settings_Manager::get( 'cache' );
-		if ( empty( $opts['mobile_separate'] ) ) {
-			return '';
-		}
-		return function_exists( 'wp_is_mobile' ) && wp_is_mobile() ? '|m' : '|d';
+		return Cache::device_suffix();
 	}
 
 	/**

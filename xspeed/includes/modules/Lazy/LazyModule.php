@@ -349,6 +349,7 @@ final class LazyModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed lazy',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show which lazy-load toggles are active.',
 				'ai_hint'   => 'Which lazy-loading and image optimizations are on (images, iframes, missing width/height)? Use for questions about images loading too early, layout shift (CLS), or offscreen images flagged by PageSpeed.',

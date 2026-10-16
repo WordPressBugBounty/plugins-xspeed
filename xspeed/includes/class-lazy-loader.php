@@ -876,10 +876,19 @@ JS;
 		$deferred = false;
 
 		// The element's own src, when it has one.
-		if ( preg_match( '#\bsrc\s*=\s*(["\'])(.*?)\1#i', $tag, $m ) && '' !== trim( $m[2] ) ) {
-			$tag      = (string) preg_replace(
-				'#\bsrc\s*=\s*(["\'])(.*?)\1#i',
-				'data-xspeed-src="' . esc_attr( $m[2] ) . '"',
+		// Built in a callback, never as preg_replace()'s replacement argument:
+		// that argument reads `$1`, `\1` and `${1}` as backreferences, so a
+		// src value carrying one would close the new attribute early and turn
+		// the rest of the value into markup. esc_attr() escapes neither `$`
+		// nor `\`.
+		// Skip complete quoted values so src= text inside a title stays text.
+		$src_pattern = '#(?:"[^"]*"|\'[^\']*\')(*SKIP)(*F)|(?<![-\w])src\s*=\s*(["\'])(.*?)\1#is';
+		if ( preg_match( $src_pattern, $tag, $m ) && '' !== trim( $m[2] ) ) {
+			$tag      = (string) preg_replace_callback(
+				$src_pattern,
+				static function ( array $src ): string {
+					return 'data-xspeed-src="' . esc_attr( $src[2] ) . '"';
+				},
 				$tag,
 				1
 			);
@@ -897,7 +906,8 @@ JS;
 		// Without this the browser starts fetching the moment a source is
 		// restored, which is what we want — but it must not autoplay before
 		// then, and it must not report itself as autoplaying meanwhile.
-		$tag = (string) preg_replace( '#\sautoplay(?=[\s/>=])#i', ' data-xspeed-autoplay="1"', $tag, 1 );
+		// Consume an explicit boolean value too, so it cannot become loose markup.
+		$tag = (string) preg_replace( '#(?:"[^"]*"|\'[^\']*\')(*SKIP)(*F)|\sautoplay(?=[\s/>=])(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+))?#i', ' data-xspeed-autoplay="1"', $tag, 1 );
 
 		// preload="none" as well: belt and braces for the window between
 		// parse and the observer attaching.
@@ -1224,12 +1234,23 @@ JS;
 		// `data-width="800"` matched the DATA attribute and rewrote it to the
 		// file's intrinsic size — corrupting a slider's own configuration and
 		// leaving the tag with no real width at all. (#333 review round 3)
-		$pattern = '#(?<![-\w])' . preg_quote( $name, '#' ) . '\s*=\s*(["\'][^"\']*["\']|\S+)#i';
+		// Matching inside another value can turn its remaining text into live attributes.
+		$pattern = '#(?:"[^"]*"|\'[^\']*\')(*SKIP)(*F)|(?<![-\w])' . preg_quote( $name, '#' ) . '\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)#i';
 		if ( preg_match( $pattern, $tag ) ) {
 			if ( $only_if_missing ) {
 				return $tag;
 			}
-			return (string) preg_replace( $pattern, $name . '="' . $value . '"', $tag, 1 );
+			// A callback, so the value is never read as a replacement template
+			// (see defer_autoplay_source()). Every caller passes a fixed value
+			// today; this keeps a future one from reopening the same hole.
+			return (string) preg_replace_callback(
+				$pattern,
+				static function () use ( $name, $value ): string {
+					return $name . '="' . $value . '"';
+				},
+				$tag,
+				1
+			);
 		}
 		// Inject before the closing > (preserving self-closing `/>` if present).
 		if ( preg_match( '#(/?>)$#', $tag, $m ) ) {

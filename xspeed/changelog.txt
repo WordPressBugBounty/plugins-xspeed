@@ -2,6 +2,78 @@
 
 The three most recent releases are listed in readme.txt. Everything since 1.0.0 is below.
 
+= [1.4.3] – 2026-10-16 =
+
+**Tablets can get a cached copy of their own, Markdown versions of a page can be cached beside the HTML, and an AI agent now needs the site owner's approval before an action that cannot be undone.**
+
+Security:
+- Fixed: A video that plays by itself could carry markup from its address into the page when "Lazy-load your own videos" moved the address aside. A Contributor could use this to run script in the browser of anyone viewing the post. The address is now kept as plain text, and local pages cached before the update are cleared once across the network. A warning remains until a full purge of the configured Cloudflare zone is confirmed. Reported by Wordfence PRISM (CVE-2026-109985).
+
+Caching:
+- New: Separate tablet cache (opt-in) keeps a third copy for tablets, and you choose whether tablets get the desktop or the phone page.
+- New: Cache Markdown versions (opt-in) stores the Markdown some SEO plugins send AI agents, separately from the HTML page.
+- Improved: With Separate mobile cache on, a CDN that keeps one copy per device type can now cache pages too.
+- Fixed: A response that is not HTML, such as Markdown or JSON on a page address, is no longer stored and served as the page.
+- Fixed: After a database restore that left xSpeed inactive, the cache no longer serves the old site's pages, and it is emptied when xSpeed comes back.
+- Fixed: The Separate mobile cache check compares fresh renders and asks each page whether it looked at the device, so one cached copy no longer reads as a difference.
+- Fixed: The site status the speed scan reads now says whether the page cache is on and why the home page was not cached.
+- Fixed: Purging one page also removes the expiry note kept beside a page that carries a nonce, so the next copy of that page is not cleared early.
+- Fixed: The 404 cache stores and serves only real 404s. A file a plugin serves at an address WordPress has no page for, such as llms.txt, is no longer cached as the site's 404 page or answered with one.
+
+Optimization:
+- New: Self-hosted Google Fonts has a card on the Optimization page.
+- Improved: Delay JS waits for a real visitor before it runs the delayed scripts, and runs them after the page's own DOMContentLoaded handlers. New installs get no fallback timer, so a speed test no longer runs them inside its trace.
+- Improved: Delay JS waits for stylesheets that are still being applied before the replay.
+- Fixed: Delay JS keeps the scripts a never-delayed script needs, with or without Smart Delay.
+- Fixed: Images in footer popups that already have a size now load lazily, so a popup nobody opens no longer downloads its images with the page.
+
+Cloudflare:
+- Fixed: Purging a URL clears every device copy of it at Cloudflare.
+
+AI / MCP:
+- New: Actions that cannot be undone, such as Database Clean and applying a migration, wait for the site owner's approval before an AI agent can run them.
+- New: Each tool says whether it reads, writes or cannot be undone, so AI clients can show it.
+- Fixed: Connecting, rotating or disconnecting MCP and turning on usage sharing are refused over MCP. Usage sharing can still be turned off.
+- New: When an xSpeed Scan finishes on a site connected to xSpeed Hub, the site sends the Hub the scan's id, so the Hub can compare it with the site's earlier scans.
+- Fixed: Running mcp status as a tool no longer shows the connection link.
+
+Dashboard & Admin UX:
+- Fixed: A settings save with a value the setting does not accept now names the value and what it accepts, instead of reporting success while changing nothing.
+- Fixed: Importing from another caching plugin shows as successful when most settings came across, and lists each skipped setting with the reason.
+- Fixed: A local site is not offered a connection to xSpeed Hub, and an unverified Hub answer no longer records the site as attached.
+
+= [1.4.2] – 2026-10-12 =
+
+**Combine CSS now works on Flywheel and Bedrock installs, Elementor Pro sticky headers stick under Delay JS, and a failed pass on the finished page can no longer cache an empty page.**
+
+Caching:
+- New: Every wp-admin page says when the page cache is off, and names the cache it would replace when another one already serves pages.
+- Improved: Purge All also clears Nginx Helper's Redis page cache, as used on GridPane, EasyEngine and WordOps.
+- Improved: `wp xspeed cache purge <url>` purges only that page, and the purge says which server cache it reached.
+- Fixed: When a filter on the finished page returns nothing, the rendered page is kept. An empty page is no longer sent or cached.
+- Fixed: Adding, moving or editing a widget clears the cached pages.
+- Fixed: With LiteSpeed Cache installed, the conflict check follows its page-cache setting, including its 24-hour pause.
+- Fixed: An Nginx Helper that is installed but not set up is no longer taken for a server cache.
+- Fixed: Purging no longer leaves an expiry marker beside pages that carry a nonce, which flooded response headers with errors when Query Monitor was active.
+
+Optimization:
+- New: The Asset Manager has a card on the Optimization page.
+- Fixed: Combine CSS works when wp-content is outside the WordPress folder, as on Flywheel and Bedrock.
+- Fixed: Under Delay JS, jQuery ready callbacks wait for the replay, so Elementor Pro sticky headers attach and Elementor entrance animations show.
+- Fixed: Async CSS holds transitions until the stylesheets apply, keeps them when JavaScript is off, and skips entrance animations already on screen.
+- Fixed: Turbo Render works with the page cache off, and skips sections that break under containment.
+
+Object Cache:
+- Fixed: Redis connects over a unix socket, reading the same constants as Redis Object Cache.
+
+Dashboard & Admin UX:
+- Improved: The expert-setup offer links to the booking page on xspeedcache.com.
+- Fixed: Database Clean deletes posts and comments through WordPress, so trashed media files go too, and a clean that runs out of time says how much is left.
+- Fixed: Deleting a post detaches its child posts of another type.
+- Fixed: The scan report is stored as JSON, so a latin1 database table no longer loses it.
+- Fixed: The PageSpeed tab shows only with a licensed Pro, appears as soon as the licence is activated, and stays out of settings search while hidden.
+- Fixed: The xSpeed Cache menu is hidden from users who can't manage options.
+
 = [1.4.1] – 2026-10-08 =
 
 **Cloudflare Enterprise setup now runs in four short steps, and the add-on's offer opens its page in the dashboard, shows with any version of Pro, and goes away once the add-on is bought.**

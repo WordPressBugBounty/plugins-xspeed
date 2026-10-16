@@ -37,6 +37,7 @@ return array(
     'XSpeed\\Modules\\Mcp\\Cli_Shim' => $baseDir . '/includes/modules/Mcp/Cli_Shim.php',
     'XSpeed\\Modules\\Mcp\\McpModule' => $baseDir . '/includes/modules/Mcp/McpModule.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Activity_Log' => $baseDir . '/includes/modules/Mcp/Mcp_Activity_Log.php',
+    'XSpeed\\Modules\\Mcp\\Mcp_Approvals' => $baseDir . '/includes/modules/Mcp/Mcp_Approvals.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Auth' => $baseDir . '/includes/modules/Mcp/Mcp_Auth.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Hub' => $baseDir . '/includes/modules/Mcp/Mcp_Hub.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Hub_Connect' => $baseDir . '/includes/modules/Mcp/Mcp_Hub_Connect.php',

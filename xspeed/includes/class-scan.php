@@ -12,8 +12,10 @@
  * numbers are different scales and must never be presented as one.
  *
  * Outbound HTTP is opt-in and user-initiated: nothing here runs unless
- * someone presses Scan or runs the command. No schedule, no background
- * call — see readme.txt "External services".
+ * someone presses Scan or runs the command. The one call that follows a
+ * scan goes to the Hub, and only for a site someone attached to it: the
+ * finished scan's id, sent from a cron event (Mcp_Hub::queue_scan_notice()).
+ * See readme.txt "External services".
  *
  * PRIVACY, and the reason this class takes a `visibility` at all: the scan
  * engine publishes every report it stores to a per-host feed that anyone
@@ -276,8 +278,22 @@ final class Scan {
 		$result = self::normalise( $body, self::visibility() );
 		self::store( $result );
 		delete_option( self::PENDING_OPTION );
+		self::notify_hub( $scan_id );
 
 		return $result;
+	}
+
+	/**
+	 * Tell the Hub this attached site finished a scan, so it can keep the
+	 * report beside the site's earlier ones. The id is queued here and the
+	 * Hub client sends it from a cron event, so the poll never waits on the
+	 * Hub. Does nothing when the site is not attached.
+	 */
+	private static function notify_hub( string $scan_id ): void {
+		if ( ! self::attached() ) {
+			return;
+		}
+		\XSpeed\Modules\Mcp\Mcp_Hub::queue_scan_notice( $scan_id );
 	}
 
 	/**
@@ -499,6 +515,7 @@ final class Scan {
 					'evidence'    => isset( $c['evidence'] ) ? (string) $c['evidence'] : '',
 					'remediation' => isset( $c['remediation'] ) ? (string) $c['remediation'] : '',
 					'recoverable' => round( max( 0, $weight - $earned ), 1 ),
+					'fix'         => self::fix( $c['fix'] ?? null ),
 				);
 			}
 			usort(
@@ -555,6 +572,25 @@ final class Scan {
 			// tested) without a database behind it.
 			'visibility' => $visibility ?? '',
 		);
+	}
+
+	/**
+	 * The engine's suggested fix for one check: which tier has it, which
+	 * feature it is, and the prompt an AI client can run. Null when the
+	 * engine sent none, so a missing fix never reads as an empty one.
+	 *
+	 * @param mixed $fix The check's `fix` field.
+	 * @return array{tier:string,feature:string,prompt:string}|null
+	 */
+	private static function fix( $fix ): ?array {
+		if ( ! is_array( $fix ) ) {
+			return null;
+		}
+		$out = array();
+		foreach ( array( 'tier', 'feature', 'prompt' ) as $key ) {
+			$out[ $key ] = isset( $fix[ $key ] ) && is_scalar( $fix[ $key ] ) ? (string) $fix[ $key ] : '';
+		}
+		return '' === implode( '', $out ) ? null : $out;
 	}
 
 	/**

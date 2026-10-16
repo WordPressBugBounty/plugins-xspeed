@@ -15,9 +15,11 @@ class Plugin {
 	 * Data-schema version for one-time migrations, independent of the
 	 * plugin version header. Bump when adding a step to maybe_upgrade().
 	 */
-	public const DATA_VERSION = '1.3.6';
+	public const DATA_VERSION = '1.4.3';
 
 	private static $instance = null;
+
+	private bool $security_notice_shown = false;
 
 	/** @var Usage_Tracker|null */
 	private $usage_tracker = null;
@@ -138,9 +140,19 @@ class Plugin {
 		add_action( 'plugins_loaded', array( $this, 'fire_module_lifecycle' ), 20 );
 
 		// One-time data migrations keyed on the stored version. Runs in
-		// admin only — nothing here needs to touch a front-end request.
-		if ( is_admin() ) {
+		// admin and in WP-Cron, never on a visitor's page view. Cron
+		// matters for background auto-updates: they install the new code
+		// in a cron run, and without this a security purge waited for an
+		// administrator to open wp-admin while visitors kept getting the
+		// old cached pages.
+		if ( is_admin() || wp_doing_cron() ) {
 			add_action( 'plugins_loaded', array( $this, 'maybe_upgrade' ), 21 );
+		}
+		if ( is_admin() ) {
+			add_action( 'admin_notices', array( $this, 'security_edge_notice' ) );
+			add_action( 'network_admin_notices', array( $this, 'security_edge_notice' ) );
+			add_action( 'xspeed_admin_notices', array( $this, 'security_edge_notice' ) );
+			add_action( 'admin_post_xspeed_confirm_security_edge_purge', array( $this, 'confirm_security_edge_purge' ) );
 		}
 	}
 
@@ -227,8 +239,7 @@ class Plugin {
 			 * listeners, so firing it inline would announce to an empty room.
 			 * Priority 99 puts it after any reasonable `init` registration.
 			 *
-			 * Once per site, on the upgrade that clears the tree — never again,
-			 * since the data version is written immediately below.
+			 * The data version advances after all pending migrations complete.
 			 *
 			 * Through `Cache::announce_purge()` rather than a bare `do_action`,
 			 * because the purge-event contract (#348) is more than the payload:
@@ -254,7 +265,192 @@ class Plugin {
 			self::add_new_ignored_params();
 		}
 
+		// 1.4.3 — the lazy loader rewrote an autoplay video's src through a
+		// regex replacement that read `$1` in the value as a backreference,
+		// so crafted post content could render as live markup. The rewrite is
+		// fixed in Lazy_Loader::defer_autoplay_source(), but a page cached
+		// before the update still holds the old output, and nothing would
+		// rebuild it. Purge everything once, including copies at an edge.
+		// Unconditional: the setting may have been switched off since the
+		// page was cached. Deferred to `init` for the reason the 1.1.6 step
+		// gives.
+		if ( version_compare( $current, '1.4.3', '<' ) ) {
+			// Record the steps above as done before the purge is scheduled.
+			// The purge can stay pending across requests, and the steps
+			// above must not run again with it (the 1.1.6 sweep would clear
+			// the static tree and announce on every retry).
+			if ( version_compare( $current, '1.3.6', '<' ) ) {
+				update_option( 'xspeed_data_version', '1.3.6', false );
+			}
+			add_action(
+				'init',
+				static function () {
+					$network = is_multisite();
+					if ( ! $network || ! get_site_option( 'xspeed_security_network_purged_1_4_3', false ) ) {
+						$last = self::security_purge_attempt( $network );
+						// A cache file this request cannot delete (say, one a
+						// root cron wrote) keeps the sweep incomplete. Retrying
+						// on every admin and admin-ajax request purged the
+						// whole site, and the edge with it, each time, so a
+						// failed attempt waits an hour before the next one.
+						if ( $last > 0 && ( time() - $last ) < HOUR_IN_SECONDS ) {
+							return;
+						}
+						self::set_security_purge_attempt( $network, time() );
+						// Zones are marked on the first attempt only. A retry
+						// that marked them again would undo an administrator's
+						// confirmation that the zone was purged in Cloudflare.
+						if ( 0 === $last ) {
+							self::mark_security_edge_zones( $network );
+						}
+						$local_complete = false;
+						Cache::purge_all( 'cached pages rebuilt after update', $network ? '*' : null, array(), $local_complete );
+						if ( ! $local_complete ) {
+							return;
+						}
+						self::set_security_purge_attempt( $network, 0 );
+						if ( $network ) {
+							update_site_option( 'xspeed_security_network_purged_1_4_3', true );
+						}
+					}
+					// Retry later if execution stops before the purge completes.
+					update_option( 'xspeed_data_version', self::DATA_VERSION, false );
+				},
+				99
+			);
+			return;
+		}
+
 		update_option( 'xspeed_data_version', self::DATA_VERSION, false );
+	}
+
+	/**
+	 * When the 1.4.3 security purge last tried and could not finish, or 0.
+	 * Stored per network on multisite, where the purge sweeps every site.
+	 */
+	private static function security_purge_attempt( bool $network ): int {
+		return (int) ( $network
+			? get_site_option( 'xspeed_security_purge_attempt_1_4_3', 0 )
+			: get_option( 'xspeed_security_purge_attempt_1_4_3', 0 ) );
+	}
+
+	/** Record an attempt time, or clear it with 0 once the purge finishes. */
+	private static function set_security_purge_attempt( bool $network, int $time ): void {
+		if ( $network && $time ) {
+			update_site_option( 'xspeed_security_purge_attempt_1_4_3', $time );
+		} elseif ( $network ) {
+			delete_site_option( 'xspeed_security_purge_attempt_1_4_3' );
+		} elseif ( $time ) {
+			update_option( 'xspeed_security_purge_attempt_1_4_3', $time, false );
+		} else {
+			delete_option( 'xspeed_security_purge_attempt_1_4_3' );
+		}
+	}
+
+	/** Mark every configured Cloudflare zone as awaiting a full purge. */
+	private static function mark_security_edge_zones( bool $network ): void {
+		if ( ! $network ) {
+			$cloudflare = get_option( 'xspeed_module_cloudflare', array() );
+			if ( ! empty( $cloudflare['zone_id'] ) ) {
+				self::mark_security_edge_pending( (string) $cloudflare['zone_id'] );
+			}
+			return;
+		}
+		// Other blogs' edge listeners are not booted in this request.
+		// Mark their zones without sending requests they did not opt into.
+		$offset = 0;
+		do {
+			$ids = get_sites( array( 'network_id' => get_current_network_id(), 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
+			foreach ( $ids as $id ) {
+				$cloudflare = get_blog_option( $id, 'xspeed_module_cloudflare', array() );
+				if ( ! empty( $cloudflare['zone_id'] ) ) {
+					self::mark_security_edge_pending( (string) $cloudflare['zone_id'], (int) $id );
+				}
+			}
+			$offset += 100;
+		} while ( count( $ids ) === 100 );
+	}
+
+	/** Accept the single-zone marker written before multiple zones were tracked. */
+	private static function security_edge_zones( $pending ): array {
+		return array_values( array_unique( array_filter(
+			is_array( $pending ) ? $pending : array( $pending ),
+			static fn( $zone ) => is_string( $zone ) && '' !== $zone
+		) ) );
+	}
+
+	/** A retry must retain a previously configured zone until its purge is confirmed. */
+	private static function mark_security_edge_pending( string $zone, ?int $blog_id = null ): void {
+		$pending = null === $blog_id
+			? get_option( 'xspeed_security_edge_pending', array() )
+			: get_blog_option( $blog_id, 'xspeed_security_edge_pending', array() );
+		$zones = self::security_edge_zones( $pending );
+		$zones[] = $zone;
+		$zones = array_values( array_unique( $zones ) );
+		if ( null === $blog_id ) {
+			update_option( 'xspeed_security_edge_pending', $zones, false );
+		} else {
+			update_blog_option( $blog_id, 'xspeed_security_edge_pending', $zones );
+		}
+	}
+
+	/** Clear only the zone whose full purge was confirmed on the current site. */
+	public static function clear_security_edge_pending( string $zone ): void {
+		$zones = self::security_edge_zones( get_option( 'xspeed_security_edge_pending', array() ) );
+		if ( ! in_array( $zone, $zones, true ) ) {
+			return;
+		}
+		$zones = array_values( array_diff( $zones, array( $zone ) ) );
+		if ( empty( $zones ) ) {
+			delete_option( 'xspeed_security_edge_pending' );
+		} else {
+			update_option( 'xspeed_security_edge_pending', $zones, false );
+		}
+	}
+
+	/** Warn until a full edge purge is confirmed automatically or by an administrator. */
+	public function security_edge_notice(): void {
+		$zones = self::security_edge_zones( get_option( 'xspeed_security_edge_pending', array() ) );
+		// The purge retries hourly when a cache file cannot be deleted. Say
+		// so: until it finishes, pages cached before the update are still
+		// served, and only fixing the file permissions ends the retries.
+		$stuck = self::security_purge_attempt( is_multisite() ) > 0;
+		if ( $this->security_notice_shown || ! current_user_can( 'manage_options' ) || ( empty( $zones ) && ! $stuck ) ) {
+			return;
+		}
+		$this->security_notice_shown = true;
+		if ( $stuck ) {
+			echo '<div class="notice notice-error"><p>';
+			echo esc_html__( 'After the security update, xSpeed could not delete every cached page, so some pages cached before the update may still be served. It tries again every hour. Check that the web server can delete files in wp-content/cache/xspeed and wp-content/cache/xspeed-static.', 'xspeed' );
+			echo '</p></div>';
+		}
+		foreach ( $zones as $zone ) {
+			echo '<div class="notice notice-warning"><p>';
+			/* translators: %s: Cloudflare zone ID awaiting a full purge. */
+			echo esc_html( sprintf( __( 'After the security update, a full Cloudflare purge has not been confirmed for zone %s. Purge everything for this zone through xSpeed or the Cloudflare dashboard. Automatic purge preferences have not been changed.', 'xspeed' ), $zone ) );
+			echo '</p><form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			echo '<input type="hidden" name="action" value="xspeed_confirm_security_edge_purge">';
+			echo '<input type="hidden" name="xspeed_zone" value="' . esc_attr( $zone ) . '">';
+			wp_nonce_field( 'xspeed_confirm_security_edge_purge_' . $zone );
+			echo '<p><button type="submit" class="button">' . esc_html__( 'I have purged this zone in Cloudflare', 'xspeed' ) . '</button></p></form></div>';
+		}
+	}
+
+	/** A changed zone or credential must not make an old warning impossible to resolve. */
+	public function confirm_security_edge_purge(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to confirm this purge.', 'xspeed' ), '', array( 'response' => 403 ) );
+		}
+		$zone = isset( $_POST['xspeed_zone'] ) && is_string( $_POST['xspeed_zone'] ) ? sanitize_text_field( wp_unslash( $_POST['xspeed_zone'] ) ) : '';
+		$zones = self::security_edge_zones( get_option( 'xspeed_security_edge_pending', array() ) );
+		if ( ! in_array( $zone, $zones, true ) ) {
+			wp_die( esc_html__( 'This zone is not awaiting purge confirmation.', 'xspeed' ), '', array( 'response' => 400 ) );
+		}
+		// Binding the nonce to the pending zone prevents an old form clearing a newer warning.
+		check_admin_referer( 'xspeed_confirm_security_edge_purge_' . $zone );
+		self::clear_security_edge_pending( $zone );
+		wp_safe_redirect( admin_url( 'admin.php?page=xspeed' ) );
+		exit;
 	}
 
 	/**
@@ -615,5 +811,12 @@ class Plugin {
 		Gzip::apply( false );
 
 		Module_Registry::deactivate_all();
+
+		// The drop-in stays, but it must stop serving: with the plugin off,
+		// nothing purges a page when its post changes (#597). The next
+		// request that boots the plugin writes the flag again. Last, because
+		// a module's deactivate() may reinstall the drop-in, and installing
+		// writes the flag.
+		Cache::clear_active_flag();
 	}
 }

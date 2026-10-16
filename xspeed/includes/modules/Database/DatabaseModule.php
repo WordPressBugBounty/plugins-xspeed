@@ -170,6 +170,7 @@ final class DatabaseModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed db',
+				'risk'      => array( 'scan' => 'read', 'clean' => 'destructive', 'optimize' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Scan or clean WordPress bloat. Use --types=a,b to clean specific categories.',
 				'ai_hint'   => 'Find and remove database bloat (post revisions, spam comments, expired transients, orphaned metadata). Always `scan` first to see what would go; `clean` is destructive and requires confirmation.',

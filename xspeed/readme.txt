@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.2
+Stable tag: 1.4.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -278,6 +278,7 @@ xSpeed Cache contacts your own site (the gzip probe below); when usage analytics
 * **What it does:** Lets you manage this site, with other sites, from one xSpeed Hub account and one AI connection.
 * **When it runs:** Only after an administrator connects the site to xSpeed Hub from xSpeed Cache → AI & agents. A site that was never connected makes no Hub requests.
 * **What is sent:** The site URL and this site's MCP token, which the Hub uses to call the site's own MCP endpoint. The token is sent when the site is connected, when the connection status is checked, when the token changes (Rotate, or Connect after Disconnect), when you disconnect, and with speed-test requests you start.
+* **After an xSpeed Scan:** When a scan you run from the plugin finishes on a connected site, the site sends the Hub that scan's id, so the Hub can compare it with the site's earlier scans. Only the id and the site URL are sent. The Hub reads the report from the scan service itself.
 * **Where the request goes:** app.xspeedcache.com, operated by WPDeveloper.
 
 == Third-party libraries ==
@@ -313,6 +314,46 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.3] – 2026-10-16 =
+
+**Tablets can get a cached copy of their own, Markdown versions of a page can be cached beside the HTML, and an AI agent now needs the site owner's approval before an action that cannot be undone.**
+
+Security:
+- Fixed: A video that plays by itself could carry markup from its address into the page when "Lazy-load your own videos" moved the address aside. A Contributor could use this to run script in the browser of anyone viewing the post. The address is now kept as plain text, and local pages cached before the update are cleared once across the network. A warning remains until a full purge of the configured Cloudflare zone is confirmed. Reported by Wordfence PRISM (CVE-2026-109985).
+
+Caching:
+- New: Separate tablet cache (opt-in) keeps a third copy for tablets, and you choose whether tablets get the desktop or the phone page.
+- New: Cache Markdown versions (opt-in) stores the Markdown some SEO plugins send AI agents, separately from the HTML page.
+- Improved: With Separate mobile cache on, a CDN that keeps one copy per device type can now cache pages too.
+- Fixed: A response that is not HTML, such as Markdown or JSON on a page address, is no longer stored and served as the page.
+- Fixed: After a database restore that left xSpeed inactive, the cache no longer serves the old site's pages, and it is emptied when xSpeed comes back.
+- Fixed: The Separate mobile cache check compares fresh renders and asks each page whether it looked at the device, so one cached copy no longer reads as a difference.
+- Fixed: The site status the speed scan reads now says whether the page cache is on and why the home page was not cached.
+- Fixed: Purging one page also removes the expiry note kept beside a page that carries a nonce, so the next copy of that page is not cleared early.
+- Fixed: The 404 cache stores and serves only real 404s. A file a plugin serves at an address WordPress has no page for, such as llms.txt, is no longer cached as the site's 404 page or answered with one.
+
+Optimization:
+- New: Self-hosted Google Fonts has a card on the Optimization page.
+- Improved: Delay JS waits for a real visitor before it runs the delayed scripts, and runs them after the page's own DOMContentLoaded handlers. New installs get no fallback timer, so a speed test no longer runs them inside its trace.
+- Improved: Delay JS waits for stylesheets that are still being applied before the replay.
+- Fixed: Delay JS keeps the scripts a never-delayed script needs, with or without Smart Delay.
+- Fixed: Images in footer popups that already have a size now load lazily, so a popup nobody opens no longer downloads its images with the page.
+
+Cloudflare:
+- Fixed: Purging a URL clears every device copy of it at Cloudflare.
+
+AI / MCP:
+- New: Actions that cannot be undone, such as Database Clean and applying a migration, wait for the site owner's approval before an AI agent can run them.
+- New: Each tool says whether it reads, writes or cannot be undone, so AI clients can show it.
+- Fixed: Connecting, rotating or disconnecting MCP and turning on usage sharing are refused over MCP. Usage sharing can still be turned off.
+- New: When an xSpeed Scan finishes on a site connected to xSpeed Hub, the site sends the Hub the scan's id, so the Hub can compare it with the site's earlier scans.
+- Fixed: Running mcp status as a tool no longer shows the connection link.
+
+Dashboard & Admin UX:
+- Fixed: A settings save with a value the setting does not accept now names the value and what it accepts, instead of reporting success while changing nothing.
+- Fixed: Importing from another caching plugin shows as successful when most settings came across, and lists each skipped setting with the reason.
+- Fixed: A local site is not offered a connection to xSpeed Hub, and an unverified Hub answer no longer records the site as attached.
 
 = [1.4.2] – 2026-10-12 =
 
@@ -360,205 +401,5 @@ Cloudflare:
 - Fixed: The sidebar shows one Cloudflare Enterprise card, with any version of Pro.
 - Fixed: With a Pro older than 1.3.0, the Network page keeps the Cloudflare Enterprise card and page, and a licensed Pro is asked to update.
 - Fixed: The offer is hidden once the add-on key is entered, and on sites whose host already provides Cloudflare Enterprise.
-
-= [1.4.0] – 2026-10-06 =
-
-**Saving a post now clears only the pages it changes instead of the whole cache, sites on xCloud's Cloudflare Enterprise get every purge passed to the edge, and pages whose address uses non-Latin characters are cached and purged correctly.**
-
-Caching:
-- New: Saving a post, a comment or a product clears only the pages that change: the post itself, its archives, and the listing pages that show it. The whole cache is cleared only when the change reaches a list the theme draws on every page, such as a menu or a Recent Posts widget, and the purge log says why.
-- New: `wp xspeed cache listings` shows the pages that run a post list of their own.
-- New: Add-ons can send CDN headers on cached pages.
-- Fixed: Pages whose address uses non-Latin characters, such as Chinese or Arabic slugs, each get their own cache entry. They could share one, and a slug with no Latin letters could overwrite the home page's cached copy.
-- Fixed: A purge clears such a page however the browser spells its address, and Excluded URLs pasted from the address bar now match.
-- Fixed: Opening wp-admin no longer empties the page cache and the edge.
-- Fixed: Updating a WooCommerce product purges once, and a stock change purges its pages in one batch.
-- Fixed: Making a post sticky, including outside the editor, clears the blog page.
-- Fixed: Publishing in the Customizer purges the cache.
-- Fixed: Content and site purges no longer delete minified CSS and JS files.
-
-Cloudflare:
-- New: On sites where xCloud provides Cloudflare Enterprise, every purge goes to xCloud's purge plugin, from WP-CLI and cron too, and Purge All sends one whole-domain purge.
-- New: xCloud's purge plugin counts as proof that the site is behind Cloudflare.
-- Fixed: The edge no longer keeps a page longer than the page's own lifetime, so forms on cached pages stop failing once their nonce expires.
-- Fixed: Pages served for an address with tracking parameters, such as `?utm_source=`, are no longer stored at the edge, where a purge could not reach them.
-- Fixed: The edge may store a new page only once xSpeed has written it, and not while the page is still being optimized.
-- Fixed: Edge headers are kept on cached pages Apache serves through an internal redirect.
-
-Health:
-- New: Health warns when Cloudflare stores pages that were marked do-not-store.
-- New: The nginx rules panel says whether the server runs the current rules block, and remembers that you pasted it.
-
-Optimization:
-- Fixed: Minified and combined files are named by their content and by site, so a changed source file is never served from an old copy.
-- Fixed: Delay JS restarts its 15-second replay deadline each time a delayed script arrives, so slow pages finish replaying.
-- Fixed: Smart Delay never parks the inline snippets of a script that is already running, and consent-banner protection ignores the site's own domain.
-- Fixed: Text set in the Font Library or theme.json shows at once while its fonts load.
-- Improved: Turbo Render holds a deferred section's images and videos until the section is near.
-
-Media:
-- New: Autoplay videos can start after the page has loaded. Off by default.
-- Fixed: Autoplay videos stay out of the click-to-play facade, and the video restorer respects Excluded Images.
-- Fixed: Images in footer popups load a smaller file on phones.
-
-Resource Hints:
-- Fixed: Device-scoped LCP preloads fetch only the hero image for the visitor's device.
-
-Preloader:
-- New: With Separate Mobile Cache on, the preloader warms the phone copy of each page too.
-
-Object Cache:
-- Fixed: Switching from another object-cache plugin works without a conflict, and switching back restores that plugin on a clean namespace.
-
-AI / MCP:
-- New: A site can be connected from xSpeed Hub through a consent page in wp-admin.
-- New: get_site_info reports add-on licences.
-- Fixed: The site token is never sent to a redirect target, and a connection code works only once.
-- Fixed: Saving settings over MCP could remove the site's Hub connection.
-- Fixed: Destructive commands need confirmation however they are called.
-
-Dashboard & Admin UX:
-- New: The Cloudflare Enterprise add-on has its own entry under Network, a sidebar card and a purchase screen.
-- Fixed: A Pro module shows the Pro lock while Pro is unlicensed.
-- Fixed: Dashboard requests work on sites whose REST address carries a query string.
-- Fixed: The dashboard no longer shows a second scrollbar.
-
-= [1.3.7] – 2026-09-30 =
-
-**Pages with a background-video hero now paint the hero text first, Load CSS Asynchronously no longer makes pages flash unstyled, sites in a multisite network stop sharing cached REST responses, and a site whose token changed can reconnect to xSpeed Hub.**
-
-Media:
-- Fixed: A hero's background video (autoplay, muted, looping, no controls or poster) now starts on the visitor's first scroll, tap, key press or mouse move, so the hero text paints first instead of waiting for the video's first frame.
-- Fixed: Only one image per page gets high fetch priority, instead of every image counted by Eager-load First N Images.
-
-Optimization:
-- Fixed: Load CSS Asynchronously leaves stylesheets render-blocking unless the page has critical CSS, so pages no longer paint unstyled and then shift. Google Fonts, Bunny and Typekit stylesheets still load without blocking.
-- Fixed: A page builder's row, column and section stylesheets stay render-blocking, so a builder hero no longer snaps into its grid after the first paint.
-- Fixed: Under Delay JS, a script's inline data now waits with the script, so the script never runs without its data.
-- Fixed: Combine CSS recognises another plugin's non-blocking stylesheet however its onload handler is written, instead of merging it into a print-only file.
-- Fixed: Strip jQuery Migrate works when another plugin, such as Elementor Pro, loads the script registry before Bloat Control.
-
-Resource Hints:
-- Fixed: When a background video opens the page, images below it are no longer preloaded as the LCP image.
-
-Caching:
-- Improved: More click and campaign IDs are ignored in the cache key, on saved lists too.
-- Fixed: Each site in a multisite network gets its own cached REST responses. Two sites requesting the same route could be served each other's data.
-- Fixed: Installing a new plugin no longer empties the page cache as if live code had been replaced.
-- Fixed: A request that measures a page's CSS is never answered from cache, whatever Ignored Query Parameters say.
-- Fixed: xSpeed's own warming, benchmark and verifier requests, and bot hits, no longer count in the hit ratio or in site analytics.
-
-AI / MCP:
-- New: Extensions can add hidden MCP tools, and oversized MCP request bodies are refused.
-- Improved: The generate_critical_css tool builds Critical CSS for any page, not only the home page.
-- Improved: get_cache_status reports the Site Icon.
-- Fixed: A site whose MCP token changed can reconnect to xSpeed Hub. The Hub gets the new token, and a new credential clears its lockout.
-- Fixed: The attach route no longer returns the admin's user ID.
-
-Dashboard & Admin UX:
-- Improved: Settings labels and hints are rewritten in plain language and sentence case.
-- Fixed: Leaving onboarding from the last step lands on the dashboard instead of a broken #[object Object] page.
-
-= [1.3.6] – 2026-09-28 =
-
-**Smart Delay postpones the scripts other delay modes had to leave running, LCP background images and video posters are preloaded, LiteSpeed servers get the same static fast path nginx and Apache already had, lightbox videos open with their player instead of a blank window, and Turbo Render no longer clips designs that overlap their neighbours. Emojis can be switched off, post revisions capped, and inline background images held back until they scroll into view.**
-
-Media:
-- New: Background images set in an element's inline style can be lazy-loaded. Each one loads just before its element scrolls into view, the first ones on the page load straight away (the Eager-load First N Images count), and with JavaScript off every background loads as before. Off by default.
-- Fixed: A video embed inside a lightbox's hidden template (Essential Addons, Magnific Popup, Lity) is no longer swapped for the click-to-play facade — the popup opened blank because lightbox styling only sizes an iframe. The template's iframe stays lazy, so it still loads nothing until the popup opens, and the list of template classes can be extended with the xspeed_video_facade_popup_classes filter.
-
-Optimization:
-- New: Bloat Control has a Disable Emojis toggle. It removes the WordPress emoji script and styles from pages, feeds, emails, embeds and wp-admin. Off by default.
-- New: Turbo Render has an Excluded classes setting. A deferred section clips content that hangs over its boundary — a card overlapping the section below it, for example — so a section listed here always renders right away.
-- Fixed: Turbo Render leaves any section holding an iframe alone. Deferring a map or video holder gained nothing and could paint it over content that overlaps it by design.
-- New: Smart Delay. Delaying every script used to quietly skip any script that inline code depends on — on builder pages that was most of them. Smart Delay postpones those scripts anyway and parks their inline snippets with them, replaying everything in page order on the first interaction. Off by default; the exclusion list and consent-banner protection still win.
-- Improved: Delayed scripts now replay the way a real page loads — in page order, with the document's readyState moving through its normal stages, and with each script's DOMContentLoaded and load handlers firing when its turn comes.
-- Improved: A delayed inline loader now waits for the scripts it injects, a throwing inline module no longer stalls the replay behind it, and the replay works on pages with a hash-based Content-Security-Policy.
-- Fixed: The replay no longer touches scripts and handlers the page ran normally — their writes, listeners and onreadystatechange calls behave exactly as before Delay JS was switched on.
-- Fixed: A consent banner is only delayed by an entry that names it; a second protected token on the same tag now needs naming too.
-- Fixed: A script whose author opted out of optimization late in the page no longer loses the defer attribute a stamper had already given it.
-
-Resource Hints:
-- New: LCP background images declared in <style> rules and video poster images are now detected and preloaded, so hero sections painted from CSS backgrounds get the same head start as <img> heroes.
-
-Caching:
-- New: LiteSpeed servers can opt into the static-rewrite fast path, serving cached pages before PHP starts — the same shortcut nginx and Apache sites already had.
-- Fixed: Publishing a post on an nginx host no longer purges the server's entire cache — only the pages the post touches. Nginx Helper's own off switch is respected, and a content import ends with one server purge instead of one per post.
-- Fixed: The admin-bar purge button answers immediately and runs the purge in the background, instead of holding the request open until some hosts cut it off.
-
-Database:
-- New: Limit Post Revisions keeps only as many revisions per post as you choose, and 0 turns revisions off. A WP_POST_REVISIONS value in wp-config.php still wins, and the panel shows it.
-
-Migration:
-- Fixed: Importing LiteSpeed Cache settings no longer turns oEmbed off when the site had emoji removal on. That setting now maps to Disable Emojis.
-- New: WP Rocket's emoji, embeds and CSS background lazy-load settings are imported.
-
-Dashboard & Admin UX:
-- Fixed: The Cloudflare upsell no longer advertises an edge cache TTL the APO module does not set.
-
-= [1.3.5] – 2026-09-22 =
-
-**Consent banners now survive Delay JS on every site that ships one, Turbo Render works on any theme rather than only Elementor, JS-injected YouTube/Vimeo embeds load only on click, and nginx sites are no longer told to fix a configuration that was already correct.**
-
-Media:
-- New: YouTube and Vimeo players that a theme or plugin injects with JavaScript after page load now get the same click-to-load facade as regular embeds, so no player code loads until a visitor presses play.
-
-Optimization:
-- New: Turbo Render works on any theme or page builder. It recognises Divi, Bricks, Oxygen and Beaver Builder sections directly, and where no builder is recognised it falls back to the page's own structure, so the feature is no longer inert outside Elementor.
-- Improved: Turbo Render is the new name for the feature previously called Render Skip — the same mechanism, named for what the visitor gets rather than what the browser postpones.
-- Fixed: Consent banners from Cookie Notice, Moove, Termly, Usercentrics, Iubenda, OneTrust, Borlabs, Real Cookie Banner and SureCookie are never delayed, so a visitor is always offered the choice before leaving.
-- Fixed: Complianz and NotificationX banners stay protected even when another plugin strips the id WordPress prints on their script.
-- Fixed: An author's data-no-optimize, nowprocket or similar opt-out is now read as an attribute rather than matched anywhere in the tag, so a script is neither wrongly delayed nor wrongly skipped because the marker appeared in a URL, a class or a neighbouring inline block.
-- Fixed: A script you name yourself in the Delay JS target list is now delayed even when it is a consent banner — the built-in banner protection yields to an explicit choice.
-
-Health:
-- Fixed: nginx sites with a working configuration are no longer told to paste in a server snippet they already have. Site Health and the dashboard now reach the same verdict, and a check that cannot conclude says so instead of warning.
-
-Preloader:
-- Fixed: Cache warming no longer identifies itself in a way that common firewall rule sets block, so newly published posts are warmed again on sites running 7G/8G-style protection.
-
-= [1.3.4] – 2026-09-20 =
-
-**Consent-manager scripts marked late are now always left alone, below-fold sections skip rendering work until they are needed, and xSpeed's MCP server shares a site cleanly with other MCP plugins.**
-
-Optimization:
-- New: Below-fold sections are rendered lazily with content-visibility: auto, so the browser skips their layout and paint work until they scroll into view.
-- New: Block-editor stylesheets are stripped from anonymous frontend pages that do not use any blocks.
-- Fixed: Scripts that another plugin marks data-no-optimize or data-no-minify late — as consent managers such as Borlabs Cookie do — are restored to their original URL and left alone by minify, defer and delay, however late the marker is stamped.
-
-AI / MCP:
-- Improved: The AI & agents screen now leads with the MCP server and says what each of its tools does, with descriptions shown in full.
-- Improved: An assistant already connected over OAuth may ask for approval once more after updating — nothing needs re-entering, and read-only connections stay read-only.
-- Fixed: An AI assistant can now connect to xSpeed and to another MCP plugin on the same site. xSpeed's OAuth details moved to an address of their own under /xspeed/mcp, and the site-wide address is handed over as soon as another plugin asks for it — where nothing else wants it, xSpeed keeps answering there.
-
-Dashboard & Admin UX:
-- Fixed: Buttons can carry a border and always show keyboard focus, and the Cloudflare Dev-mode controls use proper button styling.
-
-= [1.3.3] – 2026-09-16 =
-
-**Consent gets a dashboard home, the cache engine learns to leave non-HTML alone, and uncacheable pages now tell the CDN so.**
-
-Privacy & Analytics:
-- New: A "Privacy & usage data" panel to view and withdraw usage-analytics consent any time, with a matching wp xspeed privacy command.
-- Improved: The setup wizard's analytics consent now defaults to off and is only ever an explicit opt-in.
-
-Caching:
-- Fixed: WordPress's virtual robots.txt (and favicon) is no longer cached or minified, so every directive and newline reaches crawlers intact.
-- Improved: /robots.txt joined the default cache exclusions, and the sitemap pattern now matches sitemaps.xml too — existing installs keep their working exclusion through the rename.
-
-Cloudflare & CDN:
-- New: A page xSpeed refuses to cache now sends no-store edge headers, so a CDN never freezes a half-optimized or excluded page.
-- Fixed: The deferred Cloudflare purge batch is bounded, cleared on deactivation, and says so when a purge is refused.
-
-Optimization:
-- Fixed: Scripts marked data-no-optimize or data-no-minify are left completely alone by minify, defer and delay — consent-manager configurations always ship current.
-- Fixed: xSpeed's own scripts are never deferred or delayed by its own optimizer.
-- Fixed: The Conservative preset now switches LCP preload and preconnect off, matching its "page cache + GZIP only" promise.
-
-Dashboard & Admin UX:
-- Improved: Preload now reports what actually happened — how many pages are warming, and the server's reason when a crawl cannot start.
-
-Reliability:
-- Improved: Uninstall now removes all usage-tracking state, the scheduled send, and every leftover option row.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

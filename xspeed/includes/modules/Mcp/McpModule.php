@@ -207,6 +207,12 @@ final class McpModule extends Module {
 	public function boot(): void {
 		add_action( 'rest_api_init', array( $this, 'register_rest' ) );
 		add_action( Mcp_Pairing::TOKEN_CHANGED_ACTION, array( Mcp_Hub::class, 'on_token_changed' ) );
+		// A finished xSpeed Scan is sent to the Hub from a cron event, and
+		// retried once on an admin page load (see Mcp_Hub::queue_scan_notice).
+		add_action( Mcp_Hub::SCAN_NOTICE_HOOK, array( Mcp_Hub::class, 'send_scan_notice' ) );
+		add_action( 'admin_init', array( Mcp_Hub::class, 'maybe_retry_scan_notice' ) );
+		// The owner's Approve / Deny for destructive MCP actions.
+		Mcp_Approvals::boot();
 
 		// The only place the body cap can run before WordPress decodes it.
 		// WP_REST_Server::dispatch() fires rest_pre_dispatch, and only after
@@ -305,7 +311,7 @@ final class McpModule extends Module {
 		if ( '' !== $nonce ) {
 			$uid = Mcp_Hub::check_attach_nonce( $nonce );
 			if ( null !== $uid ) {
-				Mcp_Hub::mark_attached( $email, $uid ?: null );
+				Mcp_Hub::mark_attached( $email, $uid ?: null, Mcp_Hub::PROOF_NONCE );
 			}
 		}
 
@@ -822,7 +828,7 @@ final class McpModule extends Module {
 			// A Hub-started connect lands the browser on the Hub, not here, so
 			// this call is the only place the per-user link can be recorded.
 			if ( null !== $result && '' !== $field( 'code' ) ) {
-				Mcp_Hub::mark_attached( sanitize_email( $field( 'account_email' ) ), (int) $result['user_id'] ?: null );
+				Mcp_Hub::mark_attached( sanitize_email( $field( 'account_email' ) ), (int) $result['user_id'] ?: null, Mcp_Hub::PROOF_CODE );
 			}
 			header( 'Content-Type: application/json; charset=utf-8' );
 			header( 'Cache-Control: no-store' );
@@ -895,8 +901,10 @@ final class McpModule extends Module {
 		// server is connected, and whether the site is attached to xSpeed
 		// Hub. Everything except `hub` is already publicly discoverable —
 		// the cache signature carries the version and /mcp answers 401 when
-		// connected — and `hub` is a bare boolean. No tokens, accounts or
-		// emails leave through this route.
+		// connected — and `hub` is a bare boolean. It also says whether the
+		// page cache and the separate mobile cache are on, and the home
+		// page's last cache verdict as a fixed gate slug (#598). No tokens,
+		// accounts or emails leave through this route.
 		register_rest_route(
 			self::NS,
 			'/signals',
@@ -1201,7 +1209,24 @@ final class McpModule extends Module {
 		// Advertise the MCP protocol version on the wp-json transport too, so
 		// both endpoints behave identically to a strict Streamable-HTTP client.
 		$response->header( 'MCP-Protocol-Version', Mcp_Server::PROTOCOL_VERSION );
+		self::add_catalog_headers( $response );
 		return $response;
+	}
+
+	/**
+	 * Version and catalog fingerprint on an authorised MCP response, so the
+	 * Hub can tell from ordinary traffic when to fetch tools/list again. Left
+	 * off a refusal: an unauthenticated caller learns nothing new.
+	 *
+	 * @param \WP_REST_Response $response Response to annotate.
+	 */
+	private static function add_catalog_headers( \WP_REST_Response $response ): void {
+		if ( $response->get_status() >= 300 ) {
+			return;
+		}
+		foreach ( Mcp_Tools::catalog_headers() as $name => $value ) {
+			$response->header( $name, $value );
+		}
 	}
 
 	/**
@@ -1211,10 +1236,19 @@ final class McpModule extends Module {
 	 * @return \WP_REST_Response
 	 */
 	public function rest_signals() {
+		$page_cache = ! empty( \XSpeed\Settings::get()['cache_enabled'] );
+
 		$signals = array(
-			'xspeed' => XSPEED_VERSION,
-			'mcp'    => '' !== Mcp_Pairing::site_token(),
-			'hub'    => Mcp_Hub::site_attached(),
+			'xspeed'       => XSPEED_VERSION,
+			'mcp'          => '' !== Mcp_Pairing::site_token(),
+			'hub'          => Mcp_Hub::site_attached(),
+			// Why a page answered BYPASS is a WP_DEBUG-only header (#10), so
+			// the scanner could not tell "cache off" from any other bypass
+			// (#598). These are settings and a fixed gate slug, nothing a
+			// visitor sent.
+			'page_cache'   => $page_cache,
+			'mobile_cache' => $page_cache && ! empty( \XSpeed\Settings_Manager::get( 'cache' )['mobile_separate'] ),
+			'home'         => \XSpeed\Cache::home_verdict(),
 		);
 
 		/**
@@ -1462,7 +1496,8 @@ final class McpModule extends Module {
 		// is recorded PER-USER — each admin sees their own connection.
 		$account_email = sanitize_email( (string) $request->get_param( 'account_email' ) );
 		$user_id       = isset( $result['user_id'] ) ? (int) $result['user_id'] : 0;
-		Mcp_Hub::mark_attached( $account_email, $user_id ?: null );
+		$proof         = '' !== (string) $request->get_param( 'nonce' ) ? Mcp_Hub::PROOF_NONCE : Mcp_Hub::PROOF_CODE;
+		Mcp_Hub::mark_attached( $account_email, $user_id ?: null, $proof );
 
 		// The hub only needs the credential; don't leak the internal user id.
 		unset( $result['user_id'] );
@@ -1709,7 +1744,9 @@ final class McpModule extends Module {
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
-		return rest_ensure_response( $result );
+		$response = rest_ensure_response( $result );
+		self::add_catalog_headers( $response );
+		return $response;
 	}
 
 	// -- Helpers --
@@ -1829,6 +1866,7 @@ final class McpModule extends Module {
 		// strict client can pin it. We answer JSON (a spec-permitted response
 		// type); we never open an SSE stream, so no session header is needed.
 		header( 'MCP-Protocol-Version: ' . Mcp_Server::PROTOCOL_VERSION );
+		self::add_catalog_headers( $response );
 		// Forward any headers the handler set (notably WWW-Authenticate on a
 		// 401, which drives the OAuth discovery flow). rest_do_request applies
 		// these automatically; the pretty-endpoint path must do it by hand.
@@ -1849,12 +1887,14 @@ final class McpModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed mcp status',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_status' ),
 				'shortdesc' => 'Show MCP connection status and the paste-in endpoint URL.',
 				'synopsis'  => array(),
 			),
 			array(
 				'name'      => 'xspeed mcp activity',
+				'risk'      => 'write',
 				'callback'  => array( $this, 'cli_activity' ),
 				'shortdesc' => 'List recent MCP tool calls (the AI audit trail).',
 				'synopsis'  => array(
@@ -1874,6 +1914,7 @@ final class McpModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed mcp connect',
+				'risk'      => 'owner',
 				'callback'  => array( $this, 'cli_connect' ),
 				'shortdesc' => 'Generate a connection token for this site\'s MCP endpoint.',
 				'synopsis'  => array(
@@ -1887,6 +1928,7 @@ final class McpModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed mcp rotate',
+				'risk'      => 'owner',
 				'callback'  => array( $this, 'cli_rotate' ),
 				'shortdesc' => 'Mint a fresh MCP token, immediately invalidating the previous one.',
 				'synopsis'  => array(
@@ -1900,6 +1942,7 @@ final class McpModule extends Module {
 			),
 			array(
 				'name'      => 'xspeed mcp disconnect',
+				'risk'      => 'owner',
 				'callback'  => array( $this, 'cli_disconnect' ),
 				'shortdesc' => 'Revoke this site\'s MCP connection token.',
 				'synopsis'  => array(),
@@ -1919,7 +1962,14 @@ final class McpModule extends Module {
 		\WP_CLI::log( sprintf( '%-18s %s', 'connected', $s['connected'] ? 'yes' : 'no' ) );
 		if ( $s['connected'] ) {
 			\WP_CLI::log( sprintf( '%-18s %s', 'access', $s['read_only'] ? 'read-only' : 'read-write' ) );
-			\WP_CLI::log( sprintf( '%-18s %s', 'connect_url', $s['connect_url'] ) );
+			// The URL carries the pairing token. Run as an MCP tool, this
+			// output becomes the tool result, and a client holding a
+			// narrower, revocable grant would walk away with the token.
+			if ( Mcp_Tools::in_dispatch() ) {
+				\WP_CLI::log( sprintf( '%-18s %s', 'mcp_endpoint', Mcp_Pairing::site_endpoint() ) );
+			} else {
+				\WP_CLI::log( sprintf( '%-18s %s', 'connect_url', $s['connect_url'] ) );
+			}
 			\WP_CLI::log( sprintf( '%-18s %s', 'scopes', implode( ',', $s['scopes'] ) ) );
 		} else {
 			\WP_CLI::log( sprintf( '%-18s %s', 'mcp_endpoint', Mcp_Pairing::site_endpoint() ) );

@@ -146,6 +146,7 @@ final class BrowserCacheModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed browser-cache',
+				'risk'      => array( '' => 'read', 'apache' => 'read', 'nginx' => 'read' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Print the Apache or nginx browser-cache snippet.',
 				'ai_hint'   => 'Get the server config snippet that sets browser cache-control headers for static assets. Use when PageSpeed reports "serve static assets with an efficient cache policy", or when the user needs the rules to paste into Apache/nginx.',

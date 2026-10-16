@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.2\n"
+"Project-Id-Version: xSpeed Cache 1.4.3\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-10-12T08:00:22+00:00\n"
+"POT-Creation-Date: 2026-10-16T06:03:36+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:11355
+#: includes/class-cache.php:12362
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:160
 #: includes/class-admin.php:258
-#: includes/class-cache.php:11369
+#: includes/class-cache.php:12376
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -183,210 +183,210 @@ msgid "You are not allowed to do that."
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:5946
-#: includes/class-cache.php:6156
+#: includes/class-cache.php:6756
+#: includes/class-cache.php:6966
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to.
-#: includes/class-cache.php:6163
+#: includes/class-cache.php:6973
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to.
-#: includes/class-cache.php:6175
+#: includes/class-cache.php:6985
 #, php-format
 msgid "Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s"
 msgstr ""
 
 #. translators: 1: number of pages, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:6253
+#: includes/class-cache.php:7063
 #, php-format
 msgid "Purged %1$d page (%2$s), %3$d file(s) removed"
 msgid_plural "Purged %1$d pages (%2$s), %3$d file(s) removed"
 msgstr[0] ""
 msgstr[1] ""
 
-#: includes/class-cache.php:7288
+#: includes/class-cache.php:8112
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:7292
+#: includes/class-cache.php:8116
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:7296
+#: includes/class-cache.php:8120
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:7300
+#: includes/class-cache.php:8124
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:7304
+#: includes/class-cache.php:8128
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:7680
+#: includes/class-cache.php:8504
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:7686
+#: includes/class-cache.php:8510
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:7964
+#: includes/class-cache.php:8803
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:7971
+#: includes/class-cache.php:8810
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:7974
+#: includes/class-cache.php:8813
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:8049
+#: includes/class-cache.php:8888
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:8056
+#: includes/class-cache.php:8895
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:8195
+#: includes/class-cache.php:9038
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:8198
+#: includes/class-cache.php:9041
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:8228
+#: includes/class-cache.php:9071
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:8285
+#: includes/class-cache.php:9128
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:8286
+#: includes/class-cache.php:9129
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:8288
+#: includes/class-cache.php:9131
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:8303
+#: includes/class-cache.php:9147
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:8395
+#: includes/class-cache.php:9239
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:8410
+#: includes/class-cache.php:9254
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:8411
+#: includes/class-cache.php:9255
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:8428
+#: includes/class-cache.php:9272
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:8446
+#: includes/class-cache.php:9290
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:8447
+#: includes/class-cache.php:9291
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:8458
+#: includes/class-cache.php:9303
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:8462
+#: includes/class-cache.php:9307
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:10782
+#: includes/class-cache.php:11732
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:10789
+#: includes/class-cache.php:11739
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:10844
+#: includes/class-cache.php:11794
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache.
-#: includes/class-cache.php:10855
+#: includes/class-cache.php:11805
 #, php-format
 msgid "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active."
 msgstr ""
 
-#: includes/class-cache.php:10860
+#: includes/class-cache.php:11810
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:10863
+#: includes/class-cache.php:11813
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:10864
+#: includes/class-cache.php:11814
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:10865
+#: includes/class-cache.php:11815
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:10866
+#: includes/class-cache.php:11816
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:10867
+#: includes/class-cache.php:11817
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:10868
+#: includes/class-cache.php:11818
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:10869
+#: includes/class-cache.php:11819
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:10871
+#: includes/class-cache.php:11821
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:11438
+#: includes/class-cache.php:12445
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:680
 msgid "Unauthorized."
@@ -552,6 +552,43 @@ msgstr ""
 msgid "Object-cache endpoint %2$s uses %1$s, which xSpeed does not support — importing the host and port only. The cache will connect only if the server also accepts a plain connection."
 msgstr ""
 
+#. translators: 1: source plugin name, 2: the value it had, 3: the value xSpeed uses now.
+#: includes/class-migration.php:608
+#, php-format
+msgid "%1$s had %2$s, but xSpeed still uses %3$s after saving."
+msgstr ""
+
+#: includes/class-migration.php:629
+msgid "Page caching could not be switched on."
+msgstr ""
+
+#. translators: %s: constant or global name, e.g. XSPEED_OC_HOST.
+#: includes/class-migration.php:851
+#, php-format
+msgid "Set by %s in wp-config.php, which takes priority over imported settings."
+msgstr ""
+
+#. translators: 1: source plugin name, 2: its value, 3: the value saved.
+#: includes/class-migration.php:866
+#, php-format
+msgid "%1$s had %2$s, above the most xSpeed allows, so %3$s was saved."
+msgstr ""
+
+#. translators: 1: source plugin name, 2: its value, 3: the value saved.
+#: includes/class-migration.php:870
+#, php-format
+msgid "%1$s had %2$s, below the least xSpeed allows, so %3$s was saved."
+msgstr ""
+
+#: includes/class-migration.php:933
+#: assets/admin.js
+msgid "on"
+msgstr ""
+
+#: includes/class-migration.php:933
+msgid "off"
+msgstr ""
+
 #: includes/class-module-registry.php:43
 msgid "Module is missing a SLUG constant."
 msgstr ""
@@ -598,18 +635,48 @@ msgstr ""
 msgid "These settings are defined in wp-config.php and cannot be changed here: %s. Edit the constant, or remove it to manage the setting from this screen."
 msgstr ""
 
-#: includes/class-module.php:591
+#. translators: %s: comma-separated list of "setting (what it accepts)".
+#: includes/class-module.php:438
+#, php-format
+msgid "Nothing was saved. These values are not allowed: %s."
+msgstr ""
+
+#. translators: %s: comma-separated option values.
+#: includes/class-module.php:458
+#, php-format
+msgid "one of: %s"
+msgstr ""
+
+#. translators: 1: minimum, 2: maximum.
+#: includes/class-module.php:462
+#, php-format
+msgid "a whole number from %1$d to %2$d"
+msgstr ""
+
+#: includes/class-module.php:464
+msgid "a whole number"
+msgstr ""
+
+#: includes/class-module.php:466
+msgid "true or false"
+msgstr ""
+
+#: includes/class-module.php:468
+msgid "a list"
+msgstr ""
+
+#: includes/class-module.php:682
 msgid "This module has no single on/off switch. It counts as on when any of its settings is on, and none currently is."
 msgstr ""
 
 #. translators: %s: comma-separated list of setting labels that are switched on.
-#: includes/class-module.php:596
+#: includes/class-module.php:687
 #, php-format
 msgid "This module has no single on/off switch. It counts as on because these settings are on: %s."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/class-module.php:777
+#: includes/class-module.php:875
 #, php-format
 msgid "Refused a settings write to the Pro module \"%s\" — no valid license."
 msgstr ""
@@ -978,32 +1045,54 @@ msgstr ""
 msgid "The page got measurably slower: median render time %1$dms before, %2$dms after (+%3$d%%), beyond what run-to-run noise explains. The change was undone."
 msgstr ""
 
+#: includes/class-plugin.php:424
+msgid "After the security update, xSpeed could not delete every cached page, so some pages cached before the update may still be served. It tries again every hour. Check that the web server can delete files in wp-content/cache/xspeed and wp-content/cache/xspeed-static."
+msgstr ""
+
+#. translators: %s: Cloudflare zone ID awaiting a full purge.
+#: includes/class-plugin.php:430
+#, php-format
+msgid "After the security update, a full Cloudflare purge has not been confirmed for zone %s. Purge everything for this zone through xSpeed or the Cloudflare dashboard. Automatic purge preferences have not been changed."
+msgstr ""
+
+#: includes/class-plugin.php:435
+msgid "I have purged this zone in Cloudflare"
+msgstr ""
+
+#: includes/class-plugin.php:442
+msgid "You do not have permission to confirm this purge."
+msgstr ""
+
+#: includes/class-plugin.php:447
+msgid "This zone is not awaiting purge confirmation."
+msgstr ""
+
 #. translators: 1: number of URLs, 2: the sitemap failure detail.
-#: includes/class-preloader.php:383
+#: includes/class-preloader.php:449
 #, php-format
 msgid "Preloader queued %1$d URLs from the site content — %2$s"
 msgstr ""
 
 #. translators: %s: the sitemap failure detail.
-#: includes/class-preloader.php:391
+#: includes/class-preloader.php:457
 #, php-format
 msgid "Preloader could not start — %s"
 msgstr ""
 
 #. translators: 1: number of URLs, 2: plural suffix.
-#: includes/class-preloader.php:398
+#: includes/class-preloader.php:464
 #, php-format
 msgid "Preloader queued %1$d URL%2$s for warming."
 msgstr ""
 
 #. translators: 1: sitemap URL, 2: error detail.
-#: includes/class-preloader.php:845
+#: includes/class-preloader.php:916
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — %2$s"
 msgstr ""
 
 #. translators: 1: sitemap URL, 2: HTTP status code.
-#: includes/class-preloader.php:858
+#: includes/class-preloader.php:929
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — the server returned HTTP %2$d."
 msgstr ""
@@ -1278,38 +1367,38 @@ msgstr ""
 msgid "The request could not be completed due to a server error."
 msgstr ""
 
-#: includes/class-scan.php:142
+#: includes/class-scan.php:144
 msgid "That does not look like a public URL the scanner can reach."
 msgstr ""
 
-#: includes/class-scan.php:153
+#: includes/class-scan.php:155
 msgid "A scan is already running for this site."
 msgstr ""
 
-#: includes/class-scan.php:193
+#: includes/class-scan.php:195
 msgid "The scanner is rate limited right now. Try again in a few minutes."
 msgstr ""
 
-#: includes/class-scan.php:205
+#: includes/class-scan.php:207
 #: assets/admin.js
 msgid "The scan could not be started."
 msgstr ""
 
-#: includes/class-scan.php:241
+#: includes/class-scan.php:243
 msgid "That is not a valid scan id."
 msgstr ""
 
-#: includes/class-scan.php:271
+#: includes/class-scan.php:273
 msgid "The scan did not complete."
 msgstr ""
 
 #. translators: %s: transport error message.
-#: includes/class-scan.php:578
+#: includes/class-scan.php:614
 #, php-format
 msgid "Could not reach the scanner: %s"
 msgstr ""
 
-#: includes/class-scan.php:588
+#: includes/class-scan.php:624
 msgid "The scanner returned an unreadable response."
 msgstr ""
 
@@ -1560,7 +1649,7 @@ msgid "Browser-cache headers need to live in your nginx config, and the live res
 msgstr ""
 
 #: includes/modules/BrowserCache/BrowserCacheModule.php:133
-#: includes/modules/Gzip/GzipModule.php:164
+#: includes/modules/Gzip/GzipModule.php:165
 msgid "Go to the snippet"
 msgstr ""
 
@@ -1645,43 +1734,83 @@ msgstr ""
 msgid "Keep a separate cached copy for phones. Turn on only if your theme or plugins show different pages on mobile."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:314
-msgid "CDN or proxy in front"
+#: includes/modules/Cache/CacheModule.php:287
+msgid "Separate tablet cache"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:315
-msgid "Tells your CDN or proxy not to store pages xSpeed does not cache. Leave on Detect automatically unless you know your provider."
+#: includes/modules/Cache/CacheModule.php:288
+msgid "Keep a third cached copy for tablets, so every tablet gets the same page. Without it, a tablet gets the phone or the desktop copy depending on its browser."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:317
-msgid "Cache in front of this site"
+#: includes/modules/Cache/CacheModule.php:290
+msgid "Which devices count as tablets"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:318
-msgid "Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Off stops the edge lifetime and cache tags. When an add-on that manages the edge, such as a Cloudflare Enterprise add-on, is active, the \"don't store\" headers for logged-in, cart and search pages still go out. Run \"wp xspeed cache edge\" to see what was detected and what gets sent."
+#: includes/modules/Cache/CacheModule.php:291
+msgid "iPads that report themselves as iPads, Android tablets, Kindle and PlayBook devices. iPads on iPadOS 13 or later identify as a Mac, so they get the desktop copy, as they do everywhere else. Each page is cached and warmed three times, and the tablet copy fills more slowly because fewer visitors use tablets."
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:324
-msgid "Custom CDN headers"
+#: includes/modules/Cache/CacheModule.php:298
+msgid "Desktop page"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:327
-msgid "One header per line, as Name: value, for example \"Surrogate-Control: no-store\". Lines starting with # are ignored."
+#: includes/modules/Cache/CacheModule.php:299
+msgid "Phone page"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:328
-msgid "Custom edge headers"
+#: includes/modules/Cache/CacheModule.php:301
+msgid "Tablets get"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:329
-msgid "These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and \"X-Accel-Expires: 0\" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused."
+#: includes/modules/Cache/CacheModule.php:302
+msgid "The page WordPress builds for tablets. Most themes fit the desktop page to a tablet screen. Pick the phone page if your theme has a separate phone layout you want tablets to use."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:308
+msgid "Cache Markdown versions"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:310
+msgid "Some SEO plugins send AI agents a Markdown version of a page when they ask for one. Turn this on to cache that version separately from the HTML page. When it is off, those requests are never cached."
 msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:342
+msgid "CDN or proxy in front"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:343
+msgid "Tells your CDN or proxy not to store pages xSpeed does not cache. Leave on Detect automatically unless you know your provider."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:345
+msgid "Cache in front of this site"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:346
+msgid "Naming your provider narrows the headers to the one it reads. Detect automatically works it out per request and otherwise sends a set every cache ignores unless it understands it, so it is safe not to know. Off stops the edge lifetime and cache tags. When an add-on that manages the edge, such as a Cloudflare Enterprise add-on, is active, the \"don't store\" headers for logged-in, cart and search pages still go out. Run \"wp xspeed cache edge\" to see what was detected and what gets sent."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:352
+msgid "Custom CDN headers"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:355
+msgid "One header per line, as Name: value, for example \"Surrogate-Control: no-store\". Lines starting with # are ignored."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:356
+msgid "Custom edge headers"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:357
+msgid "These replace the headers xSpeed would have picked for your CDN. Two baselines are still added underneath: a Cache-Control, and \"X-Accel-Expires: 0\" for a page cache running in nginx on your own server. Name either one yourself and yours is used instead. Values containing $, % or a backslash are dropped — the same pairs go into nginx and Apache directives, where those cannot be escaped safely. Content-Length, Content-Encoding, Content-Type, Transfer-Encoding, Set-Cookie and Location are refused."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:371
 msgid "LiteSpeed static fast path"
 msgstr ""
 
-#: includes/modules/Cache/CacheModule.php:344
+#: includes/modules/Cache/CacheModule.php:373
 msgid "LiteSpeed serves cached pages without running PHP, which is faster on slow hosts. These visits are not counted in the dashboard hit ratio."
 msgstr ""
 
@@ -1924,7 +2053,7 @@ msgstr ""
 msgid "WP_POST_REVISIONS is set to %s, usually in wp-config.php, so Limit Post Revisions below has no effect. Remove that definition to manage the limit here."
 msgstr ""
 
-#: includes/modules/Database/DatabaseModule.php:250
+#: includes/modules/Database/DatabaseModule.php:251
 msgid "Provide at least one cleanup type."
 msgstr ""
 
@@ -1981,35 +2110,35 @@ msgstr ""
 msgid "Compresses pages and files before sending them. On this server you add the rules to your server config yourself. See the notice below."
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:155
+#: includes/modules/Gzip/GzipModule.php:156
 msgid "GZIP requires server config on nginx"
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:156
+#: includes/modules/Gzip/GzipModule.php:157
 msgid "GZIP is being served by nginx"
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:158
+#: includes/modules/Gzip/GzipModule.php:159
 msgid "xSpeed can only auto-configure GZIP on Apache and LiteSpeed (via .htaccess). The directives are included in the unified server-block snippet on the Cache panel — copy + paste it once into your nginx vhost (or container nginx config) and reload nginx."
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:159
+#: includes/modules/Gzip/GzipModule.php:160
 msgid "Responses are compressed. xSpeed cannot configure nginx from WordPress, so these directives live in the unified server-block snippet on the Cache panel — that is where to re-copy them if your server config is ever rebuilt."
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:187
+#: includes/modules/Gzip/GzipModule.php:188
 msgid "GZIP enabled but not active on the server"
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:188
+#: includes/modules/Gzip/GzipModule.php:189
 msgid "xSpeed wrote the .htaccess rules but the response still isn't gzipped. Your server may have AllowOverride disabled, another caching plugin overriding, or mod_deflate missing. Ask your host to enable GZIP on Apache."
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:198
+#: includes/modules/Gzip/GzipModule.php:199
 msgid "GZIP requires server config on this server"
 msgstr ""
 
-#: includes/modules/Gzip/GzipModule.php:199
+#: includes/modules/Gzip/GzipModule.php:200
 msgid "xSpeed can only auto-configure GZIP on Apache and LiteSpeed (via .htaccess). Paste the snippet below into your server config and reload."
 msgstr ""
 
@@ -2247,7 +2376,7 @@ msgid "Images, videos and embeds whose tag contains a line here, such as a class
 msgstr ""
 
 #. translators: %s: command name.
-#: includes/modules/Mcp/Cli_Bridge.php:128
+#: includes/modules/Mcp/Cli_Bridge.php:132
 #, php-format
 msgid "Unknown command: %s. Call list_commands to see what is available."
 msgstr ""
@@ -2261,111 +2390,176 @@ msgstr ""
 msgid "Let Claude or another AI assistant clear the cache, check stats and change settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:491
+#: includes/modules/Mcp/McpModule.php:497
 msgid "Another plugin now claims the site-wide OAuth discovery address, so xSpeed handed it over. Its own is /.well-known/oauth-protected-resource/xspeed/mcp — AI assistants already connected may ask for approval once more."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1404
+#: includes/modules/Mcp/McpModule.php:1438
 msgid "Disconnecting is blocked while this site depends on the hub connection."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1454
+#: includes/modules/Mcp/McpModule.php:1488
 msgid "Invalid or expired attach request."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1570
+#: includes/modules/Mcp/McpModule.php:1605
 msgid "You must be an administrator to authorize an AI agent to control this site."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1577
+#: includes/modules/Mcp/McpModule.php:1612
 msgid "Security check failed. Please try connecting again."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1673
-#: includes/modules/Mcp/McpModule.php:1692
+#: includes/modules/Mcp/McpModule.php:1708
+#: includes/modules/Mcp/McpModule.php:1727
 msgid "The MCP tool payload is too large."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1767
+#: includes/modules/Mcp/McpModule.php:1804
 msgid "Read-only — inspect cache status and settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1768
+#: includes/modules/Mcp/McpModule.php:1805
 msgid "Read & write — purge caches, toggle caching, and change settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1769
+#: includes/modules/Mcp/McpModule.php:1806
 msgid "An AI agent"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1788
+#: includes/modules/Mcp/McpModule.php:1825
 msgid "Authorize AI access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1790
+#: includes/modules/Mcp/McpModule.php:1827
 msgid "Connect to xSpeed"
 msgstr ""
 
 #. translators: %s: AI client name.
-#: includes/modules/Mcp/McpModule.php:1792
+#: includes/modules/Mcp/McpModule.php:1829
 #, php-format
 msgid "%s wants to manage the cache on this site."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1793
+#: includes/modules/Mcp/McpModule.php:1830
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:205
 msgid "Site"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1794
+#: includes/modules/Mcp/McpModule.php:1831
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:210
 msgid "Signed in as"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1795
+#: includes/modules/Mcp/McpModule.php:1832
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:211
 msgid "Access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1800
+#: includes/modules/Mcp/McpModule.php:1837
+#: includes/modules/Mcp/Mcp_Approvals.php:453
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:219
 msgid "Deny"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1801
+#: includes/modules/Mcp/McpModule.php:1838
+#: includes/modules/Mcp/Mcp_Approvals.php:452
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:220
 msgid "Approve"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1811
+#: includes/modules/Mcp/McpModule.php:1848
 msgid "Authorization error"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1814
+#: includes/modules/Mcp/McpModule.php:1851
 msgid "Could not authorize"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:2044
+#: includes/modules/Mcp/McpModule.php:2094
 msgid "An AI assistant is connected to this site. This module counts as on whenever a connection token exists, rather than having its own on/off setting."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:2045
+#: includes/modules/Mcp/McpModule.php:2095
 msgid "No AI assistant is connected. This module counts as on once you connect one."
 msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:166
+#: includes/modules/Mcp/Mcp_Approvals.php:248
+msgid "The site owner denied this request. Do not run it again unless they ask you to."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:177
+msgid "Too many requests are already waiting for the site owner. Wait for them to be approved, denied or expire, then try again."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:222
+msgid "That approval_id is unknown or has expired. Repeat the call without approval_id to ask the site owner again."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:230
+msgid "That approval_id was given for a different call. Repeat the exact call the site owner approved, with the same arguments."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:238
+msgid "The site owner has not decided yet. Try the same call again after they approve it."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:257
+msgid "That approval has already been used. Repeat the call without approval_id to ask the site owner again."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:339
+msgid "You are not allowed to decide on AI requests."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:352
+msgid "That request has expired or was already decided."
+msgstr ""
+
+#. translators: 1: the action, such as "xspeed migrate apply". 2: minutes.
+#: includes/modules/Mcp/Mcp_Approvals.php:356
+#, php-format
+msgid "Approved. The assistant can run \"%1$s\" once in the next %2$d minutes."
+msgstr ""
+
+#. translators: %s: the action, such as "xspeed migrate apply".
+#: includes/modules/Mcp/Mcp_Approvals.php:363
+#, php-format
+msgid "Denied. The assistant can't run \"%s\"."
+msgstr ""
+
+#. translators: %s: the action, such as "xspeed migrate apply".
+#: includes/modules/Mcp/Mcp_Approvals.php:431
+#, php-format
+msgid "An AI assistant wants to run \"%s\" on this site, and it can't be undone."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Approvals.php:438
+msgid "With:"
+msgstr ""
+
+#. translators: %d: minutes until the request expires.
+#: includes/modules/Mcp/Mcp_Approvals.php:447
+#, php-format
+msgid "Nothing happens until you approve. The request expires in %d minute."
+msgid_plural "Nothing happens until you approve. The request expires in %d minutes."
+msgstr[0] ""
+msgstr[1] ""
 
 #: includes/modules/Mcp/Mcp_Auth.php:57
 msgid "Too many failed attempts. Try again later."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Hub.php:983
+#: includes/modules/Mcp/Mcp_Hub.php:1291
 msgid "Connect this site to xSpeed Hub to run a free speed test."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Hub.php:1013
+#: includes/modules/Mcp/Mcp_Hub.php:1322
 msgid "Could not reach xSpeed Hub. Please try again."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Hub.php:1036
+#: includes/modules/Mcp/Mcp_Hub.php:1345
 #: assets/admin.js
 msgid "The test could not be started."
 msgstr ""
@@ -2453,163 +2647,187 @@ msgstr ""
 msgid "No active MCP connection to change. Connect first."
 msgstr ""
 
+#. translators: %s: canonical "<command> <action>".
+#: includes/modules/Mcp/Mcp_Tools.php:1128
+#, php-format
+msgid "\"%s\" cannot be run from an MCP tool call. The site owner can do it from the xSpeed dashboard or from WP-CLI on the server."
+msgstr ""
+
 #. translators: %s: tool name.
-#: includes/modules/Mcp/Mcp_Tools.php:996
-#: includes/modules/Mcp/Mcp_Tools.php:1034
+#: includes/modules/Mcp/Mcp_Tools.php:1143
+#: includes/modules/Mcp/Mcp_Tools.php:1181
 #, php-format
 msgid "Unknown tool: %s"
 msgstr ""
 
 #. translators: %s: tool name.
-#: includes/modules/Mcp/Mcp_Tools.php:1055
+#: includes/modules/Mcp/Mcp_Tools.php:1202
 #, php-format
 msgid "This MCP connection is read-only; the \"%s\" tool changes state and is not permitted. Reconnect with write access to use it."
 msgstr ""
 
 #. translators: %s: comma-separated list of valid purge types.
-#: includes/modules/Mcp/Mcp_Tools.php:1439
+#: includes/modules/Mcp/Mcp_Tools.php:1615
 #, php-format
 msgid "Invalid purge type. Expected one of: %s"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1448
-#: includes/modules/Mcp/Mcp_Tools.php:2798
+#: includes/modules/Mcp/Mcp_Tools.php:1624
+#: includes/modules/Mcp/Mcp_Tools.php:3336
 msgid "AI assistant"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1497
+#: includes/modules/Mcp/Mcp_Tools.php:1673
 msgid "The \"enabled\" parameter is required (true or false)."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1577
-#: includes/modules/Mcp/Mcp_Tools.php:1631
+#: includes/modules/Mcp/Mcp_Tools.php:1753
+#: includes/modules/Mcp/Mcp_Tools.php:1807
 msgid "The \"module\" parameter is required."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1586
-#: includes/modules/Mcp/Mcp_Tools.php:1647
+#: includes/modules/Mcp/Mcp_Tools.php:1762
+#: includes/modules/Mcp/Mcp_Tools.php:1823
 #, php-format
 msgid "Unknown module \"%s\"."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1638
+#: includes/modules/Mcp/Mcp_Tools.php:1814
 msgid "The \"values\" parameter must be an object of setting keys."
 msgstr ""
 
 #. translators: 1: comma-separated field names, 2: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1666
+#: includes/modules/Mcp/Mcp_Tools.php:1842
 #, php-format
 msgid "Writing credential fields (%1$s) on \"%2$s\" needs the \"configure\" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these credentials from the xSpeed dashboard."
 msgstr ""
 
+#. translators: 1: comma-separated field names, 2: module slug.
+#: includes/modules/Mcp/Mcp_Tools.php:1862
+#, php-format
+msgid "Turning on %1$s in \"%2$s\" records the site owner's consent, so it can't be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed."
+msgstr ""
+
 #. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1698
+#: includes/modules/Mcp/Mcp_Tools.php:1893
 #, php-format
 msgid "Refused an MCP settings write to the Pro module \"%s\" — no valid license."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1708
+#: includes/modules/Mcp/Mcp_Tools.php:1903
 #, php-format
 msgid "\"%s\" is a Pro module and this site has no active license, so the write was refused. Nothing was changed."
 msgstr ""
 
 #. translators: 1: setting key, 2: wp-config.php constant name.
-#: includes/modules/Mcp/Mcp_Tools.php:1777
+#: includes/modules/Mcp/Mcp_Tools.php:1972
 #, php-format
 msgid "\"%1$s\" is defined in wp-config.php as %2$s and cannot be changed here"
 msgstr ""
 
 #. translators: 1: setting key, 2: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1785
+#: includes/modules/Mcp/Mcp_Tools.php:1980
 #, php-format
 msgid "\"%1$s\" is not a setting of module \"%2$s\""
 msgstr ""
 
 #. translators: %s: comma-separated setting names.
-#: includes/modules/Mcp/Mcp_Tools.php:1797
+#: includes/modules/Mcp/Mcp_Tools.php:1992
 #, php-format
 msgid " — did you mean: %s?"
 msgstr ""
 
 #. translators: %s: setting key.
-#: includes/modules/Mcp/Mcp_Tools.php:1807
+#: includes/modules/Mcp/Mcp_Tools.php:2002
 #, php-format
 msgid "\"%s\" was rejected by the schema (wrong type, or outside the allowed range/options)"
 msgstr ""
 
 #. translators: 1: module slug, 2: reasons.
-#: includes/modules/Mcp/Mcp_Tools.php:1816
+#: includes/modules/Mcp/Mcp_Tools.php:2011
 #, php-format
 msgid "Refused to update %1$s — nothing was written. %2$s"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1852
+#: includes/modules/Mcp/Mcp_Tools.php:2055
 msgid "The \"command\" parameter is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1903
+#: includes/modules/Mcp/Mcp_Tools.php:2106
 msgid "This preview deletes nothing. To delete what is listed, call clean_database with this confirm_token. It expires in 5 minutes and stops working if the database changes."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2145
+#. translators: 1: the action, such as "xspeed migrate apply". 2: wp-admin URL. 3: approval id. 4: minutes until it expires.
+#: includes/modules/Mcp/Mcp_Tools.php:2637
+#, php-format
+msgid "\"%1$s\" can't be undone, so the site owner has to approve it first. Ask them to approve or deny it in wp-admin: %2$s. After they approve, repeat this exact call with approval_id: %3$s. The request expires in %4$d minutes."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:2676
 msgid "That confirm_token is unknown or has expired (they last 5 minutes). Ask for a fresh one by making the same call without a confirm_token."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2154
+#: includes/modules/Mcp/Mcp_Tools.php:2685
 msgid "The database changed since that scan, so the preview no longer describes what would be deleted. Run scan_database again and confirm against the new result."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2155
+#: includes/modules/Mcp/Mcp_Tools.php:2686
 msgid "That confirm_token was issued for a different action, so it does not authorise this one. Repeat this exact call without a confirm_token to get one that does."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2204
+#: includes/modules/Mcp/Mcp_Tools.php:2735
 msgid "This permanently deletes content and cannot be undone. Call scan_database first to see exactly what would be removed, then pass the confirm_token it returns."
 msgstr ""
 
 #. translators: %s: the confirm_token to send back.
-#: includes/modules/Mcp/Mcp_Tools.php:2218
+#: includes/modules/Mcp/Mcp_Tools.php:2749
 #, php-format
 msgid "Call run_command again with the same command plus confirm_token: %s"
 msgstr ""
 
+#. translators: 1: tool name, 2: the confirm_token to send back.
+#: includes/modules/Mcp/Mcp_Tools.php:2755
+#, php-format
+msgid "Call %1$s again with the same arguments plus confirm_token: %2$s"
+msgstr ""
+
 #. translators: 1: tool name, 2: action value, 3: the confirm_token to send back.
-#: includes/modules/Mcp/Mcp_Tools.php:2223
+#: includes/modules/Mcp/Mcp_Tools.php:2761
 #, php-format
 msgid "Call %1$s again with action: %2$s plus confirm_token: %3$s"
 msgstr ""
 
 #. translators: 1: canonical "<command> <action>", 2: how to repeat the call.
-#: includes/modules/Mcp/Mcp_Tools.php:2233
+#: includes/modules/Mcp/Mcp_Tools.php:2771
 #, php-format
 msgid "\"%1$s\" is destructive and cannot be undone, so it needs a second, deliberate call. %2$s — the token is single use and expires in 5 minutes."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2611
-#: includes/modules/Mcp/Mcp_Tools.php:2651
+#: includes/modules/Mcp/Mcp_Tools.php:3149
+#: includes/modules/Mcp/Mcp_Tools.php:3189
 msgid "The enabled argument is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2615
-#: includes/modules/Mcp/Mcp_Tools.php:2655
+#: includes/modules/Mcp/Mcp_Tools.php:3153
+#: includes/modules/Mcp/Mcp_Tools.php:3193
 msgid "The enabled argument must be true or false."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2676
+#: includes/modules/Mcp/Mcp_Tools.php:3214
 msgid "The action argument must be \"list\" or \"clear\"."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2715
+#: includes/modules/Mcp/Mcp_Tools.php:3253
 msgid "External scores are not available on this site."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2796
+#: includes/modules/Mcp/Mcp_Tools.php:3334
 msgid "The url argument is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2937
+#: includes/modules/Mcp/Mcp_Tools.php:3475
 msgid "The url argument must be a page on this site, as a full http(s) URL or a path starting with /."
 msgstr ""
 
@@ -2722,65 +2940,65 @@ msgstr ""
 msgid "No source selected."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:618
+#: includes/modules/Migration/MigrationModule.php:626
 msgid "it could not be enabled"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:703
+#: includes/modules/Migration/MigrationModule.php:711
 msgid "Migrating…"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:720
+#: includes/modules/Migration/MigrationModule.php:728
 msgid "Migration failed."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:723
+#: includes/modules/Migration/MigrationModule.php:731
 msgid "the source plugin"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:724
+#: includes/modules/Migration/MigrationModule.php:732
 msgid "Review imported settings"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:735
-#: includes/modules/Migration/MigrationModule.php:746
+#: includes/modules/Migration/MigrationModule.php:743
 #: includes/modules/Migration/MigrationModule.php:754
+#: includes/modules/Migration/MigrationModule.php:762
 msgid "settings are now running in xSpeed."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:737
-#: includes/modules/Migration/MigrationModule.php:747
+#: includes/modules/Migration/MigrationModule.php:745
+#: includes/modules/Migration/MigrationModule.php:755
 msgid "It has been switched off, so the two page caches cannot conflict."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:738
+#: includes/modules/Migration/MigrationModule.php:746
 msgid "It is still active — switch it off when you are ready."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:739
-msgid "Skipped:"
+#: includes/modules/Migration/MigrationModule.php:747
+msgid "Not imported as-is:"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:755
+#: includes/modules/Migration/MigrationModule.php:763
 msgid "It is still active — running two page caches conflicts, so switch it off when you are ready."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:764
+#: includes/modules/Migration/MigrationModule.php:772
 msgid "Migration could not finish."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:765
+#: includes/modules/Migration/MigrationModule.php:773
 msgid "Nothing was changed — you can try again."
 msgstr ""
 
 #. translators: %s: source plugin label.
-#: includes/modules/Migration/MigrationModule.php:998
+#: includes/modules/Migration/MigrationModule.php:1006
 #, php-format
 msgid "%s is activated across the whole network, so only a network administrator can switch it off. Your settings were imported — ask a network administrator to deactivate it."
 msgstr ""
 
 #. translators: %s: source plugin label.
-#: includes/modules/Migration/MigrationModule.php:1003
+#: includes/modules/Migration/MigrationModule.php:1011
 #, php-format
 msgid "Your account can change settings but not switch plugins off, so %s is still active. Your settings were imported — ask an administrator to deactivate it."
 msgstr ""
@@ -2907,15 +3125,15 @@ msgstr ""
 msgid "Joins your site's own scripts into one file. Turn off if a script stops working after you enable it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:293
+#: includes/modules/Minify/MinifyModule.php:294
 msgid "HTML minification is paused because WP_DEBUG is enabled in wp-config.php. Readable HTML is usually what you want while debugging, so xSpeed leaves the markup alone. Cached pages are served un-minified until WP_DEBUG is turned off."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:294
+#: includes/modules/Minify/MinifyModule.php:295
 msgid "HTML minification is paused because a plugin or theme is returning true from the xspeed_skip_minify filter. Cached pages are served un-minified until that filter stops suppressing it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:299
+#: includes/modules/Minify/MinifyModule.php:300
 msgid "HTML minification is on but currently paused"
 msgstr ""
 
@@ -3007,15 +3225,15 @@ msgstr ""
 msgid "Keep the connection open between page loads. Turn off only if your cache server reports too many idle connections."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1068
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1069
 msgid "The object cache drop-in is installed and storing data. This is measured from the running cache, not from the settings on this page."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1071
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1072
 msgid "The drop-in is installed but is not storing anything, so this counts as off. Check the connection settings below."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1073
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1074
 msgid "No object cache is running. Entering a host below does not switch it on by itself -- the drop-in has to be installed and connect successfully."
 msgstr ""
 
@@ -3081,7 +3299,7 @@ msgstr ""
 msgid "A new comment clears the page from the cache. This caches the page again right away."
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:299
+#: includes/modules/Preloader/PreloaderModule.php:300
 msgid "Enable the preloader before starting a crawl."
 msgstr ""
 
@@ -3093,11 +3311,11 @@ msgstr ""
 msgid "Change the usage data choice you made in the setup wizard."
 msgstr ""
 
-#: includes/modules/Privacy/PrivacyModule.php:59
+#: includes/modules/Privacy/PrivacyModule.php:61
 msgid "Share usage data"
 msgstr ""
 
-#: includes/modules/Privacy/PrivacyModule.php:60
+#: includes/modules/Privacy/PrivacyModule.php:62
 msgid "Sends your WordPress and PHP versions, theme, plugins, server type and the features you use, never page content. Turn it off to stop all sending."
 msgstr ""
 
@@ -3243,7 +3461,7 @@ msgid "The audit did not produce a result."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/modules/Settings/SettingsModule.php:324
+#: includes/modules/Settings/SettingsModule.php:325
 #, php-format
 msgid "Refused a CLI settings write to the Pro module \"%s\" — no valid license."
 msgstr ""
@@ -3316,7 +3534,7 @@ msgstr ""
 msgid "Some of its files are missing, so it stopped rather than take the site down with it. No new pages are being cached, but pages already in the cache are still being served and nothing clears them while the plugin is in this state. Re-install or re-upload the plugin to restore it, then purge the cache."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:154
+#. Source: src/onboarding/steps/Connect.tsx:178
 #: assets/admin.js
 msgid "“clear the cache on my store,” “warm up the homepage,” “how fast is my blog?”"
 msgstr ""
@@ -3362,7 +3580,7 @@ msgstr ""
 msgid "7 days"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:200
+#. Source: src/components/score/ScanCard.tsx:202
 #: assets/admin.js
 msgid "A full graded report: Core Web Vitals, caching, assets and platform."
 msgstr ""
@@ -3403,7 +3621,7 @@ msgstr ""
 msgid "Activating your license unlocks this module + every other locked row in the sidebar. Your current settings stay unchanged."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:233
+#. Source: src/onboarding/steps/Connect.tsx:257
 #: assets/admin.js
 msgid "Add site form"
 msgstr ""
@@ -3465,7 +3683,7 @@ msgstr ""
 msgid "Analyzing site…"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:156
+#. Source: src/onboarding/steps/Connect.tsx:180
 #: assets/admin.js
 msgid "and it happens."
 msgstr ""
@@ -3496,7 +3714,7 @@ msgstr ""
 msgid "Apply"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:87
+#. Source: src/components/score/ScanCard.tsx:89
 #: assets/admin.js
 msgid "Assets"
 msgstr ""
@@ -3810,7 +4028,7 @@ msgstr ""
 msgid "Compression enabled"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:151
+#. Source: src/components/score/ConnectHubModal.tsx:153
 #: assets/admin.js
 msgid "Connect"
 msgstr ""
@@ -3820,28 +4038,33 @@ msgstr ""
 msgid "Connect an AI agent to this site, and control what AI features may use."
 msgstr ""
 
+#. Source: src/components/overview/HubCard.tsx:161
+#: assets/admin.js
+msgid "Connect an AI client"
+msgstr ""
+
 #. Source: src/components/TopBar.tsx:142
 #: assets/admin.js
 msgid "Connect Hub"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:113
+#. Source: src/components/score/ConnectHubModal.tsx:115
 #: assets/admin.js
 msgid "Connect this site to xSpeed Hub to run GTmetrix tests from here."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:124
+#. Source: src/onboarding/steps/Connect.tsx:148
 #: assets/admin.js
 msgid "Connect this site to your free xSpeed Hub — then manage caching here and on every other site straight from ChatGPT, Claude, or any AI assistant. Free, forever."
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:168
+#. Source: src/components/overview/HubCard.tsx:182
 #: assets/admin.js
 msgid "Connect to control caching remotely, drive it from AI agents, and manage all your sites in one place."
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:175
-#. Source: src/components/overview/HubCard.tsx:182
+#. Source: src/components/overview/HubCard.tsx:189
+#. Source: src/components/overview/HubCard.tsx:196
 #: assets/admin.js
 msgid "Connect to Hub"
 msgstr ""
@@ -3856,32 +4079,32 @@ msgstr ""
 msgid "Connect your AI agent through MCP — then just ask it to analyze and optimize your site."
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:146
+#. Source: src/components/overview/HubCard.tsx:149
 #: assets/admin.js
 msgid "Connected"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:105
+#. Source: src/components/score/ConnectHubModal.tsx:106
 #: assets/admin.js
 msgid "Connected — starting your test…"
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:155
+#. Source: src/components/overview/HubCard.tsx:169
 #: assets/admin.js
 msgid "Connected as"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:68
+#. Source: src/onboarding/steps/Connect.tsx:69
 #: assets/admin.js
 msgid "Connected as %s. Your caching is ready to manage from anywhere."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:65
+#. Source: src/onboarding/steps/Connect.tsx:66
 #: assets/admin.js
 msgid "Connected to xSpeed Hub"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:236
+#. Source: src/components/score/ScanCard.tsx:238
 #: assets/admin.js
 msgid "Connected to xSpeed Hub — this report stays unlisted, not published under your domain."
 msgstr ""
@@ -3896,12 +4119,12 @@ msgstr ""
 msgid "Control and optimize your site with AI"
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:155
+#. Source: src/components/overview/HubCard.tsx:169
 #: assets/admin.js
 msgid "Control caching remotely and from AI agents."
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:156
+#. Source: src/components/overview/HubCard.tsx:170
 #: assets/admin.js
 msgid "Control caching remotely, drive it from AI agents, and manage your sites in one place."
 msgstr ""
@@ -3921,7 +4144,7 @@ msgstr ""
 msgid "Copy"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:83
+#. Source: src/components/score/ScanCard.tsx:85
 #: assets/admin.js
 msgid "Core Web Vitals"
 msgstr ""
@@ -3962,22 +4185,22 @@ msgid "desktop"
 msgstr ""
 
 #. Source: src/components/overview/ScoreCard.tsx:93
-#. Source: src/components/score/ScanCard.tsx:309
+#. Source: src/components/score/ScanCard.tsx:311
 #: assets/admin.js
 msgid "Desktop"
 msgstr ""
 
-#. Source: src/components/settings/HubCard.tsx:372
+#. Source: src/components/settings/HubCard.tsx:381
 #: assets/admin.js
 msgid "Disconnect"
 msgstr ""
 
-#. Source: src/components/settings/HubCard.tsx:352
+#. Source: src/components/settings/HubCard.tsx:361
 #: assets/admin.js
 msgid "Disconnect this site from xSpeed Hub?"
 msgstr ""
 
-#. Source: src/components/settings/HubCard.tsx:169
+#. Source: src/components/settings/HubCard.tsx:172
 #: assets/admin.js
 msgid "Disconnect was refused. Check what stops working, then confirm again."
 msgstr ""
@@ -4074,12 +4297,12 @@ msgstr ""
 msgid "features"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:157
+#. Source: src/components/score/ConnectHubModal.tsx:160
 #: assets/admin.js
 msgid "Finish in the tab that opened, then come back here."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:198
+#. Source: src/onboarding/steps/Connect.tsx:222
 #: assets/admin.js
 msgid "Free forever"
 msgstr ""
@@ -4094,7 +4317,7 @@ msgstr ""
 msgid "from wp-config.php"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:386
+#. Source: src/components/score/ScanCard.tsx:388
 #: assets/admin.js
 msgid "Full report"
 msgstr ""
@@ -4104,7 +4327,7 @@ msgstr ""
 msgid "Get it"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:170
+#. Source: src/onboarding/steps/Connect.tsx:194
 #: assets/admin.js
 msgid "Get more over time"
 msgstr ""
@@ -4114,8 +4337,9 @@ msgstr ""
 msgid "Get Pro"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:134
-#. Source: src/onboarding/steps/Connect.tsx:81
+#. Source: src/onboarding/steps/Connect.tsx:121
+#. Source: src/onboarding/steps/Connect.tsx:158
+#. Source: src/onboarding/steps/Connect.tsx:82
 #: assets/admin.js
 msgid "Go to Dashboard"
 msgstr ""
@@ -4130,8 +4354,8 @@ msgstr ""
 msgid "good"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:289
-#. Source: src/components/score/ScanCard.tsx:330
+#. Source: src/components/score/ScanCard.tsx:291
+#. Source: src/components/score/ScanCard.tsx:332
 #: assets/admin.js
 msgid "Grade"
 msgstr ""
@@ -4218,12 +4442,12 @@ msgstr ""
 msgid "Hub connected"
 msgstr ""
 
-#. Source: src/components/settings/HubCard.tsx:369
+#. Source: src/components/settings/HubCard.tsx:378
 #: assets/admin.js
 msgid "I understand what stops working when this site disconnects."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:132
+#. Source: src/onboarding/steps/Connect.tsx:156
 #: assets/admin.js
 msgid "I'll connect later"
 msgstr ""
@@ -4238,7 +4462,7 @@ msgstr ""
 msgid "in wp-config.php — usually written by your host. If you manage it here, later changes your host makes to it will be ignored."
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:116
+#. Source: src/components/score/ConnectHubModal.tsx:118
 #: assets/admin.js
 msgid "It takes a few seconds."
 msgstr ""
@@ -4258,7 +4482,7 @@ msgstr ""
 msgid "just now"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:152
+#. Source: src/onboarding/steps/Connect.tsx:176
 #: assets/admin.js
 msgid "Just say what you want"
 msgstr ""
@@ -4319,7 +4543,7 @@ msgstr ""
 msgid "Lighthouse performance, from your latest xSpeed Scan."
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:312
+#. Source: src/components/score/ScanCard.tsx:314
 #: assets/admin.js
 msgid "Lighthouse performance, out of 100"
 msgstr ""
@@ -4362,7 +4586,7 @@ msgstr ""
 msgid "Manage this setting here?"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:95
+#. Source: src/onboarding/steps/Connect.tsx:96
 #: assets/admin.js
 msgid "Manage this site from the central xSpeed Hub dashboard"
 msgstr ""
@@ -4404,13 +4628,13 @@ msgid "Minify, compress, lazy-load, fonts and hints."
 msgstr ""
 
 #. Source: src/components/overview/ScoreCard.tsx:197
-#. Source: src/components/score/ScanCard.tsx:322
+#. Source: src/components/score/ScanCard.tsx:324
 #: assets/admin.js
 msgid "mobile"
 msgstr ""
 
 #. Source: src/components/overview/ScoreCard.tsx:94
-#. Source: src/components/score/ScanCard.tsx:309
+#. Source: src/components/score/ScanCard.tsx:311
 #: assets/admin.js
 msgid "Mobile"
 msgstr ""
@@ -4432,7 +4656,7 @@ msgstr ""
 msgid "more after this"
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:190
+#. Source: src/components/overview/HubCard.tsx:204
 #: assets/admin.js
 msgid "More options"
 msgstr ""
@@ -4457,7 +4681,7 @@ msgstr ""
 msgid "Never scanned"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:172
+#. Source: src/onboarding/steps/Connect.tsx:196
 #: assets/admin.js
 msgid "new Hub features arrive automatically, free."
 msgstr ""
@@ -4482,7 +4706,7 @@ msgstr ""
 msgid "No audit run yet."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:198
+#. Source: src/onboarding/steps/Connect.tsx:222
 #: assets/admin.js
 msgid "No card, no catch"
 msgstr ""
@@ -4503,7 +4727,7 @@ msgstr ""
 msgid "No license key"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:164
+#. Source: src/onboarding/steps/Connect.tsx:188
 #: assets/admin.js
 msgid "no logging into each dashboard separately."
 msgstr ""
@@ -4528,7 +4752,7 @@ msgstr ""
 msgid "No recommendations right now"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:221
+#. Source: src/onboarding/steps/Connect.tsx:245
 #: assets/admin.js
 msgid "No redirect? Connect with a token instead."
 msgstr ""
@@ -4564,7 +4788,7 @@ msgstr ""
 msgid "Not installed"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:142
+#. Source: src/components/score/ConnectHubModal.tsx:143
 #: assets/admin.js
 msgid "Not now"
 msgstr ""
@@ -4589,7 +4813,7 @@ msgstr ""
 msgid "now"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:89
+#. Source: src/onboarding/steps/Connect.tsx:90
 #: assets/admin.js
 msgid "Now unlocked"
 msgstr ""
@@ -4621,11 +4845,6 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#. Source: src/components/GroupLanding.tsx:118
-#: assets/admin.js
-msgid "on"
-msgstr ""
-
 #. Source: src/components/GroupLanding.tsx:50
 #. Source: src/components/ModuleHeader.tsx:63
 #. Source: src/components/overview/FeatureMap.tsx:55
@@ -4644,7 +4863,7 @@ msgstr ""
 msgid "on disk"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:235
+#. Source: src/onboarding/steps/Connect.tsx:259
 #: assets/admin.js
 msgid "on your xSpeed Hub account."
 msgstr ""
@@ -4654,12 +4873,12 @@ msgstr ""
 msgid "Onboarding data unavailable"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:93
+#. Source: src/onboarding/steps/Connect.tsx:94
 #: assets/admin.js
 msgid "One AI connection controls the cache on every site you connect"
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:160
+#. Source: src/components/overview/HubCard.tsx:174
 #: assets/admin.js
 msgid "Open Hub dashboard"
 msgstr ""
@@ -4730,7 +4949,7 @@ msgstr ""
 msgid "PageSpeed & Core Web Vitals"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:342
+#. Source: src/components/score/ScanCard.tsx:344
 #: assets/admin.js
 msgid "Partial scan — some checks could not run, so the score covers less than the full rubric."
 msgstr ""
@@ -4740,12 +4959,12 @@ msgstr ""
 msgid "Partly cleared"
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:800
+#. Source: src/components/migration/MigrationPanel.tsx:840
 #: assets/admin.js
 msgid "Paste an xSpeed profile JSON here, or choose a .json file below."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:226
+#. Source: src/onboarding/steps/Connect.tsx:250
 #: assets/admin.js
 msgid "Paste this site’s URL + token into the"
 msgstr ""
@@ -4788,7 +5007,7 @@ msgstr ""
 msgid "Pick two runs to compare them."
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:89
+#. Source: src/components/score/ScanCard.tsx:91
 #: assets/admin.js
 msgid "Platform"
 msgstr ""
@@ -4843,7 +5062,7 @@ msgstr ""
 #. Source: src/components/GroupLanding.tsx:44
 #. Source: src/components/ModuleHeader.tsx:57
 #. Source: src/components/Tabs.tsx:97
-#. Source: src/components/migration/MigrationPanel.tsx:650
+#. Source: src/components/migration/MigrationPanel.tsx:690
 #. Source: src/components/overview/FeatureMap.tsx:47
 #. Source: src/upsell/LockedSection.tsx:70
 #. Source: src/upsell/ProAudit.tsx:66
@@ -4887,7 +5106,7 @@ msgstr ""
 msgid "Pro unlocks this module + every other locked row in the sidebar. Your current Free settings stay unchanged."
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:802
+#. Source: src/components/migration/MigrationPanel.tsx:842
 #: assets/admin.js
 msgid "Profile JSON to import"
 msgstr ""
@@ -4902,7 +5121,7 @@ msgstr ""
 msgid "Provider"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:110
+#. Source: src/components/score/ScanCard.tsx:112
 #: assets/admin.js
 msgid "pts"
 msgstr ""
@@ -4934,12 +5153,12 @@ msgstr ""
 msgid "Purge history"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:94
+#. Source: src/onboarding/steps/Connect.tsx:95
 #: assets/admin.js
 msgid "Purge, benchmark, preload and tune settings by asking your AI"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:357
+#. Source: src/components/score/ScanCard.tsx:359
 #: assets/admin.js
 msgid "ranked by points recovered"
 msgstr ""
@@ -5062,7 +5281,7 @@ msgstr ""
 msgid "Room to go faster"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:101
+#. Source: src/components/score/ConnectHubModal.tsx:102
 #: assets/admin.js
 msgid "Run a GTmetrix test"
 msgstr ""
@@ -5073,7 +5292,7 @@ msgid "Run a GTmetrix test on this site"
 msgstr ""
 
 #. Source: src/components/overview/ScoreCard.tsx:308
-#. Source: src/components/score/ScanCard.tsx:212
+#. Source: src/components/score/ScanCard.tsx:214
 #: assets/admin.js
 msgid "Run a scan"
 msgstr ""
@@ -5083,7 +5302,7 @@ msgstr ""
 msgid "Run benchmark"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:162
+#. Source: src/onboarding/steps/Connect.tsx:186
 #: assets/admin.js
 msgid "Run every site from one place"
 msgstr ""
@@ -5113,7 +5332,7 @@ msgstr ""
 msgid "Run the benchmark once and this card shows how much combined wait time the cache saves your visitors."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:123
+#. Source: src/onboarding/steps/Connect.tsx:147
 #: assets/admin.js
 msgid "Run your site just by asking"
 msgstr ""
@@ -5143,12 +5362,12 @@ msgstr ""
 msgid "Saving changes…"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:212
+#. Source: src/components/score/ScanCard.tsx:214
 #: assets/admin.js
 msgid "Scan again"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:212
+#. Source: src/components/score/ScanCard.tsx:214
 #: assets/admin.js
 msgid "Scanning…"
 msgstr ""
@@ -5190,7 +5409,7 @@ msgstr ""
 msgid "Search settings, modules, actions…"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:183
+#. Source: src/onboarding/steps/Connect.tsx:207
 #: assets/admin.js
 msgid "See everything it does."
 msgstr ""
@@ -5217,7 +5436,7 @@ msgstr ""
 msgid "served without PHP"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:85
+#. Source: src/components/score/ScanCard.tsx:87
 #: assets/admin.js
 msgid "Server & caching"
 msgstr ""
@@ -5282,7 +5501,7 @@ msgstr ""
 msgid "Showing your last completed scan."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:238
+#. Source: src/onboarding/steps/Connect.tsx:262
 #: assets/admin.js
 msgid "Site URL"
 msgstr ""
@@ -5363,7 +5582,7 @@ msgstr ""
 msgid "The cache was already empty, so there was nothing to clear."
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:252
+#. Source: src/components/score/ScanCard.tsx:254
 #: assets/admin.js
 msgid "The last report could not be read back from the database and was discarded. Run the scan again."
 msgstr ""
@@ -5403,7 +5622,7 @@ msgstr ""
 msgid "This removes the selected rows from your database. It can't be undone — take a backup first if you're unsure."
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:237
+#. Source: src/components/score/ScanCard.tsx:239
 #: assets/admin.js
 msgid "This report will be publicly visible at xspeedcache.com, listed under your domain. Connect xSpeed Hub to keep your reports unlisted."
 msgstr ""
@@ -5413,12 +5632,13 @@ msgstr ""
 msgid "This screen did not load."
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:127
+#. Source: src/components/settings/HubCard.tsx:260
+#. Source: src/onboarding/steps/Connect.tsx:116
 #: assets/admin.js
-msgid "This site looks local, so it may not be reachable for testing. Your own GTmetrix API key works either way — see the settings below."
+msgid "This site needs a public URL"
 msgstr ""
 
-#. Source: src/components/settings/HubCard.tsx:361
+#. Source: src/components/settings/HubCard.tsx:370
 #: assets/admin.js
 msgid "This tells the hub to drop your account\\u2019s link to this site, then clears it here. Other admins who connected keep theirs, and caching on this site is unaffected. To cut the hub off completely, Rotate the token above so its stored copy stops working."
 msgstr ""
@@ -5428,7 +5648,7 @@ msgstr ""
 msgid "This value comes from"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:242
+#. Source: src/onboarding/steps/Connect.tsx:266
 #: assets/admin.js
 msgid "Token"
 msgstr ""
@@ -5484,7 +5704,7 @@ msgstr ""
 msgid "uncached"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:198
+#. Source: src/onboarding/steps/Connect.tsx:222
 #: assets/admin.js
 msgid "Under a minute"
 msgstr ""
@@ -5530,7 +5750,7 @@ msgstr ""
 msgid "View the result"
 msgstr ""
 
-#. Source: src/components/score/ConnectHubModal.tsx:151
+#. Source: src/components/score/ConnectHubModal.tsx:153
 #: assets/admin.js
 msgid "Waiting for connection…"
 msgstr ""
@@ -5555,7 +5775,7 @@ msgstr ""
 msgid "What this adds"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:355
+#. Source: src/components/score/ScanCard.tsx:357
 #: assets/admin.js
 msgid "What to fix next"
 msgstr ""
@@ -5610,16 +5830,21 @@ msgstr ""
 msgid "xSpeed Cache and Cloudflare"
 msgstr ""
 
-#. Source: src/components/overview/HubCard.tsx:137
-#. Source: src/components/overview/HubCard.tsx:141
-#. Source: src/components/overview/HubCard.tsx:82
+#. Source: src/components/overview/HubCard.tsx:140
+#. Source: src/components/overview/HubCard.tsx:144
+#. Source: src/components/overview/HubCard.tsx:85
 #: assets/admin.js
 msgid "xSpeed Hub"
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:140
+#. Source: src/onboarding/steps/Connect.tsx:164
 #: assets/admin.js
 msgid "xSpeed Hub error"
+msgstr ""
+
+#. Source: src/components/hubLocal.ts:8
+#: assets/admin.js
+msgid "xSpeed Hub needs a public URL to manage a site, so it can't connect a local or private one. To use AI on this site, connect your AI client to the plugin's MCP server directly."
 msgstr ""
 
 #. Source: src/upsell/ProOverview.tsx:41
@@ -5637,15 +5862,15 @@ msgstr ""
 msgid "xSpeed Pro is installed — activate your license to unlock this module and every other Pro feature."
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:188
-#. Source: src/components/score/ScanCard.tsx:198
-#. Source: src/components/score/ScanCard.tsx:332
+#. Source: src/components/score/ScanCard.tsx:190
+#. Source: src/components/score/ScanCard.tsx:200
+#. Source: src/components/score/ScanCard.tsx:334
 #. Source: src/components/score/ScorePanel.tsx:426
 #: assets/admin.js
 msgid "xSpeed Scan"
 msgstr ""
 
-#. Source: src/components/score/ScanCard.tsx:292
+#. Source: src/components/score/ScanCard.tsx:294
 #: assets/admin.js
 msgid "xSpeed Scan, out of 100"
 msgstr ""
@@ -5660,7 +5885,7 @@ msgstr ""
 msgid "You have used this month’s free tests."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:76
+#. Source: src/onboarding/steps/Connect.tsx:77
 #: assets/admin.js
 msgid "You're all set"
 msgstr ""
@@ -5690,7 +5915,7 @@ msgstr ""
 msgid "Your cache works on every request — xSpeed's PHP drop-in is serving cached HTML. To shave additional latency, copy the snippet from the \"Server config\" panel below into your nginx vhost (typically /etc/nginx/sites-enabled/<your-site>) and reload nginx so cached pages skip PHP entirely."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:69
+#. Source: src/onboarding/steps/Connect.tsx:70
 #: assets/admin.js
 msgid "Your caching is ready to manage from anywhere."
 msgstr ""
@@ -5700,9 +5925,14 @@ msgstr ""
 msgid "Your Free tier keeps working exactly as it does today."
 msgstr ""
 
-#. Source: src/onboarding/steps/Connect.tsx:146
+#. Source: src/onboarding/steps/Connect.tsx:170
 #: assets/admin.js
 msgid "Your Hub is home base for all your sites. Once connected, you can:"
+msgstr ""
+
+#. Source: src/components/score/ConnectHubModal.tsx:130
+#: assets/admin.js
+msgid "Your own GTmetrix API key works here; see the settings below."
 msgstr ""
 
 #. Source: src/components/overview/FeatureMap.tsx:102

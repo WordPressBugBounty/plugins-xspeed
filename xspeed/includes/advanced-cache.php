@@ -1,7 +1,7 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 15
+ * XSPEED_DROPIN_VERSION: 20
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
  * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes so
@@ -68,6 +68,24 @@
  *        so an edge keeps only URLs a purge can name. A query string of `0`
  *        is no longer read as no query string. Without the bump an existing
  *        drop-in keeps telling the edge to store every variant.
+ * v16: serve only while xSpeed runs on this site, at this path. A database
+ *      restore that leaves the plugin inactive never runs deactivation, so
+ *      this file kept serving the old site's pages for URLs that now held
+ *      different ones (#597).
+ * v17: a request whose Accept header names Markdown is never handed the
+ *      cached HTML. Without the bump an existing drop-in keeps serving the
+ *      page to it. (#693)
+ * v18: with the opt-in `.cache-markdown` flag present, such a request is
+ *      served from its own `|md` entry instead of falling through, and the
+ *      HIT carries `Vary: Accept`.
+ * v19: tablets can get a copy of their own (`.tablet-separate` next to the
+ *      cache files), picked by the tablet pattern before the phone test.
+ *      Without the bump an existing drop-in keeps filing tablets under the
+ *      phone or desktop copy and never finds the tablet entry PHP wrote.
+ * v20: an edge that keeps a copy per device (baked from Cache). A
+ *      trusted request gets the copy Cloudflare keys it under, and any other
+ *      request gets the mobile-split hold back. Without the bump an existing
+ *      drop-in has no hold to put back once the bake lifts it.
  *
  * IMPORTANT: This file is included by wp-settings.php BEFORE
  * wp-includes/formatting.php and wp-includes/load.php are loaded, so NO
@@ -79,6 +97,78 @@
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
+}
+
+// Serve only while xSpeed runs on this site, at this path (#597).
+//
+// This file, WP_CACHE and the cache folder all stay on disk when a database
+// restore leaves the plugin inactive: deactivation never runs, so nothing
+// removes them, and this file has no database to ask. The plugin keeps a
+// flag next to the cache whose name carries ABSPATH, and writes it again on
+// any request where it runs. A copy of the site at another path has no flag
+// until the plugin runs there.
+//
+// The flag alone would survive a database-only restore, because the files
+// are unchanged. So on every request that reaches WordPress, check after
+// plugins load whether xSpeed did, and remove the flag when it did not. A
+// restored site stops serving old pages from the first request that is not
+// served from here: an admin login, a POST, or any page not in the cache.
+// When xSpeed runs again, it empties the cache before it writes the flag,
+// so the old pages do not come back either.
+// wp-settings.php re-initializes hooks added by this file, so add_action()
+// is supported here.
+$xspeed_active_flag = WP_CONTENT_DIR . '/cache/xspeed/.active-' . md5( ABSPATH );
+if ( function_exists( 'add_action' ) ) {
+	add_action(
+		'plugins_loaded',
+		static function () use ( $xspeed_active_flag ) {
+			if ( defined( 'XSPEED_VERSION' ) ) {
+				return;
+			}
+			// Plugins are not loaded while WordPress installs or upgrades its
+			// database, and `wp --skip-plugins` skips them on purpose. None of
+			// those says the plugin is off.
+			if ( ( function_exists( 'wp_installing' ) && wp_installing() ) || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+				return;
+			}
+			// On a network, xSpeed may run on some sites and not on others,
+			// and all of them share this file and this flag.
+			if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+				return;
+			}
+			if ( ! file_exists( $xspeed_active_flag ) ) {
+				return;
+			}
+			// Some tools unload plugins on chosen pages by filtering
+			// active_plugins. xSpeed is still on there, so the flag stays:
+			// removing it would send every cached page through WordPress
+			// until the next request that loads xSpeed. The flag holds the
+			// plugin's basename. Read the stored list without the option
+			// filters, which are what those tools hook.
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents, WordPress.PHP.NoSilencedErrors.Discouraged -- pre-WP drop-in's own marker.
+			$basename = trim( (string) @file_get_contents( $xspeed_active_flag ) );
+			global $wpdb;
+			if ( '' !== $basename && isset( $wpdb ) && is_object( $wpdb ) ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the option API runs the very filters this must not see.
+				$stored = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'active_plugins' ) );
+				$active = is_string( $stored ) ? maybe_unserialize( $stored ) : null;
+				if ( is_array( $active ) && in_array( $basename, $active, true ) ) {
+					return;
+				}
+			}
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged -- pre-WP drop-in's own marker; a failed unlink just leaves serving as it was.
+			@unlink( $xspeed_active_flag );
+			// Nothing purged the cache while xSpeed was off, so it may hold
+			// pages from before a restore. This marker tells the plugin to
+			// empty the cache before it writes the flag again.
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch, WordPress.PHP.NoSilencedErrors.Discouraged -- pre-WP drop-in's own marker.
+			@touch( dirname( $xspeed_active_flag ) . '/.stale-' . md5( ABSPATH ) );
+		},
+		0
+	);
+}
+if ( ! file_exists( $xspeed_active_flag ) ) {
+	return;
 }
 
 // Only handle plain GET requests.
@@ -144,6 +234,24 @@ if ( isset( $_SERVER['QUERY_STRING'] ) && '' !== (string) $_SERVER['QUERY_STRING
 // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs before WP loads. Value is only used as an isset() check + literal string comparison, never echoed.
 if ( ! empty( $_SERVER['HTTP_X_XSPEED_BYPASS'] ) ) {
 	return;
+}
+
+// A client negotiating a Markdown copy of the page (SEOPress Pro answers
+// `Accept: text/markdown` on the same URL) must not be handed the cached
+// HTML. Mirrors Cache::NON_HTML_ACCEPT_TYPES; the filter on that list
+// cannot run here. (#693)
+//
+// When the site opted into caching Markdown (Cache::sync_markdown_flag()
+// keeps `.cache-markdown` beside the cache files), the request is served
+// from its own entry instead: Cache::cache_key() appends `|md` for it, and
+// so does the key below. Without the flag it falls through to WordPress.
+$xspeed_variant = '';
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs before WP loads. Value is only substring-tested, never echoed.
+if ( isset( $_SERVER['HTTP_ACCEPT'] ) && false !== stripos( (string) $_SERVER['HTTP_ACCEPT'], 'markdown' ) ) {
+	if ( ! file_exists( WP_CONTENT_DIR . '/cache/xspeed/.cache-markdown' ) ) {
+		return;
+	}
+	$xspeed_variant = '|md';
 }
 
 // Maintenance / coming-soon sentinel. The Pro Maintenance-Cache module writes
@@ -254,33 +362,104 @@ $xspeed_path_only = (string) preg_replace_callback(
 // branch below never fires, and every request falls through to a full
 // WordPress boot (defeating the whole point of the pre-WP drop-in).
 //
-// Cache::cache_key() appends '|m' / '|d' when the cache module's
+// Cache::cache_key() appends a device suffix when the cache module's
 // `mobile_separate` setting is on. The drop-in can't read WP options
 // (it runs before WordPress loads), so Cache writes a zero-byte sidecar
 // flag — `.mobile-separate` next to the cache files — whenever that setting
-// is on, and removes it when off (see Cache::sync_mobile_flag()). We mirror
-// the same UA token list wp_is_mobile() uses, the same one Cache's inline
-// fallback detector uses.
-$xspeed_device = '';
-if ( file_exists( WP_CONTENT_DIR . '/cache/xspeed/.mobile-separate' ) ) {
-	// Mirror core's wp_is_mobile() EXACTLY (which Cache::is_mobile_request()
-	// defers to): check the Sec-CH-UA-Mobile client hint first, then fall
-	// back to the same UA token list. Any divergence from the engine's
-	// detection re-introduces the key mismatch this whole flag exists to
-	// prevent.
-	$xspeed_is_mobile = false;
-	if ( isset( $_SERVER['HTTP_SEC_CH_UA_MOBILE'] ) ) {
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs pre-WP. Value is compared against the literal '?1', never echoed or executed.
-		$xspeed_is_mobile = ( '?1' === $_SERVER['HTTP_SEC_CH_UA_MOBILE'] );
-	} else {
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs before wp_unslash()/sanitize_text_field() load. Value is only matched against a literal token regex, never echoed or executed.
-		$xspeed_ua        = isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
-		$xspeed_is_mobile = (bool) preg_match( '/(Mobile|Android|Silk\/|Kindle|BlackBerry|Opera Mini|Opera Mobi)/i', $xspeed_ua );
+// is on, and removes it when off (see Cache::sync_mobile_flag()).
+//
+// With Separate tablet cache on, Cache also writes `.tablet-separate`, and
+// tablets get the tablet copy. They are told apart before the phone test,
+// because Chrome on an Android tablet sends Sec-CH-UA-Mobile: ?0.
+//
+// Every device pattern and the suffix of each copy are baked in by
+// Cache::install_dropin() from XSpeed\Cache_Devices, the one list of device
+// copies, so this file holds no copy of either.
+$xspeed_device_rules = '@@XSPEED_DEVICE_RULES@@';
+$xspeed_device       = '';
+
+// The drop-in's copy of Cache_Devices::from_user_agent(), with one more
+// switch: $tablets false skips the tablet pattern, as PHP does while tablets
+// have no copy of their own. Edge rules are Cloudflare's patterns alone.
+// DevicesParityTest runs this block against the class.
+// @xspeed-device-of-start
+$xspeed_device_of = static function ( string $ua, $hint, bool $edge, bool $tablets ) use ( $xspeed_device_rules ): string {
+	if ( $edge ) {
+		if ( preg_match( $xspeed_device_rules['edge_tablet_re'], $ua ) ) {
+			return 'tablet';
+		}
+		return preg_match( $xspeed_device_rules['edge_mobile_re'], $ua ) ? 'mobile' : 'desktop';
 	}
-	$xspeed_device = $xspeed_is_mobile ? '|m' : '|d';
+	if ( $tablets && '' !== $ua && preg_match( $xspeed_device_rules['tablet_re'], $ua ) ) {
+		return 'tablet';
+	}
+	if ( null !== $hint ) {
+		return '?1' === $hint ? 'mobile' : 'desktop';
+	}
+	return preg_match( $xspeed_device_rules['mobile_re'], $ua ) ? 'mobile' : 'desktop';
+};
+// @xspeed-device-of-end
+
+// An edge that keeps a copy per Cloudflare device type, baked in by
+// Cache::install_dropin() from Cache::edge_device_dropin(). An empty array
+// (or an un-substituted token) means it does not, and nothing below changes.
+//
+// A request is trusted when it carries `CF-Device-Type` and a CF-shaped
+// `CF-Ray`, and no recent request has shown the edge ignoring device type
+// (the evidence file). Its copy then follows the user-agent by Cloudflare's
+// rules, never the header's value, so a forged header cannot put one
+// device's page in another's copy. MUST mirror Cache::edge_device_trusted()
+// and Cache::edge_device_bucket().
+$xspeed_edge_device   = '@@XSPEED_EDGE_DEVICE@@';
+$xspeed_edge_keyed    = is_array( $xspeed_edge_device ) && array() !== $xspeed_edge_device;
+$xspeed_edge_trusted  = false;
+$xspeed_edge_unkeyed  = false;
+$xspeed_edge_evidence = '';
+if ( $xspeed_edge_keyed ) {
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- pre-WP drop-in; only matched against a baked pattern, never echoed.
+	$xspeed_edge_ray = isset( $_SERVER['HTTP_CF_RAY'] ) ? (string) $_SERVER['HTTP_CF_RAY'] : '';
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- pre-WP drop-in; only tested for being non-empty, never read for its value.
+	$xspeed_edge_type     = isset( $_SERVER['HTTP_CF_DEVICE_TYPE'] ) ? trim( (string) $_SERVER['HTTP_CF_DEVICE_TYPE'] ) : '';
+	$xspeed_edge_ray_ok   = (bool) preg_match( $xspeed_edge_device['cf_ray'], $xspeed_edge_ray );
+	$xspeed_edge_evidence = (string) $xspeed_edge_device['unkeyed_flag'];
+	$xspeed_edge_fresh    = file_exists( $xspeed_edge_evidence ) && time() - (int) filemtime( $xspeed_edge_evidence ) < (int) $xspeed_edge_device['unkeyed_for'];
+	$xspeed_edge_trusted  = $xspeed_edge_ray_ok && '' !== $xspeed_edge_type && ! $xspeed_edge_fresh;
+	// Through Cloudflare without the header: evidence the edge is not keying.
+	// Recorded on a HIT below, the request a keyed edge would have keyed.
+	$xspeed_edge_unkeyed = $xspeed_edge_ray_ok && '' === $xspeed_edge_type;
 }
 
-$xspeed_cache_key = md5( $xspeed_host . $xspeed_path_only . $xspeed_device );
+if ( file_exists( WP_CONTENT_DIR . '/cache/xspeed/.mobile-separate' ) ) {
+	if ( ! is_array( $xspeed_device_rules ) ) {
+		// A copy made straight from a source checkout has no rules to pick a
+		// device with. Leave the request to WordPress rather than guess.
+		return;
+	}
+	// The phone test mirrors core's wp_is_mobile() EXACTLY (which
+	// Cache::is_mobile_request() defers to): the Sec-CH-UA-Mobile client hint
+	// first, then the same UA token list. Any divergence from the engine's
+	// detection re-introduces the key mismatch this whole flag exists to
+	// prevent.
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs before wp_unslash()/sanitize_text_field() load. Value is only matched against baked patterns, never echoed or executed.
+	$xspeed_ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs pre-WP. Value is compared against the literal '?1', never echoed or executed.
+	$xspeed_hint   = isset( $_SERVER['HTTP_SEC_CH_UA_MOBILE'] ) ? (string) $_SERVER['HTTP_SEC_CH_UA_MOBILE'] : null;
+	if ( $xspeed_edge_trusted ) {
+		$xspeed_device = $xspeed_edge_device['bucket'][ $xspeed_device_of( $xspeed_ua, null, true, false ) ];
+	} else {
+		$xspeed_device = $xspeed_device_rules['suffix'][ $xspeed_device_of(
+			$xspeed_ua,
+			$xspeed_hint,
+			false,
+			file_exists( WP_CONTENT_DIR . '/cache/xspeed/' . $xspeed_device_rules['tablet_flag'] )
+		) ];
+	}
+} else {
+	// No device copies on disk: nothing to trust, and nothing to lift.
+	$xspeed_edge_trusted = false;
+}
+
+$xspeed_cache_key = md5( $xspeed_host . $xspeed_path_only . $xspeed_device . $xspeed_variant );
 
 // Per-site bucket. MUST mirror XSpeed\Cache::current_host_dir() exactly —
 // same charset, same trimmed dots, same 'default' fallback, same multisite
@@ -425,6 +604,28 @@ if ( file_exists( $xspeed_cache_file ) ) {
 			}
 		}
 
+		// An edge that keeps a copy per device: the baked answer above lifts
+		// the mobile-split hold, so it is put back on any request that is not
+		// trusted. Applied last, over a sidecar and a query hold, as the baked
+		// hold did before. The page's `Cache-Tag` is kept.
+		if ( $xspeed_edge_keyed && ! $xspeed_edge_trusted ) {
+			if ( is_array( $xspeed_edge_device['hold'] ) && array() !== $xspeed_edge_device['hold'] ) {
+				$xspeed_device_tag = ( is_array( $xspeed_edge_headers ) && isset( $xspeed_edge_headers['Cache-Tag'] ) )
+					? $xspeed_edge_headers['Cache-Tag']
+					: null;
+				$xspeed_edge_headers = $xspeed_edge_device['hold'];
+				if ( null !== $xspeed_device_tag ) {
+					$xspeed_edge_headers['Cache-Tag'] = $xspeed_device_tag;
+				}
+			}
+			// Refreshed at most once a minute. Only its mtime is read. Best-effort:
+			// a failed write only means the evidence is not recorded this time.
+			if ( $xspeed_edge_unkeyed && ( ! file_exists( $xspeed_edge_evidence ) || time() - (int) filemtime( $xspeed_edge_evidence ) >= 60 ) ) {
+				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- pre-WP drop-in; WP_Filesystem isn't loaded. An empty marker in the cache dir, which Cache reads too.
+				@file_put_contents( $xspeed_edge_evidence, '' );
+			}
+		}
+
 		// The one setting this file reads for itself. Everything else about
 		// the edge answer is baked, because re-deriving it here would mean
 		// loading options before WordPress exists. `off` is the exception
@@ -482,6 +683,12 @@ if ( file_exists( $xspeed_cache_file ) ) {
 		// bake; this ordering means a drop-in installed by an older version
 		// cannot lie either.
 		header( 'X-XSpeed-Built: ' . (int) filemtime( $xspeed_cache_file ) );
+
+		// The Markdown entry and the HTML one answer the same URL, so a
+		// cache downstream has to key on Accept to keep them apart.
+		if ( '' !== $xspeed_variant ) {
+			header( 'Vary: Accept', false );
+		}
 
 		// Record the HIT for the dashboard hit-ratio. The drop-in runs
 		// BEFORE WordPress loads, so it can't call Hit_Counter — instead

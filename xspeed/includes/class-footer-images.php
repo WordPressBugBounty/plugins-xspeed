@@ -7,8 +7,8 @@
  * never over what plugins print in the footer. A popup builder that renders
  * its blocks there (Kadence Conversions, for one) ships every image at full
  * size with no srcset. Its popup sits in the viewport, scaled to zero and
- * hidden, so loading="lazy" alone changes nothing: the browser still loads
- * each image straight away. srcset plus sizes="auto" is what helps. The
+ * hidden, so loading="lazy" alone changes nothing there: the browser still
+ * loads each image straight away. srcset plus sizes="auto" is what helps. The
  * browser then picks the file that fits the box the image is laid out in,
  * and a 1036px original drawn in a 190px column comes down as the 194px
  * medium size instead.
@@ -16,6 +16,10 @@
  * Every rendered box stays the size it was: no width or height attribute
  * is written, and the file's size reaches the browser through CSS any
  * theme rule overrides (see add_srcset()).
+ *
+ * An Elementor Pro popup is the other shape: display:none markup whose
+ * images already carry width, height and srcset. There loading="lazy" is
+ * what helps, so an attachment image gets it even when it gets no srcset.
  *
  * The footer only. The header and the hero are where the LCP image lives,
  * and lazy-loading that is the regression this class must never cause.
@@ -166,10 +170,16 @@ final class Footer_Images {
 	}
 
 	/**
-	 * Only an attachment image that gets a srcset is touched. Lazy-loading
-	 * on its own buys nothing in the footer (see the class comment) and
-	 * would stop a hidden tracking pixel from ever loading (#558), so every
-	 * other image is left exactly as printed.
+	 * Only media-library images are touched. A tracking pixel or a hotlinked
+	 * image is left exactly as printed, because loading="lazy" would stop a
+	 * hidden pixel from ever loading (#558).
+	 *
+	 * An attachment image gets loading="lazy" even when it gets no srcset.
+	 * Elementor Pro prints its popups in the footer as display:none markup,
+	 * and their images arrive with width, height and srcset already set. The
+	 * browser downloads an eager image inside display:none anyway, so a
+	 * popup nobody opened still cost 103 KB before LCP on every mobile visit.
+	 * A lazy image inside display:none waits until the popup opens.
 	 *
 	 * @param array<string,mixed> $opts Lazy settings.
 	 */
@@ -180,17 +190,11 @@ final class Footer_Images {
 			|| false !== stripos( $tag, 'data-no-lazy' )
 			|| Lazy_Loader::has_high_fetchpriority( $tag )
 			|| Lazy_Loader::tag_is_hidden( $tag, 'img' )
-			// Width and height attributes are left as they are, and a tag
-			// that has either is skipped: every way of completing one
-			// changes how some theme lays it out.
-			|| self::has_attr( $tag, 'srcset' )
-			|| self::has_attr( $tag, 'sizes' )
-			|| self::has_attr( $tag, 'width' )
-			|| self::has_attr( $tag, 'height' )
 		) {
 			return $tag;
 		}
-		// sizes="auto" is only valid on a lazy image.
+		// An image the page asked for eagerly stays eager, and sizes="auto"
+		// is only valid on a lazy image.
 		if ( self::has_attr( $tag, 'loading' ) && ! preg_match( '#\sloading\s*=\s*["\']?lazy\b#i', $tag ) ) {
 			return $tag;
 		}
@@ -201,8 +205,15 @@ final class Footer_Images {
 			}
 		}
 
-		$out = self::add_srcset( $tag, $id );
-		if ( $out === $tag || self::has_attr( $tag, 'loading' ) ) {
+		// Width and height attributes are left as they are, and a tag that
+		// has either gets no srcset: every way of completing one changes how
+		// some theme lays it out.
+		$sized = self::has_attr( $tag, 'srcset' )
+			|| self::has_attr( $tag, 'sizes' )
+			|| self::has_attr( $tag, 'width' )
+			|| self::has_attr( $tag, 'height' );
+		$out   = $sized ? $tag : self::add_srcset( $tag, $id );
+		if ( self::has_attr( $tag, 'loading' ) ) {
 			return $out;
 		}
 		return (string) preg_replace( '#^<img\b#i', '<img loading="lazy"', $out, 1 );

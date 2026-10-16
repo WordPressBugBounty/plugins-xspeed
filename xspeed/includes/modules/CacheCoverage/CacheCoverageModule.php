@@ -50,6 +50,7 @@ final class CacheCoverageModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed cache-coverage',
+				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show which cache-coverage features are available (404 / search / feed / REST / rules / maintenance).',
 				'ai_hint'   => 'Which page types beyond normal posts/pages can be cached here (404s, search, feeds, REST, maintenance)? Use when asked why a particular kind of URL is never cached.',

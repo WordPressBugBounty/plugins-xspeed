@@ -80,6 +80,7 @@ final class SettingsModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed settings',
+				'risk'      => array( '' => 'read', 'list' => 'read', 'get' => 'read', 'update' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'List modules, or read/update a module\'s settings.',
 				'ai_hint'   => 'Read or write any xSpeed module\'s settings directly, and export/import the whole configuration. Use for bulk changes or replicating one site\'s setup onto another.',
