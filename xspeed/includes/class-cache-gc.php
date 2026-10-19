@@ -5,9 +5,12 @@
  * Invalidation everywhere else in the plugin is event-driven: a post save, a
  * settings change, a theme switch, an explicit purge. A site that fires none
  * of those — a brochure site, a docs portal, a finished catalog — never
- * deletes anything. Expiry still works (both serve paths age-check before
- * using a file, so nobody is served a stale page), but the expired bodies sit
- * on disk forever and the admin's Cache Size figure only ever climbs.
+ * deletes anything. The PHP serve path age-checks a file before using it, but
+ * the nginx and Apache static rewrites only test that the file exists: a web
+ * server cannot compare a file's age with a deadline. On those servers this
+ * collector IS the expiry, which is why the static tree also gets an hourly
+ * sweep of its own (#645). Without it a page outlived Cache expiry, and a
+ * nonce-bearing page its 12-hour cap, by up to a day.
  *
  * Minified assets are worse: they are named by content (Minifier::
  * rewrite_asset), so every plugin or theme update mints a new min/ file and
@@ -41,6 +44,12 @@ final class Cache_GC {
 	/** Daily cron hook. */
 	public const CRON_HOOK = 'xspeed_gc';
 
+	/** Hourly cron hook that sweeps only the static tree. */
+	public const STATIC_CRON_HOOK = 'xspeed_gc_static';
+
+	/** Where the static sweep's resume point is stored. */
+	public const STATIC_CURSOR_OPTION = 'xspeed_gc_static_cursor';
+
 	/** Where the resume point between capped runs is stored. */
 	public const CURSOR_OPTION = 'xspeed_gc_cursor';
 
@@ -63,11 +72,131 @@ final class Cache_GC {
 			// enough filesystem work, and nothing here is urgent.
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', self::CRON_HOOK );
 		}
+		if ( ! wp_next_scheduled( self::STATIC_CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', self::STATIC_CRON_HOOK );
+		}
 	}
 
-	/** Drop the event. Called from CacheModule::deactivate(). */
+	/** Drop the events. Called from CacheModule::deactivate(). */
 	public static function unschedule(): void {
 		wp_clear_scheduled_hook( self::CRON_HOOK );
+		wp_clear_scheduled_hook( self::STATIC_CRON_HOOK );
+	}
+
+	/**
+	 * Hourly: delete static pages past their expiry or nonce deadline.
+	 *
+	 * The web server serves this tree without asking PHP, so a file only
+	 * stops being served when it is deleted. Same budget and resume point
+	 * as run(), kept in its own option so the two sweeps never move each
+	 * other's place. (#645)
+	 *
+	 * @param string $cause Who asked, for the activity log.
+	 * @return int Files removed.
+	 */
+	public static function run_static( string $cause = 'hourly static sweep' ): int {
+		// This site's pages only. On a network every site books its own
+		// sweep, and walking the shared tree applied the shortest expiry on
+		// the network to every site's pages.
+		$root = self::static_dir_for_url( home_url( '/' ) );
+		if ( null === $root ) {
+			return 0;
+		}
+		$budget      = self::budget();
+		$after       = (string) get_option( self::STATIC_CURSOR_OPTION, '' );
+		$default_ttl = self::default_ttl();
+
+		list( $removed, $stopped_at ) = self::sweep_phase( 'static', $after, $budget, time(), $default_ttl, 0, $root );
+
+		if ( '' !== $stopped_at ) {
+			update_option( self::STATIC_CURSOR_OPTION, $stopped_at, false );
+		} else {
+			delete_option( self::STATIC_CURSOR_OPTION );
+		}
+		// Its own stats, and no activity line: an hourly sweep would push real
+		// purges out of the log and overwrite the daily run's figures.
+		$stats = Cache::get_stats_option();
+		Cache::update_stats(
+			array(
+				'last_static_gc'       => time(),
+				'static_gc_removed'    => $removed,
+				'static_gc_removed_total' => (int) ( $stats['static_gc_removed_total'] ?? 0 ) + $removed,
+			)
+		);
+		if ( $removed > 0 ) {
+			Cache_Inventory::invalidate();
+		}
+		unset( $cause );
+		return $removed;
+	}
+
+	/**
+	 * Delete one URL's static page when it is past its deadline.
+	 *
+	 * The preloader calls this before it requests a URL. Otherwise the web
+	 * server answered the crawl with the expired file as a HIT, nothing was
+	 * rebuilt, and the collector deleted the page half an hour later, so
+	 * it stayed uncached until a visitor came. (#645)
+	 *
+	 * @param string $url Absolute URL about to be warmed.
+	 * @return bool True when an expired page was deleted.
+	 */
+	public static function expire_static_url( string $url ): bool {
+		if ( ! defined( 'XSPEED_CACHE_STATIC_DIR' ) ) {
+			return false;
+		}
+		$dir = self::static_dir_for_url( $url );
+		if ( null === $dir ) {
+			return false;
+		}
+		$parts = wp_parse_url( $url );
+		$rel   = Cache::static_path( '/' . ltrim( (string) ( $parts['path'] ?? '/' ), '/' ) );
+		if ( null === $rel || '' !== (string) ( $parts['query'] ?? '' ) ) {
+			return false;
+		}
+		$file  = $dir . $rel . '/index.html';
+		$mtime = is_file( $file ) ? @filemtime( $file ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $mtime ) {
+			return false;
+		}
+		if ( time() - $mtime < self::page_max_age( 'static', $file, self::default_ttl() ) ) {
+			return false;
+		}
+		// The same delete the sweep does: index.html, its compressed copies
+		// and the deadline marker.
+		self::delete_entry( $file );
+		return true;
+	}
+
+	/**
+	 * The static tree's folder for a URL's host, as store_static() names it:
+	 * the host with a non-default port kept (`localhost:8188` is stored
+	 * under `localhost8188`). Null when the tree or the host is missing.
+	 *
+	 * @param string $url Absolute URL.
+	 */
+	private static function static_dir_for_url( string $url ): ?string {
+		if ( ! defined( 'XSPEED_CACHE_STATIC_DIR' ) ) {
+			return null;
+		}
+		$parts = wp_parse_url( $url );
+		$host  = strtolower( (string) ( $parts['host'] ?? '' ) );
+		if ( '' === $host ) {
+			return null;
+		}
+		$port   = (int) ( $parts['port'] ?? 0 );
+		$scheme = strtolower( (string) ( $parts['scheme'] ?? '' ) );
+		if ( $port > 0 && ! ( ( 'https' === $scheme && 443 === $port ) || ( 'http' === $scheme && 80 === $port ) ) ) {
+			$host .= ':' . $port;
+		}
+		$host = Cache::static_host_dir( $host );
+		return '' === $host ? null : rtrim( XSPEED_CACHE_STATIC_DIR, '/' ) . '/' . $host;
+	}
+
+	/** The page TTL the Cache expiry setting asks for, in seconds. */
+	private static function default_ttl(): int {
+		$opts = Settings_Manager::get( 'cache' );
+		return max( 1, (int) ( $opts['cache_expiry'] ?? \XSpeed\Modules\Cache\CacheModule::DEFAULT_EXPIRY_HOURS ) ) * HOUR_IN_SECONDS;
 	}
 
 	/**
@@ -135,8 +264,7 @@ final class Cache_GC {
 
 		// Resolve the global TTL once — Settings_Manager::get() is cheap but
 		// this runs per candidate otherwise.
-		$opts        = Settings_Manager::get( 'cache' );
-		$default_ttl = max( 1, (int) ( $opts['cache_expiry'] ?? \XSpeed\Modules\Cache\CacheModule::DEFAULT_EXPIRY_HOURS ) ) * HOUR_IN_SECONDS;
+		$default_ttl = self::default_ttl();
 		$asset_ttl   = self::asset_max_age();
 		$now         = time();
 
@@ -195,8 +323,8 @@ final class Cache_GC {
 	 * @return array{0:int,1:string} Removed count, and the path the sweep
 	 *                               stopped at ('' when the phase finished).
 	 */
-	private static function sweep_phase( string $phase, string $after, int &$budget, int $now, int $default_ttl, int $asset_ttl ): array {
-		$root = self::phase_root( $phase );
+	private static function sweep_phase( string $phase, string $after, int &$budget, int $now, int $default_ttl, int $asset_ttl, ?string $root = null ): array {
+		$root = null === $root ? self::phase_root( $phase ) : $root;
 		if ( null === $root || ! is_dir( $root ) ) {
 			return array( 0, '' );
 		}
@@ -616,10 +744,19 @@ final class Cache_GC {
 		if ( false === $entries ) {
 			return;
 		}
+		// Walk in the order the resume cursor compares paths: a directory
+		// sorts as `name/`, so `news-2/…` comes before `news/…`, as strcmp()
+		// has it. scandir() order put `news/` first, and a run paused inside
+		// it skipped `news-2/` for a whole cycle. (#645)
+		$keyed = array();
 		foreach ( $entries as $entry ) {
 			if ( '.' === $entry || '..' === $entry ) {
 				continue;
 			}
+			$keyed[ $entry . ( is_dir( $dir . '/' . $entry ) ? '/' : '' ) ] = $entry;
+		}
+		ksort( $keyed, SORT_STRING );
+		foreach ( $keyed as $entry ) {
 			$path = $dir . '/' . $entry;
 			if ( is_dir( $path ) ) {
 				if ( $recursive ) {

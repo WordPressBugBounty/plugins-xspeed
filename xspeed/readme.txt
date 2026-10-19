@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.3
+Stable tag: 1.4.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,7 +14,7 @@ A complete WordPress caching plugin: page cache, object cache, CDN, database cle
 
 Your visitors decide to stay or leave in under 3 seconds. **xSpeed Cache** makes sure they stay.
 
-Most caching plugins bury you in settings, charts and upgrade popups. xSpeed Cache does the opposite. Install it, flip one switch, and your site loads faster. No bloat, no upsells nagging you, no PhD required.
+Most caching plugins bury you in settings, charts and upgrade popups. xSpeed Cache does the opposite. Install it, flip one switch, and your site loads faster.
 
 Built by the team at **WPDeveloper**, trusted by over 6 million WordPress users worldwide.
 
@@ -22,22 +22,16 @@ https://youtu.be/fYVy77GJDE4
 
 = What This WordPress Caching Plugin Does =
 
-xSpeed Cache is a full-site performance plugin. It caches your pages, shrinks your code, compresses your files and serves everything as fast as your server physically can, including an AI-powered audit that tells you exactly what is slowing your site down.
-
-The result: pages that load in milliseconds, not seconds. Better Google PageSpeed scores. Happier visitors. Better SEO rankings.
-
-If you have been searching for how to speed up WordPress site performance without hiring a developer, this is the shortest path there. It is built to speed up WordPress from the first page load, not after a week of tuning.
+xSpeed Cache caches your pages, shrinks your code, compresses your files and serves everything as fast as your server can. The result is faster pages, better Google PageSpeed scores and better Core Web Vitals, without hiring a developer.
 
 = The Speed Advantage No Other Free WordPress Cache Plugin Offers =
 
-When xSpeed Cache caches a page, it does not just save it. It serves it directly from the server, bypassing PHP entirely.
-
-That means:
+When xSpeed Cache caches a page, the web server serves it directly, bypassing PHP entirely.
 
 * **With xSpeed static cache:** 5 to 15ms response time
 * **Without it (PHP-served cache):** around 85ms response time
 
-That is up to **17x faster** page delivery on cache hits. No other free WordPress cache plugin does this across Apache, nginx and LiteSpeed automatically, which is what makes it worth comparing against any other best WordPress cache plugin shortlist you are working from.
+That is up to **17x faster** page delivery on cache hits, set up automatically on Apache, nginx and LiteSpeed.
 
 = Features at a Glance =
 
@@ -45,30 +39,26 @@ https://youtu.be/LlIb3XuQ-mo
 
 **AI Assistants and the WordPress MCP Server**
 
-xSpeed Cache ships a WordPress MCP server, so a Claude WordPress MCP connection, or any other MCP client, can inspect and tune your site through the same tools the dashboard uses. Every action is bounded by what you allow when you connect, which is what separates a real WordPress MCP plugin from a chatbot bolted onto a settings page.
+xSpeed Cache ships a WordPress MCP server, so Claude or any other MCP client can inspect and tune your site through the same tools the dashboard uses. Every action is limited to what you allow when you connect.
 
-* MCP server appears on the Overview as a capability card, so an AI connection can be set up without hunting for a panel
-* OAuth discovery, with dynamic client registration bounded by stored-client limits, redirect URI limits, name and URI length limits and per-IP rate limiting
-* Read-only MCP connections can read status through every per-command tool, while write actions stay refused
-* Credentials cannot be written by an AI assistant unless you explicitly grant that permission when connecting
+* Set up an AI connection from the MCP card on the Overview
+* Read-only connections can read status, while write actions stay refused
+* An AI assistant cannot write credentials unless you grant that permission when connecting
 * WP-CLI parity: `wp xspeed purge`, `wp xspeed preloader status`, `wp xspeed score run`, `wp xspeed optimize` and `wp xspeed settings list|get|update`
 * The `optimize_site` tool measures the site, applies recommended settings one at a time, re-checks the page after each change and reverts anything that breaks it
 
 **Disable Bloat**
-
-Turn off WordPress features you do not use. Each one is a request your server does not have to make.
 
 * Disable dashicons on the frontend
 * Remove oEmbed, RSS feeds, XML-RPC, jQuery Migrate and REST API authentication headers
 
 **AI-Powered Site Audit (Pro)**
 
-xSpeed Pro scans your specific site and tells you exactly which performance features will help the most, with severity ratings and concrete reasons rather than generic advice.
+xSpeed Pro scans your site and tells you which performance features will help the most, with severity ratings and concrete reasons.
 
+**Page Caching**
 
-**Page Caching That Speeds Up Your WordPress Site**
-
-Your pages are saved as static HTML files and served instantly to visitors, before WordPress even loads. This is the fastest way to speed up WordPress page delivery, and the cache rebuilds itself automatically whenever you publish a post, switch themes or update a plugin. You never have to think about it.
+Pages are saved as static HTML files and served before WordPress loads. The cache rebuilds itself when you publish a post, switch themes or update a plugin.
 
 * Static-file rewrite path that bypasses PHP entirely for a 5 to 15ms TTFB
 * Auto-purge on publish, update, comment and theme change
@@ -78,91 +68,68 @@ Your pages are saved as static HTML files and served instantly to visitors, befo
 * Separate mobile cache for phone and tablet visitors
 * Per-post cache rules with custom expiry, or disable caching for individual posts
 
-**Code Minification for WordPress Page Speed Optimization**
-
-Strips all the unnecessary whitespace, comments and characters from your HTML, CSS and JavaScript without breaking anything. Smaller files are one of the most reliable WordPress page speed optimization wins available.
+**Code Minification**
 
 * Minify HTML, CSS and JavaScript
 * Combine CSS and JS files to reduce HTTP requests
 * Defer or delay JavaScript so it does not block page rendering
 * Async CSS loading
 * Removes `?ver=` query strings from asset URLs (generated files under `wp-content/uploads` keep theirs, so a page-builder or consent-banner edit still reaches returning visitors)
-* Safe-minify automatically skips already-minified files and falls back if anything looks off
+* Safe-minify skips already-minified files and falls back if anything looks off
 
 **GZIP Compression**
-
-Makes every file your server sends smaller, so browsers download them faster.
 
 * Auto-configures GZIP on Apache and LiteSpeed
 * Shows a ready-to-paste config snippet for nginx and IIS
 * Detects if your server already has GZIP active, so there is no double-configuration
 
-**Lazy Load WordPress Images, Videos and Iframes**
+**Lazy Load Images, Videos and Iframes**
 
-Lazy load WordPress media so images, videos and iframes load only when a visitor scrolls to them, rather than all at once on page load.
+* Lazy load images, iframes and videos so they load when a visitor scrolls to them
+* Adds missing image sizes so the layout does not jump
 
-* Lazy load images, iframes and videos
-* Automatic Cumulative Layout Shift fix so your layout does not jump
-
-**Font Optimization for WordPress Core Web Vitals**
-
-Web fonts are one of the most common causes of slow-loading pages, and fixing them is one of the easiest ways to increase WordPress page speed. Together with lazy loading and the LCP preload, this is practical core web vitals optimization rather than a score-chasing trick.
+**Font Optimization**
 
 * Adds `font-display: swap` so text is visible immediately while fonts load
-* Preloads above-the-fold font files for instant rendering
+* Preloads above-the-fold font files
 * Removes the blank-text flash caused by slow Google Fonts responses
 
 **Browser Cache**
 
-Tells browsers to remember your static files such as images, CSS and JS, so returning visitors load your site even faster.
-
-* Sets proper `Cache-Control` and `Expires` headers
-* Works automatically with no manual configuration needed
+* Sets `Cache-Control` and `Expires` headers for images, CSS and JS, with no manual configuration
 
 **Cache Preloader**
 
-Warms up your cache automatically so the very first visitor after a purge still gets a fast page.
+* Sitemap-driven cache warmer, so the first visitor after a purge still gets a fast page
+* Auto-warms the cache when you publish or update content
 
-* Sitemap-driven cache warmer
-* Auto-warms cache when you publish or update content
+**Redis and Memcached Object Cache**
 
-**Redis Object Cache for WordPress (Redis and Memcached)**
-
-Speed up database-heavy installs with a persistent object cache WordPress can rely on between requests. Set up Redis object cache WordPress support, or Memcached, in seconds and keep every repeated query in memory.
-
-* Connect Redis or Memcached in seconds
+* Connect Redis or Memcached in seconds, as a drop-in persistent object cache
 * View status and flush the object cache from the dashboard
-* Works as a drop-in persistent object cache, so object cache WordPress lookups are not repeated on every page load
 
-**WordPress CDN Plugin Support with Cloudflare Integration**
-
-Serve your static files from a WordPress CDN for faster global delivery. Point it at whichever provider you already use, including a WordPress CDN free tier, so you are not locked into one network while you decide which is the best WordPress CDN for your traffic.
+**CDN and Cloudflare**
 
 * Pull-zone URL rewriting for any CDN provider
-* Built-in Cloudflare WordPress CDN integration: connect your zone, auto-purge on publish and toggle development mode
-* Works as a WordPress CDN plugin for any pull zone, with no separate connector to install
+* Cloudflare integration: connect your zone, auto-purge on publish and toggle development mode
 
-**WordPress Database Cleanup and Optimization**
-
-A bloated database slows down every page load. This WordPress database cleanup plugin keeps yours clean and helps speed up WordPress database queries without a separate tool.
+**Database Cleanup**
 
 * Optimize database tables
 * Remove post revisions, spam, trash, transients and orphaned meta
-* Schedule automatic cleanup so it runs on autopilot
+* Schedule automatic cleanup
 
 = Built to Handle WordPress Edge Cases =
 
-xSpeed Cache handles the edge cases other plugins miss:
-
 * **Multisite ready.** Each site in the network gets its own cache and settings.
-* **LiteSpeed server?** xSpeed Cache detects the LiteSpeed Cache server module and steps back to avoid conflicts.
+* **LiteSpeed server?** xSpeed Cache also clears the server's LiteSpeed cache whenever it clears its own. If the LiteSpeed Cache plugin is active, xSpeed Cache will not turn on its own page cache or the other features that overlap, so the two never run at once.
 * **WooCommerce?** Logged-in customers and checkout pages are never cached.
-* **WordPress Site Health.** xSpeed Cache adds its own health check under Tools then Site Health, so you always know your cache config is working correctly.
+* **WordPress Site Health.** xSpeed Cache adds its own check under Tools → Site Health.
 * **Works on any server.** Apache, nginx, LiteSpeed, IIS and any standard PHP host.
 
 = Designed for Everyone =
 
-**Non-technical users:** A 3-step setup wizard walks you through first-time configuration in under 2 minutes. Settings auto-save, so there is no Save button to forget.
+**Non-technical users:** A 3-step setup wizard configures the plugin in under 2 minutes. Settings save automatically.
 
 **Developers:** REST API at `/wp-json/xspeed/v1/`, developer filters (`xspeed_skip_minify`, `xspeed_strip_asset_version`, `xspeed_cache_skip_for_post`, `xspeed_cache_expiry_for_post`), `WP_DEBUG` awareness, and a React 18 and TypeScript admin UI.
 
@@ -170,17 +137,11 @@ xSpeed Cache handles the edge cases other plugins miss:
 
 = Private By Default =
 
-xSpeed Cache never collects personal data, stores IP addresses or uses tracking cookies. Every optimization runs locally on your server. By default it makes no calls to any third-party server. The only request is a quick check to your own site's home URL to confirm GZIP is active, rate-limited to once per hour.
+xSpeed Cache stores no IP addresses and sets no tracking cookies. Out of the box, the only request it makes is a check to your own site's home URL to confirm GZIP is active, at most once an hour.
 
-xSpeed Cache also includes **optional usage analytics**. You are asked in two places: a clearly labeled consent control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data. Nothing is sent until you confirm from one of them. When enabled, xSpeed Cache shares non-sensitive diagnostics: your WordPress and PHP version, active theme and plugins, server type, site language, and which xSpeed Cache features you have switched on, so we know what to keep fast and compatible. No page content is ever sent, and you can turn it off again at any time from xSpeed Cache → Settings → Privacy & usage data. See the External services section below.
+Usage analytics is optional and off by default. If you turn it on in the setup wizard or in xSpeed Cache → Settings → Privacy & usage data, it sends your email address and display name, your site's setup and which xSpeed Cache features you use. Page content is never sent. See the External services section below for every service the plugin can contact.
 
-= Backed By a Team You Trust =
-
-xSpeed Cache is developed by the trusted team at WPDeveloper, a leading WordPress marketplace used and loved by millions of users.
-
-= Loved xSpeed Cache? =
-
-If xSpeed Cache makes your site faster, please leave a review on WordPress.org. It really helps.
+If xSpeed Cache makes your site faster, please leave a review on WordPress.org.
 
 == Installation ==
 
@@ -249,7 +210,7 @@ Yes. Either toggle the option off in the admin UI, enable `WP_DEBUG` (xSpeed Cac
 
 = Does xSpeed Cache send my data anywhere? =
 
-By default, no. The only request is a check to your own site's home URL to confirm GZIP is active. Usage analytics and external performance scores are covered in detail in the External services section.
+By default, no. The only request is a check to your own site's home URL to confirm GZIP is active. Everything else, including usage analytics, speed tests, xSpeed Scan, Cloudflare and click-to-play video posters, runs only after you turn it on or press a button. Each service is listed in the External services section.
 
 == Screenshots ==
 
@@ -264,14 +225,15 @@ By default, no. The only request is a check to your own site's home URL to confi
 
 == External services ==
 
-xSpeed Cache contacts your own site (the gzip probe below); when usage analytics is enabled, an analytics service; only if you choose to submit the optional deactivation survey, that same service; and — only when you run a speed test yourself — one external performance-score provider. Analytics consent is asked in two places — a clearly-labeled control in the setup wizard, and the switch in xSpeed Cache → Settings → Privacy & usage data — and nothing is sent until you confirm from one of them; turning the switch off stops all collection and clears the scheduled send. The deactivation survey is separate and never sends anything unless you explicitly click Submit. External scores are off by default, turn on the first time you press Test, and never run on their own.
+Out of the box, xSpeed Cache contacts only your own site (the gzip probe below). Every other service on this list runs only after an administrator turns it on, connects it or presses a button. None of them runs on a fresh install.
+
+Usage analytics is off by default. The setup wizard shows it as an unticked switch, and xSpeed Cache → Settings → Privacy & usage data has the same switch. Nothing is sent until you turn it on. Turning it off stops all sending and clears the scheduled send. The deactivation survey is separate and sends nothing unless you click Submit. Speed tests and xSpeed Scan run only when you press Test or Scan, never on a schedule.
 
 = Self-hosted gzip probe =
 
-* **What it does:** Issues a single `GET` request to your site's home URL (`home_url('/')`) with an `Accept-Encoding: gzip` header to detect whether your web server is already serving gzipped responses. The response body is discarded; only the `Content-Encoding` header is read.
-* **When it runs:** On demand when the admin dashboard loads server status, throttled to once per hour via a transient (`xspeed_gzip_active`).
-* **Where the request goes:** Your own site (`home_url()`). This request goes only to your own server.
-* **What is sent:** No personal data, no site identifiers, no payload — just a standard HTTP `GET` from your server back to your server.
+* **What it does:** Sends one `GET` request with `Accept-Encoding: gzip` to your site's home URL, to see whether your server already gzips responses. Only the `Content-Encoding` header is read.
+* **When it runs:** When the dashboard loads server status, at most once an hour.
+* **Where the request goes:** Your own site. Nothing is sent anywhere else.
 
 = xSpeed Hub (app.xspeedcache.com) =
 
@@ -280,6 +242,56 @@ xSpeed Cache contacts your own site (the gzip probe below); when usage analytics
 * **What is sent:** The site URL and this site's MCP token, which the Hub uses to call the site's own MCP endpoint. The token is sent when the site is connected, when the connection status is checked, when the token changes (Rotate, or Connect after Disconnect), when you disconnect, and with speed-test requests you start.
 * **After an xSpeed Scan:** When a scan you run from the plugin finishes on a connected site, the site sends the Hub that scan's id, so the Hub can compare it with the site's earlier scans. Only the id and the site URL are sent. The Hub reads the report from the scan service itself.
 * **Where the request goes:** app.xspeedcache.com, operated by WPDeveloper.
+* **The broker URL:** The AI & agents screen also shows an api.xspeedcache.com address that you can paste into an AI client. The plugin never contacts that address. Only your AI client does, and only if you set it up that way.
+* **Terms and privacy:** [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
+
+= Usage analytics and deactivation survey (send.wpinsight.com) =
+
+* **What it does:** Tells WPDeveloper which WordPress setups and xSpeed features are in use, so we can fix what breaks.
+* **When it runs:** Only after an administrator turns on "Share usage data" in the setup wizard or in Settings → Privacy & usage data. It sends once a day, and once more when the plugin is deactivated.
+* **What is sent:** The site URL and name, WordPress and PHP versions, site language, charset, text direction, multisite status, server software, active and inactive plugins, theme name and version, the xSpeed version and xSpeed's own settings. The send when you turn the switch on, and the one at deactivation, also include the email address and display name of the administrator who did it. The daily send runs without a logged-in user, so it has no email or name. Page content is never sent.
+* **Deactivation survey:** If you pick a reason and click Submit when deactivating, the reason and any text you typed are sent. With analytics off, the survey sends only the reason, your text, the site URL, the WordPress, PHP and xSpeed versions, and the date. Skip & Deactivate sends nothing.
+* **Where the request goes:** send.wpinsight.com, operated by WPDeveloper. [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
+
+= Speed tests: Google PageSpeed Insights and GTmetrix =
+
+* **What it does:** Shows a Lighthouse or GTmetrix score next to the dashboard's own timing benchmark.
+* **When it runs:** Only when an administrator presses Test, or an AI agent you connected runs the speed-test command. There is no schedule. A GTmetrix test that is still queued is checked when you open its status, for at most 30 minutes.
+* **What is sent:** The URL of the page being tested, the test strategy (mobile or desktop) and, if you entered one, your API key. GTmetrix always needs your own key.
+* **Where the request goes:** www.googleapis.com (Google PageSpeed Insights: [Terms](https://developers.google.com/terms), [Privacy](https://policies.google.com/privacy)) or gtmetrix.com (GTmetrix: [Terms](https://gtmetrix.com/tos.html), [Privacy](https://gtmetrix.com/privacy.html)), whichever provider you chose.
+
+= xSpeed Scan (xspeedcache.com) =
+
+* **What it does:** Grades the site across speed, delivery, assets and stack, with a fix for every failed check.
+* **When it runs:** Only when an administrator presses Scan, or an AI agent you connected runs the scan command.
+* **What is sent:** The URL to scan, the test strategy, and whether the report should be listed. The scan service then loads that URL like any visitor would.
+* **Who can see the report:** For a site that is not connected to xSpeed Hub, the report is listed on a public page for that domain. For a connected site, it is unlisted: kept off the public page, but anyone with its link can open it.
+* **Where the request goes:** xspeedcache.com/api/scan, operated by WPDeveloper. [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
+
+= Cloudflare API (api.cloudflare.com) =
+
+* **What it does:** Purges Cloudflare's cache for your zone, turns development mode on or off, and checks your credentials.
+* **When it runs:** Only after an administrator enters Cloudflare credentials and turns the integration on. It then runs when you press Purge, Verify or Development mode, and each time xSpeed clears its own cache if "Clear Cloudflare with xSpeed" is on.
+* **What is sent:** Your API token (or email and Global API key), your zone ID, and the URLs to purge.
+* **Where the request goes:** api.cloudflare.com, operated by Cloudflare. [Terms](https://www.cloudflare.com/website-terms/), [Privacy](https://www.cloudflare.com/privacypolicy/).
+
+= YouTube video posters (i.ytimg.com) =
+
+* **What it does:** "Click-to-play videos" (off by default) replaces YouTube embeds with a poster image and a play button.
+* **When it runs:** On pages with a YouTube embed, once the option is on. The request comes from your visitors' browsers, not from your server.
+* **What is sent:** The browser requests the video's poster image, so YouTube receives the visitor's IP address, browser details and the video ID. The full YouTube player, which sends more, loads only when the visitor clicks play.
+* **Where the request goes:** i.ytimg.com, operated by Google. [Terms](https://www.youtube.com/t/terms), [Privacy](https://policies.google.com/privacy).
+
+= Image size lookup for images on other sites =
+
+* **What it does:** "Add missing image sizes" (on by default) adds width and height to images that lack them, so the page does not jump as they load. Images in your media library are measured locally. For an image hosted on another site, xSpeed Cache reads the start of the file to get its size.
+* **When it runs:** Only while the cache is being warmed by the preloader, a cron task or WP-CLI, never during a visitor's request. Each URL is looked up once and the result is stored.
+* **What is sent:** A `GET` request for the first 32 KB of the image, from your server to the site hosting it. No data about your site or visitors is sent.
+* **Where the request goes:** The host of each image, which you chose by putting the image on your page. To turn the lookup off, use `add_filter( 'xspeed_lazy_remote_dimensions', '__return_false' );` or turn off "Add missing image sizes".
+
+== Source code ==
+
+`assets/admin.js` and `assets/admin.css` are built from the uncompressed TypeScript and React source of the admin interface, which ships in the plugin's `src/` folder.
 
 == Third-party libraries ==
 
@@ -314,6 +326,42 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.4] – 2026-10-19 =
+
+**The preloader can skip post types and picks a stalled crawl back up, a cookie consent banner can be deferred, and an import from another caching plugin says when it was only partly done.**
+
+Caching:
+- Improved: Static cached pages are checked for expiry every hour, and just before the preloader requests them, so an expired copy is no longer served.
+- Fixed: Purging the cache while it is being switched on now reaches Cloudflare and the other caches xSpeed clears.
+- Fixed: Saving a page clears cached pages that show it in a widget from another plugin or in a Thrive layout.
+- Fixed: On nginx, a server block pasted without xSpeed's version line is reported as one to paste again, instead of as missing.
+- Fixed: On Apache, when static cache hits cannot be counted, the dashboard says so instead of reporting a low hit ratio.
+- Fixed: The page cache drop-in says which copy is running, and an outdated copy is flagged once and replaced on the next wp-admin load.
+- Fixed: A request that asks for JSON is no longer cached or served as the page, so a page rendered without its styles for such a request no longer reaches visitors. On nginx, the dashboard asks you to paste the server block again.
+- Fixed: An excluded URL with a `[` that is never closed, such as `/shop/[abc`, no longer logs a PHP warning on every page. The bracket is read as a plain character.
+
+Preloader:
+- New: Skip these post types leaves chosen post types out of the crawl, and the panel shows how many URLs were skipped. `wp xspeed preloader set` changes the settings from the command line.
+- Fixed: Saving the Preloader panel no longer clears the page cache or moves the next scheduled crawl.
+- Fixed: A crawl that stops moving is restarted by the next scheduled crawl, or resumed when the Preloader panel or `wp xspeed preloader status` is opened.
+- Fixed: Sitemaps on sites with plain permalinks are read correctly, so the crawl queues every page instead of one.
+
+Optimization:
+- New: Defer the cookie consent banner (opt-in) lets Defer JS defer a consent banner, including one pasted into the theme.
+- Improved: Delay JS never postpones the banners of 14 more consent tools, including Termageddon, CookieAdmin, WPConsent, TermsFeed and GetTerms.
+- Fixed: Minify HTML keeps conditional comments that show content to other browsers, and an empty comment no longer removes the markup after it.
+- Fixed: Only one image gets high fetch priority, and each image is preloaded once.
+- Fixed: A restored script's preload hint points at the right file, on cached and uncached pages.
+- Fixed: The video autoplay script is added only to pages that have a video.
+
+Object Cache:
+- Fixed: Browser autofill can no longer save a Redis username and password, and Enable and Switch test a changed host and port before saving them.
+
+Dashboard & Admin UX:
+- Improved: Share usage data is off until you turn it on, in the setup wizard and in Settings, and both say what is sent: your email address and display name when you turn it on, then site details once a day.
+- Fixed: An import from another caching plugin that brought some settings across shows as partly done, with the reason for each skipped group.
+- Fixed: With Import & switch to xSpeed, the old plugin's page cache file is saved first under a name that cannot be guessed, and xSpeed then takes over the page cache and checks that it serves pages.
 
 = [1.4.3] – 2026-10-16 =
 

@@ -283,10 +283,46 @@ final class CloudflareModule extends Module {
 		if ( class_exists( '\\XSpeed\\Purge_Runner' ) && \XSpeed\Purge_Runner::covers( 'cloudflare' ) ) {
 			return;
 		}
-		if ( true !== $this->can_purge_edge() ) {
+		$can = $this->can_purge_edge();
+		if ( true !== $can ) {
+			$this->note_skipped_edge_purge( (string) $can );
 			return;
 		}
 		$this->purge_edge( 'auto-purge' );
+	}
+
+	/**
+	 * Say why an auto-purge left the edge alone.
+	 *
+	 * Every early return used to be silent, so a skipped edge purge showed
+	 * up only as a page Cloudflare kept serving. Once an hour per reason:
+	 * a site with no credentials purges often, and one line says it. (#643)
+	 *
+	 * @param string $reason From can_purge_edge().
+	 */
+	private function note_skipped_edge_purge( string $reason ): void {
+		if ( '' === $reason || ! class_exists( '\\XSpeed\\Activity_Log' ) ) {
+			return;
+		}
+		// Turning the module off can purge in the same request; that skip is
+		// the one the admin asked for, not a fault.
+		if ( empty( $this->get_settings()['enabled'] ) ) {
+			return;
+		}
+		$key = 'xspeed_cf_skip_' . md5( $reason );
+		if ( false !== get_transient( $key ) ) {
+			return;
+		}
+		set_transient( $key, 1, HOUR_IN_SECONDS );
+		\XSpeed\Activity_Log::record(
+			'cloudflare_purge_skipped',
+			sprintf(
+				/* translators: %s: why the edge could not be purged. */
+				__( 'Cloudflare edge not purged after a cache purge: %s', 'xspeed' ),
+				$reason
+			),
+			\XSpeed\Activity_Log::WARN
+		);
 	}
 
 	/**
@@ -325,7 +361,9 @@ final class CloudflareModule extends Module {
 		if ( class_exists( '\\XSpeed\\Purge_Runner' ) && \XSpeed\Purge_Runner::covers( 'cloudflare' ) ) {
 			return;
 		}
-		if ( true !== $this->can_purge_edge() ) {
+		$can = $this->can_purge_edge();
+		if ( true !== $can ) {
+			$this->note_skipped_edge_purge( (string) $can );
 			return;
 		}
 

@@ -127,7 +127,7 @@ final class Glob_Matcher {
 			// over-match name mode exists to stop.
 			$regex = self::compile_regex( substr( $pattern, 1 ), true );
 		} elseif ( preg_match( '/(?<!\\\\)[*?\[]/', $pattern ) ) {
-			$regex = '#^' . self::glob_to_regex( $pattern ) . '$#i';
+			$regex = self::checked( '#^' . self::glob_to_regex( $pattern ) . '$#i' );
 		} else {
 			// Bare pattern → exact name. Resolve `\X` → `X` first so an
 			// escaped metacharacter matches itself.
@@ -161,7 +161,7 @@ final class Glob_Matcher {
 		// resolved); `/cart/*` flips to anchored glob mode.
 		$has_unescaped_glob = (bool) preg_match( '/(?<!\\\\)[*?\[]/', $pattern );
 		if ( $has_unescaped_glob ) {
-			$regex = '#^' . self::glob_to_regex( $pattern ) . '$#';
+			$regex = self::checked( '#^' . self::glob_to_regex( $pattern ) . '$#' );
 		} else {
 			// Substring "contains" mode. Resolve `\X` → `X` first so
 			// `\*` matches a literal asterisk anywhere in the subject.
@@ -210,15 +210,33 @@ final class Glob_Matcher {
 	}
 
 	/**
+	 * A compiled glob, or NEVER if PCRE rejects it. glob_to_regex() closes
+	 * every class, so this should not trigger; it keeps a pattern this
+	 * translation misses from warning on every request (#510).
+	 */
+	private static function checked( string $regex ): string {
+		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- intentional: a pattern PCRE rejects must degrade to never-match, not warn.
+		return false === @preg_match( $regex, '' ) ? self::NEVER : $regex;
+	}
+
+	/**
 	 * Translate glob syntax → regex body (no delimiters, no anchors).
 	 * Mirrors fnmatch's FNM_PATHNAME-disabled semantics: `*` matches
 	 * across `/` so `/cart/*` correctly catches `/cart/items/sub`.
+	 *
+	 * Also as in fnmatch, a `]` straight after `[` is a member of the class,
+	 * and a `[` that is never closed is a literal bracket. Both used to
+	 * compile to a regex PCRE rejects, which logged a warning on every
+	 * request that checked the pattern (#510).
 	 */
 	private static function glob_to_regex( string $glob ): string {
-		$out      = '';
-		$in_class = false;
-		$len      = strlen( $glob );
-		$escape   = false;
+		$out         = '';
+		$in_class    = false;
+		$class_start = 0;
+		$class_out   = '';
+		$class_size  = 0;
+		$len         = strlen( $glob );
+		$escape      = false;
 
 		for ( $i = 0; $i < $len; $i++ ) {
 			$ch = $glob[ $i ];
@@ -235,13 +253,14 @@ final class Glob_Matcher {
 			}
 
 			if ( $in_class ) {
-				if ( ']' === $ch ) {
+				if ( ']' === $ch && $class_size > 0 ) {
 					$out     .= ']';
 					$in_class = false;
 				} else {
 					// Inside a character class, dash + letters are passed
 					// through; we still preg_quote dangerous chars.
 					$out .= preg_quote( $ch, '#' );
+					++$class_size;
 				}
 				continue;
 			}
@@ -254,12 +273,21 @@ final class Glob_Matcher {
 					$out .= '.';
 					break;
 				case '[':
-					$out     .= '[';
-					$in_class = true;
+					$class_start = $i;
+					$class_out   = $out;
+					$class_size  = 0;
+					$out        .= '[';
+					$in_class    = true;
 					break;
 				default:
 					$out .= preg_quote( $ch, '#' );
 			}
+		}
+
+		// Never closed: the `[` was a literal, and what follows it is glob
+		// again, so `/shop/[abc*` keeps its `*` wildcard.
+		if ( $in_class ) {
+			$out = $class_out . '\\[' . self::glob_to_regex( substr( $glob, $class_start + 1 ) );
 		}
 
 		return $out;

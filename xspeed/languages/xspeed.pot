@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.3\n"
+"Project-Id-Version: xSpeed Cache 1.4.4\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-10-16T06:03:36+00:00\n"
+"POT-Creation-Date: 2026-10-19T12:38:11+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:12362
+#: includes/class-cache.php:12731
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:160
 #: includes/class-admin.php:258
-#: includes/class-cache.php:12376
+#: includes/class-cache.php:12745
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -68,7 +68,7 @@ msgid "Loading…"
 msgstr ""
 
 #. translators: 1: cause of the sweep, 2: number of files removed.
-#: includes/class-cache-gc.php:710
+#: includes/class-cache-gc.php:847
 #, php-format
 msgid "Cache garbage collection (%1$s) — %2$d expired file(s) removed"
 msgstr ""
@@ -183,210 +183,216 @@ msgid "You are not allowed to do that."
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:6756
-#: includes/class-cache.php:6966
+#: includes/class-cache.php:6805
+#: includes/class-cache.php:7015
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to.
-#: includes/class-cache.php:6973
+#: includes/class-cache.php:7022
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to.
-#: includes/class-cache.php:6985
+#: includes/class-cache.php:7034
 #, php-format
 msgid "Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s"
 msgstr ""
 
 #. translators: 1: number of pages, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:7063
+#: includes/class-cache.php:7112
 #, php-format
 msgid "Purged %1$d page (%2$s), %3$d file(s) removed"
 msgid_plural "Purged %1$d pages (%2$s), %3$d file(s) removed"
 msgstr[0] ""
 msgstr[1] ""
 
-#: includes/class-cache.php:8112
+#: includes/class-cache.php:8233
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:8116
+#: includes/class-cache.php:8237
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:8120
+#: includes/class-cache.php:8241
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:8124
+#: includes/class-cache.php:8245
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:8128
+#: includes/class-cache.php:8249
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:8504
+#: includes/class-cache.php:8625
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:8510
+#: includes/class-cache.php:8631
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:8803
+#: includes/class-cache.php:8978
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:8810
+#: includes/class-cache.php:8985
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:8813
+#: includes/class-cache.php:8988
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:8888
+#: includes/class-cache.php:9063
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:8895
+#: includes/class-cache.php:9070
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9038
+#: includes/class-cache.php:9213
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9041
+#: includes/class-cache.php:9216
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9071
+#: includes/class-cache.php:9246
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:9128
+#: includes/class-cache.php:9303
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:9129
+#: includes/class-cache.php:9304
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9131
+#: includes/class-cache.php:9306
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9147
+#: includes/class-cache.php:9322
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9239
+#: includes/class-cache.php:9414
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9254
+#: includes/class-cache.php:9429
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9255
+#: includes/class-cache.php:9430
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:9272
+#: includes/class-cache.php:9447
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:9290
+#: includes/class-cache.php:9465
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9291
+#: includes/class-cache.php:9466
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:9303
+#: includes/class-cache.php:9478
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:9307
+#: includes/class-cache.php:9482
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
+#. translators: 1: running drop-in version, 2: bundled drop-in version.
+#: includes/class-cache.php:11747
+#, php-format
+msgid "The page cache is serving with an older copy of its drop-in (v%1$d; this version of xSpeed ships v%2$d). Loading any wp-admin page replaces it."
+msgstr ""
+
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:11732
+#: includes/class-cache.php:12101
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:11739
+#: includes/class-cache.php:12108
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:11794
+#: includes/class-cache.php:12163
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache.
-#: includes/class-cache.php:11805
+#: includes/class-cache.php:12174
 #, php-format
 msgid "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active."
 msgstr ""
 
-#: includes/class-cache.php:11810
+#: includes/class-cache.php:12179
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:11813
+#: includes/class-cache.php:12182
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:11814
+#: includes/class-cache.php:12183
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:11815
+#: includes/class-cache.php:12184
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:11816
+#: includes/class-cache.php:12185
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:11817
+#: includes/class-cache.php:12186
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:11818
+#: includes/class-cache.php:12187
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:11819
+#: includes/class-cache.php:12188
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:11821
+#: includes/class-cache.php:12190
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:12445
+#: includes/class-cache.php:12814
 #: includes/class-purge-ui.php:278
 #: includes/class-purge-ui.php:680
 msgid "Unauthorized."
@@ -528,7 +534,7 @@ msgid "Page cache lifetime %1$ds cannot be expressed in whole hours — importin
 msgstr ""
 
 #: includes/class-migration.php:358
-#: includes/modules/ObjectCache/ObjectCacheModule.php:119
+#: includes/modules/ObjectCache/ObjectCacheModule.php:120
 msgid "Redis password"
 msgstr ""
 
@@ -1045,56 +1051,86 @@ msgstr ""
 msgid "The page got measurably slower: median render time %1$dms before, %2$dms after (+%3$d%%), beyond what run-to-run noise explains. The change was undone."
 msgstr ""
 
-#: includes/class-plugin.php:424
+#: includes/class-plugin.php:428
 msgid "After the security update, xSpeed could not delete every cached page, so some pages cached before the update may still be served. It tries again every hour. Check that the web server can delete files in wp-content/cache/xspeed and wp-content/cache/xspeed-static."
 msgstr ""
 
 #. translators: %s: Cloudflare zone ID awaiting a full purge.
-#: includes/class-plugin.php:430
+#: includes/class-plugin.php:434
 #, php-format
 msgid "After the security update, a full Cloudflare purge has not been confirmed for zone %s. Purge everything for this zone through xSpeed or the Cloudflare dashboard. Automatic purge preferences have not been changed."
 msgstr ""
 
-#: includes/class-plugin.php:435
+#: includes/class-plugin.php:439
 msgid "I have purged this zone in Cloudflare"
 msgstr ""
 
-#: includes/class-plugin.php:442
+#: includes/class-plugin.php:446
 msgid "You do not have permission to confirm this purge."
 msgstr ""
 
-#: includes/class-plugin.php:447
+#: includes/class-plugin.php:451
 msgid "This zone is not awaiting purge confirmation."
 msgstr ""
 
 #. translators: 1: number of URLs, 2: the sitemap failure detail.
-#: includes/class-preloader.php:449
+#: includes/class-preloader.php:474
 #, php-format
 msgid "Preloader queued %1$d URLs from the site content — %2$s"
 msgstr ""
 
 #. translators: %s: the sitemap failure detail.
-#: includes/class-preloader.php:457
+#: includes/class-preloader.php:482
 #, php-format
 msgid "Preloader could not start — %s"
 msgstr ""
 
 #. translators: 1: number of URLs, 2: plural suffix.
-#: includes/class-preloader.php:464
+#: includes/class-preloader.php:489
 #, php-format
 msgid "Preloader queued %1$d URL%2$s for warming."
 msgstr ""
 
+#. translators: %d: number of URLs left out of the crawl.
+#: includes/class-preloader.php:499
+#, php-format
+msgid "Skipped %d (excluded post types, cache exclusions, filters or the 5000-URL cap)."
+msgstr ""
+
 #. translators: 1: sitemap URL, 2: error detail.
-#: includes/class-preloader.php:916
+#: includes/class-preloader.php:1186
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — %2$s"
 msgstr ""
 
 #. translators: 1: sitemap URL, 2: HTTP status code.
-#: includes/class-preloader.php:929
+#: includes/class-preloader.php:1199
 #, php-format
 msgid "Could not fetch the sitemap at %1$s — the server returned HTTP %2$d."
+msgstr ""
+
+#. translators: %s: sitemap URL.
+#: includes/class-preloader.php:1218
+#, php-format
+msgid "The address %s did not return a sitemap."
+msgstr ""
+
+#. translators: 1: URLs warmed so far, 2: URLs in the crawl.
+#: includes/class-preloader.php:1291
+#, php-format
+msgid "Scheduled preload skipped: a crawl is still running (%1$d/%2$d URLs warmed)."
+msgstr ""
+
+#. translators: 1: URLs warmed, 2: URLs in the crawl.
+#: includes/class-preloader.php:1305
+#, php-format
+msgid "Preloader restarted a crawl that had stopped moving (%1$d/%2$d URLs warmed)."
+msgstr ""
+
+#. translators: 1: URLs warmed, 2: URLs in the crawl.
+#: includes/class-preloader.php:1357
+#, php-format
+msgid "Preloader resumed a crawl that had stopped moving (%1$d/%2$d URLs warmed)."
 msgstr ""
 
 #. translators: %s: cache store name, e.g. "Cloudflare edge".
@@ -1339,11 +1375,11 @@ msgstr ""
 msgid "Open Cloudflare settings"
 msgstr ""
 
-#: includes/class-recommendations.php:419
+#: includes/class-recommendations.php:421
 msgid "This recommendation links to a settings screen; it has no one-click fix."
 msgstr ""
 
-#: includes/class-recommendations.php:452
+#: includes/class-recommendations.php:454
 msgid "Unknown or no-longer-applicable recommendation."
 msgstr ""
 
@@ -1667,7 +1703,7 @@ msgid "Cache expiry (hours)"
 msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:200
-msgid "How long a cached page is kept before xSpeed builds it again. 1 to 720 hours (30 days)."
+msgid "How long a cached page is kept before xSpeed builds it again. 1 to 720 hours (30 days). When the web server serves cached pages itself (the nginx or Apache fast path), an hourly sweep deletes expired pages, so one is usually served for up to an hour past this time; a very large cache, or a site with little traffic (which runs scheduled tasks less often), can take longer."
 msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:231
@@ -1723,7 +1759,7 @@ msgid "Which pages are cleared"
 msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:276
-msgid "The post, its old address if it moved, the home page, the blog page, its categories, tags and author pages with every page of each, the date archives, feeds, the posts next to it, pages that show a Latest Posts or Query Loop block, directly or in a synced pattern, and pages noted running a post grid of their own (a page builder, block plugin, related-posts or theme list) that the change can affect. If your theme shows a list that can be on any page, and the change alters it, xSpeed clears the whole site instead: a Recent Posts, Archives or Calendar widget, a post list block, or a latest-posts grid from a page builder or plugin (usually a new post, or an edit to one of the newest few it shows), a page list or menu (a page published, withdrawn, renamed or moved), or a Categories or Tag Cloud list (a post moved to other categories or tags)."
+msgid "The post, its old address if it moved, the home page, the blog page, its categories, tags and author pages with every page of each, the date archives, feeds, the posts next to it, pages that show a Latest Posts or Query Loop block, directly or in a synced pattern, and pages noted running a post grid of their own (a page builder, block plugin, related-posts or theme list) that the change can affect. If your theme shows a list that can be on any page, and the change alters it, xSpeed clears the whole site instead: a Recent Posts, Archives or Calendar widget, a post list block, or a latest-posts grid from a page builder or plugin (usually a new post, or an edit to one of the newest few it shows), a page list or menu (a page published, withdrawn, renamed or moved), or a Categories or Tag Cloud list (a post moved to other categories or tags). While a widget from another plugin is active (an events list, for example), a change to a custom post type clears the whole site, and so does a change to a theme builder layout such as a Thrive symbol or template."
 msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:281
@@ -1922,14 +1958,20 @@ msgstr ""
 msgid "Clear the Cloudflare cache each time xSpeed clears its own, for example after you save a post."
 msgstr ""
 
+#. translators: %s: why the edge could not be purged.
+#: includes/modules/Cloudflare/CloudflareModule.php:321
+#, php-format
+msgid "Cloudflare edge not purged after a cache purge: %s"
+msgstr ""
+
 #. translators: %d: number of URLs that changed at once.
-#: includes/modules/Cloudflare/CloudflareModule.php:489
+#: includes/modules/Cloudflare/CloudflareModule.php:527
 #, php-format
 msgid "Purging the whole Cloudflare zone: %d URLs changed at once, too many to purge individually"
 msgstr ""
 
 #. translators: %d: number of URLs.
-#: includes/modules/Cloudflare/CloudflareModule.php:550
+#: includes/modules/Cloudflare/CloudflareModule.php:588
 #, php-format
 msgid "Skipped a queued Cloudflare purge of %d URL: the connection is no longer available"
 msgid_plural "Skipped a queued Cloudflare purge of %d URLs: the connection is no longer available"
@@ -1937,7 +1979,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %d: number of URLs purged.
-#: includes/modules/Cloudflare/CloudflareModule.php:581
+#: includes/modules/Cloudflare/CloudflareModule.php:619
 #, php-format
 msgid "Purged %d URL from the Cloudflare edge cache"
 msgid_plural "Purged %d URLs from the Cloudflare edge cache"
@@ -1945,60 +1987,60 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: 1: number of URLs, 2: failure reason.
-#: includes/modules/Cloudflare/CloudflareModule.php:597
+#: includes/modules/Cloudflare/CloudflareModule.php:635
 #, php-format
 msgid "Cloudflare URL purge failed (%1$d URL(s)): %2$s"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:599
-#: includes/modules/Cloudflare/CloudflareModule.php:670
+#: includes/modules/Cloudflare/CloudflareModule.php:637
+#: includes/modules/Cloudflare/CloudflareModule.php:708
 msgid "unknown error"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:615
+#: includes/modules/Cloudflare/CloudflareModule.php:653
 msgid "the Cloudflare integration is switched off"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:622
+#: includes/modules/Cloudflare/CloudflareModule.php:660
 msgid "no zone ID or API credentials are configured"
 msgstr ""
 
 #. translators: %s: what asked for the purge.
-#: includes/modules/Cloudflare/CloudflareModule.php:658
+#: includes/modules/Cloudflare/CloudflareModule.php:696
 #, php-format
 msgid "Purged the Cloudflare edge cache (%s)"
 msgstr ""
 
 #. translators: 1: what asked for the purge, 2: failure reason.
-#: includes/modules/Cloudflare/CloudflareModule.php:668
+#: includes/modules/Cloudflare/CloudflareModule.php:706
 #, php-format
 msgid "Cloudflare purge failed (%1$s): %2$s"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:742
+#: includes/modules/Cloudflare/CloudflareModule.php:780
 msgid "Cloudflare is not fully configured."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:743
+#: includes/modules/Cloudflare/CloudflareModule.php:781
 msgid "Add your API token (or Global API Key + account email) and the Zone ID, then press Verify. Until then auto-purge does nothing."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:756
+#: includes/modules/Cloudflare/CloudflareModule.php:794
 msgid "Cloudflare purge is failing."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:759
+#: includes/modules/Cloudflare/CloudflareModule.php:797
 #, php-format
 msgid "The last edge purge was rejected by Cloudflare%s. Confirm the API token includes the \"Zone → Cache Purge\" permission for this zone — a token that can read the zone can still lack purge rights."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:768
+#: includes/modules/Cloudflare/CloudflareModule.php:806
 msgid "Cloudflare credentials were rejected."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:771
+#: includes/modules/Cloudflare/CloudflareModule.php:809
 #, php-format
 msgid "The saved credentials could not verify this zone%s. Auto-purge will not work until this is fixed."
 msgstr ""
@@ -2364,7 +2406,7 @@ msgid "Add missing image sizes"
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:115
-msgid "Adds width and height to images that lack them, using the media library. This stops the page from jumping as images load."
+msgid "Adds width and height to images that lack them, using the media library. For an image hosted on another site, xSpeed reads the start of the file while warming the cache. This stops the page from jumping as images load."
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:121
@@ -2924,7 +2966,7 @@ msgid "Preloader"
 msgstr ""
 
 #: includes/modules/Migration/MigrationModule.php:553
-#: includes/modules/ObjectCache/ObjectCacheModule.php:33
+#: includes/modules/ObjectCache/ObjectCacheModule.php:34
 msgid "Object Cache"
 msgstr ""
 
@@ -2944,63 +2986,72 @@ msgstr ""
 msgid "it could not be enabled"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:711
+#: includes/modules/Migration/MigrationModule.php:712
 msgid "Migrating…"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:728
+#: includes/modules/Migration/MigrationModule.php:729
 msgid "Migration failed."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:731
+#: includes/modules/Migration/MigrationModule.php:732
 msgid "the source plugin"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:732
+#: includes/modules/Migration/MigrationModule.php:733
 msgid "Review imported settings"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:743
-#: includes/modules/Migration/MigrationModule.php:754
-#: includes/modules/Migration/MigrationModule.php:762
-msgid "settings are now running in xSpeed."
-msgstr ""
-
 #: includes/modules/Migration/MigrationModule.php:745
-#: includes/modules/Migration/MigrationModule.php:755
-msgid "It has been switched off, so the two page caches cannot conflict."
-msgstr ""
-
-#: includes/modules/Migration/MigrationModule.php:746
-msgid "It is still active — switch it off when you are ready."
+msgid "settings were imported, but not all of them."
 msgstr ""
 
 #: includes/modules/Migration/MigrationModule.php:747
+#: includes/modules/Migration/MigrationModule.php:757
+msgid "It has been switched off, so the two page caches cannot conflict."
+msgstr ""
+
+#: includes/modules/Migration/MigrationModule.php:748
+msgid "It is still active — switch it off when you are ready."
+msgstr ""
+
+#: includes/modules/Migration/MigrationModule.php:749
 msgid "Not imported as-is:"
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:763
+#: includes/modules/Migration/MigrationModule.php:756
+#: includes/modules/Migration/MigrationModule.php:764
+msgid "settings are now running in xSpeed."
+msgstr ""
+
+#: includes/modules/Migration/MigrationModule.php:765
 msgid "It is still active — running two page caches conflicts, so switch it off when you are ready."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:772
+#: includes/modules/Migration/MigrationModule.php:774
 msgid "Migration could not finish."
 msgstr ""
 
-#: includes/modules/Migration/MigrationModule.php:773
+#: includes/modules/Migration/MigrationModule.php:775
 msgid "Nothing was changed — you can try again."
 msgstr ""
 
 #. translators: %s: source plugin label.
-#: includes/modules/Migration/MigrationModule.php:1006
+#: includes/modules/Migration/MigrationModule.php:1013
 #, php-format
 msgid "%s is activated across the whole network, so only a network administrator can switch it off. Your settings were imported — ask a network administrator to deactivate it."
 msgstr ""
 
 #. translators: %s: source plugin label.
-#: includes/modules/Migration/MigrationModule.php:1011
+#: includes/modules/Migration/MigrationModule.php:1018
 #, php-format
 msgid "Your account can change settings but not switch plugins off, so %s is still active. Your settings were imported — ask an administrator to deactivate it."
+msgstr ""
+
+#. translators: %s: source plugin label.
+#: includes/modules/Migration/MigrationModule.php:1121
+#, php-format
+msgid "Enabled once %s was switched off."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:36
@@ -3044,196 +3095,210 @@ msgid "Runs scripts after the page has loaded, so content shows sooner. jQuery a
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:81
-msgid "Delay JavaScript"
+msgid "Defer the cookie consent banner"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:82
-msgid "Scripts load only when the visitor scrolls, taps or types. Pages show much sooner, but test menus and sliders. Cookie consent banners still load first."
-msgstr ""
-
-#: includes/modules/Minify/MinifyModule.php:87
-msgid "Load CSS without blocking"
+msgid "Loads the consent banner script without holding up the page. The banner still appears as soon as the page loads, and Delay JS never postpones it. Leave this off if your consent tool must block other scripts that run before it."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:88
-msgid "On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump."
+msgid "Delay JavaScript"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:93
-msgid "Remove version from file URLs"
+#: includes/modules/Minify/MinifyModule.php:89
+msgid "Scripts load only when the visitor scrolls, taps or types. Pages show much sooner, but test menus and sliders. Cookie consent banners still load first."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:94
-msgid "Removes ?ver= from CSS and JS links, which some CDNs cache better. After a plugin update, returning visitors may keep old files until their browser cache expires."
+msgid "Load CSS without blocking"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:95
+msgid "On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:100
+msgid "Remove version from file URLs"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:101
+msgid "Removes ?ver= from CSS and JS links, which some CDNs cache better. After a plugin update, returning visitors may keep old files until their browser cache expires."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:108
 msgid "Scripts to never defer or delay"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:102
+#: includes/modules/Minify/MinifyModule.php:109
 msgid "Script handles or parts of script URLs, one per line. jQuery is listed because most themes need it early; cookie consent banners are skipped on their own."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:116
+#: includes/modules/Minify/MinifyModule.php:123
 msgid "Delay only these scripts"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:117
+#: includes/modules/Minify/MinifyModule.php:124
 msgid "Script handles or parts of script URLs, one per line. Leave empty to delay all scripts; otherwise only these, plus known trackers and chat widgets, are delayed."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:118
+#: includes/modules/Minify/MinifyModule.php:125
 msgid "Consent banners and Delay JS"
 msgstr ""
 
 #. translators: %s: comma-separated list of consent plugins, each followed by the word to type in parentheses.
-#: includes/modules/Minify/MinifyModule.php:121
+#: includes/modules/Minify/MinifyModule.php:128
 #, php-format
 msgid "These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Scripts to never defer or delay always wins."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:129
+#: includes/modules/Minify/MinifyModule.php:136
 msgid "Smart delay"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:130
+#: includes/modules/Minify/MinifyModule.php:137
 msgid "Also delays scripts that code on the page depends on, which helps page builder sites most. The riskiest setting here, so test menus and sliders."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:138
+#: includes/modules/Minify/MinifyModule.php:145
 msgid "Delay timeout (ms)"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:140
+#: includes/modules/Minify/MinifyModule.php:147
 msgid "Load delayed scripts after this long if the visitor does nothing. Set 0 to wait for a scroll, tap or key press only."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:147
+#: includes/modules/Minify/MinifyModule.php:154
 msgid "Combine CSS files"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:148
+#: includes/modules/Minify/MinifyModule.php:155
 msgid "Joins your site's own CSS files into one. This helps only on old HTTP/1.1 servers, so leave it off on most hosts."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:154
+#: includes/modules/Minify/MinifyModule.php:161
 msgid "Combine JavaScript files"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:155
+#: includes/modules/Minify/MinifyModule.php:162
 msgid "Joins your site's own scripts into one file. Turn off if a script stops working after you enable it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:294
+#: includes/modules/Minify/MinifyModule.php:301
 msgid "HTML minification is paused because WP_DEBUG is enabled in wp-config.php. Readable HTML is usually what you want while debugging, so xSpeed leaves the markup alone. Cached pages are served un-minified until WP_DEBUG is turned off."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:295
+#: includes/modules/Minify/MinifyModule.php:302
 msgid "HTML minification is paused because a plugin or theme is returning true from the xspeed_skip_minify filter. Cached pages are served un-minified until that filter stops suppressing it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:300
+#: includes/modules/Minify/MinifyModule.php:307
 msgid "HTML minification is on but currently paused"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:35
+#: includes/modules/ObjectCache/ObjectCacheModule.php:36
 msgid "Stores database query results in Redis or Memcached so pages build faster."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:63
+#: includes/modules/ObjectCache/ObjectCacheModule.php:64
 msgid "Cache server"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:64
+#: includes/modules/ObjectCache/ObjectCacheModule.php:65
 msgid "The cache server your host provides. Ask your host if you are not sure."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:83
+#: includes/modules/ObjectCache/ObjectCacheModule.php:84
 msgid "Redis host"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:84
+#: includes/modules/ObjectCache/ObjectCacheModule.php:85
 msgid "Address of the Redis server, or the path to its socket file if your host gave you one (for example /run/redis/redis.sock). Use 127.0.0.1 when Redis runs on the same server as your site."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:93
+#: includes/modules/ObjectCache/ObjectCacheModule.php:94
 msgid "Redis port"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:94
+#: includes/modules/ObjectCache/ObjectCacheModule.php:95
 msgid "The default Redis port is 6379. Not used when the host is a socket path."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:110
+#: includes/modules/ObjectCache/ObjectCacheModule.php:111
 msgid "Redis username"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:111
+#: includes/modules/ObjectCache/ObjectCacheModule.php:112
 msgid "Only needed if your host gave you a Redis username along with the password. Leave blank otherwise."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:120
+#: includes/modules/ObjectCache/ObjectCacheModule.php:121
 msgid "Leave blank if your Redis server has no password."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:129
+#: includes/modules/ObjectCache/ObjectCacheModule.php:130
 msgid "Redis database"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:130
+#: includes/modules/ObjectCache/ObjectCacheModule.php:131
 msgid "Database number, 0 to 15. If several sites share one Redis server, give each site its own number."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:159
+#: includes/modules/ObjectCache/ObjectCacheModule.php:160
 msgid "Memcached host"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:160
+#: includes/modules/ObjectCache/ObjectCacheModule.php:161
 msgid "Address of the Memcached server. Use 127.0.0.1 when it runs on the same server as your site."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:182
+#: includes/modules/ObjectCache/ObjectCacheModule.php:183
 msgid "Memcached port"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:183
+#: includes/modules/ObjectCache/ObjectCacheModule.php:184
 msgid "The default Memcached port is 11211."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:211
+#: includes/modules/ObjectCache/ObjectCacheModule.php:212
 msgid "Cache key prefix"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:212
+#: includes/modules/ObjectCache/ObjectCacheModule.php:213
 msgid "Leave blank and xSpeed picks a unique prefix for this site. Some managed Redis hosts, such as xCloud, give you a key to paste here, or nothing gets saved."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:222
+#: includes/modules/ObjectCache/ObjectCacheModule.php:223
 msgid "Connection timeout (seconds)"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:224
+#: includes/modules/ObjectCache/ObjectCacheModule.php:225
 msgid "How long to wait for the cache server. Keep it at 1 or 2 seconds so a broken cache server never holds up a page."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:231
+#: includes/modules/ObjectCache/ObjectCacheModule.php:232
 msgid "Persistent connections"
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:232
+#: includes/modules/ObjectCache/ObjectCacheModule.php:233
 msgid "Keep the connection open between page loads. Turn off only if your cache server reports too many idle connections."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1069
+#. translators: %s: the connection test's message.
+#: includes/modules/ObjectCache/ObjectCacheModule.php:729
+#, php-format
+msgid "The Redis username or password was not saved, because the connection test with them failed: %s Your other settings are unchanged."
+msgstr ""
+
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1146
 msgid "The object cache drop-in is installed and storing data. This is measured from the running cache, not from the settings on this page."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1072
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1149
 msgid "The drop-in is installed but is not storing anything, so this counts as off. Check the connection settings below."
 msgstr ""
 
-#: includes/modules/ObjectCache/ObjectCacheModule.php:1074
+#: includes/modules/ObjectCache/ObjectCacheModule.php:1151
 msgid "No object cache is running. Entering a host below does not switch it on by itself -- the drop-in has to be installed and connect successfully."
 msgstr ""
 
@@ -3299,7 +3364,15 @@ msgstr ""
 msgid "A new comment clears the page from the cache. This caches the page again right away."
 msgstr ""
 
-#: includes/modules/Preloader/PreloaderModule.php:300
+#: includes/modules/Preloader/PreloaderModule.php:130
+msgid "Skip these post types"
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:131
+msgid "Leave these post types out of the crawl, for example members-only lessons that a logged-out visitor only sees as a login prompt. Works with the WordPress, Yoast SEO, Rank Math, SEOPress and All in One SEO sitemaps; a sitemap named another way is crawled in full."
+msgstr ""
+
+#: includes/modules/Preloader/PreloaderModule.php:361
 msgid "Enable the preloader before starting a crawl."
 msgstr ""
 
@@ -3316,7 +3389,7 @@ msgid "Share usage data"
 msgstr ""
 
 #: includes/modules/Privacy/PrivacyModule.php:62
-msgid "Sends your WordPress and PHP versions, theme, plugins, server type and the features you use, never page content. Turn it off to stop all sending."
+msgid "When you turn this on, WPDeveloper receives your email address and display name. After that, once a day: the site URL and name, your WordPress and PHP versions, theme, plugins, server type and xSpeed settings. Never page content. Turn it off to stop all sending."
 msgstr ""
 
 #: includes/modules/ResourceHints/ResourceHintsModule.php:60
@@ -3585,12 +3658,12 @@ msgstr ""
 msgid "A full graded report: Core Web Vitals, caching, assets and platform."
 msgstr ""
 
-#. Source: src/components/SecretField.tsx:95
+#. Source: src/components/SecretField.tsx:103
 #: assets/admin.js
 msgid "A key is saved. Type to replace it; use ✕ to remove it."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:245
+#. Source: src/components/cache/CacheHero.tsx:252
 #: assets/admin.js
 msgid "Absorbed"
 msgstr ""
@@ -3698,6 +3771,11 @@ msgstr ""
 msgid "Another plugin owns the page cache on this site, so xSpeed is serving nothing."
 msgstr ""
 
+#. Source: src/components/cache/CacheHero.tsx:245
+#: assets/admin.js
+msgid "Apache serves most cached pages straight from disk, without PHP, and its access log records the page address rather than the cached file, so those hits cannot be counted. This ratio covers PHP-served pages only, and a low number does not mean the cache is failing."
+msgstr ""
+
 #. Source: src/components/cache/NextBestAction.tsx:122
 #. Source: src/components/overview/Recommendations.tsx:101
 #: assets/admin.js
@@ -3769,7 +3847,7 @@ msgstr ""
 msgid "Book a free setup review with our team."
 msgstr ""
 
-#. Source: src/components/cache/CacheHero.tsx:249
+#. Source: src/components/cache/CacheHero.tsx:256
 #: assets/admin.js
 msgid "bot, 404 and cache-warming requests in 24h — excluded from the hit ratio."
 msgstr ""
@@ -4344,7 +4422,7 @@ msgstr ""
 msgid "Go to Dashboard"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:165
+#. Source: src/onboarding/OnboardingApp.tsx:163
 #: assets/admin.js
 msgid "Go to the dashboard"
 msgstr ""
@@ -4465,6 +4543,11 @@ msgstr ""
 #. Source: src/components/score/ConnectHubModal.tsx:118
 #: assets/admin.js
 msgid "It takes a few seconds."
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:69
+#: assets/admin.js
+msgid "Its advanced-cache.php was saved as %s."
 msgstr ""
 
 #. Source: src/components/cache/CacheHero.tsx:220
@@ -4868,7 +4951,7 @@ msgstr ""
 msgid "on your xSpeed Hub account."
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:156
+#. Source: src/onboarding/OnboardingApp.tsx:154
 #: assets/admin.js
 msgid "Onboarding data unavailable"
 msgstr ""
@@ -4959,7 +5042,7 @@ msgstr ""
 msgid "Partly cleared"
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:840
+#. Source: src/components/migration/MigrationPanel.tsx:882
 #: assets/admin.js
 msgid "Paste an xSpeed profile JSON here, or choose a .json file below."
 msgstr ""
@@ -4994,7 +5077,7 @@ msgstr ""
 
 #. Source: src/components/overview/MetricGrid.tsx:52
 #: assets/admin.js
-msgid "PHP-served only — static fast path hits are not counted"
+msgid "PHP-served only — static hits are not counted"
 msgstr ""
 
 #. Source: src/components/score/ScorePanel.tsx:713
@@ -5062,7 +5145,7 @@ msgstr ""
 #. Source: src/components/GroupLanding.tsx:44
 #. Source: src/components/ModuleHeader.tsx:57
 #. Source: src/components/Tabs.tsx:97
-#. Source: src/components/migration/MigrationPanel.tsx:690
+#. Source: src/components/migration/MigrationPanel.tsx:732
 #. Source: src/components/overview/FeatureMap.tsx:47
 #. Source: src/upsell/LockedSection.tsx:70
 #. Source: src/upsell/ProAudit.tsx:66
@@ -5106,7 +5189,7 @@ msgstr ""
 msgid "Pro unlocks this module + every other locked row in the sidebar. Your current Free settings stay unchanged."
 msgstr ""
 
-#. Source: src/components/migration/MigrationPanel.tsx:842
+#. Source: src/components/migration/MigrationPanel.tsx:884
 #: assets/admin.js
 msgid "Profile JSON to import"
 msgstr ""
@@ -5241,12 +5324,12 @@ msgstr ""
 msgid "Reload the page. If it happens again, update xSpeed and xSpeed Cache Pro to their latest versions."
 msgstr ""
 
-#. Source: src/components/SecretField.tsx:116
+#. Source: src/components/SecretField.tsx:124
 #: assets/admin.js
 msgid "Remove"
 msgstr ""
 
-#. Source: src/components/SecretField.tsx:115
+#. Source: src/components/SecretField.tsx:123
 #: assets/admin.js
 msgid "Remove the saved key"
 msgstr ""
@@ -5451,7 +5534,7 @@ msgstr ""
 msgid "Serving cached pages… impact numbers appear once today’s hits accumulate."
 msgstr ""
 
-#. Source: src/components/SecretField.tsx:89
+#. Source: src/components/SecretField.tsx:97
 #: assets/admin.js
 msgid "Set in wp-config.php"
 msgstr ""
@@ -5597,9 +5680,34 @@ msgstr ""
 msgid "The last scan did not complete."
 msgstr ""
 
+#. Source: src/components/migration/MigrationPanel.tsx:71
+#: assets/admin.js
+msgid "The page cache is not on yet: turn it on in Page Cache."
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:73
+#: assets/admin.js
+msgid "The page cache is on and served the home page from cache."
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:75
+#: assets/admin.js
+msgid "The page cache is on. A cached home page could not be confirmed yet, which is normal for a few seconds after the switch. Load the home page again in a private window, or check Cache Health."
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:77
+#: assets/admin.js
+msgid "The page cache is on. xSpeed could not load the home page to check it."
+msgstr ""
+
 #. Source: src/components/purgeOutcome.ts:78
 #: assets/admin.js
 msgid "The page cache was already empty."
+msgstr ""
+
+#. Source: src/components/migration/MigrationPanel.tsx:466
+#: assets/admin.js
+msgid "The profile was applied, but not all of it"
 msgstr ""
 
 #. Source: src/components/purgeOutcome.ts:63
@@ -5612,7 +5720,7 @@ msgstr ""
 msgid "This cache is large enough that the scan stopped early — the list below is a recent sample, not every page."
 msgstr ""
 
-#. Source: src/components/SecretField.tsx:93
+#. Source: src/components/SecretField.tsx:101
 #: assets/admin.js
 msgid "This credential is defined in wp-config.php and cannot be changed here."
 msgstr ""
@@ -5760,7 +5868,7 @@ msgstr ""
 msgid "Want a hand?"
 msgstr ""
 
-#. Source: src/onboarding/OnboardingApp.tsx:159
+#. Source: src/onboarding/OnboardingApp.tsx:157
 #: assets/admin.js
 msgid "We couldn't load the setup wizard. Your site is unaffected — you can configure everything from the dashboard."
 msgstr ""

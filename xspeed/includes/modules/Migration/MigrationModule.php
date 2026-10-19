@@ -637,6 +637,7 @@ final class MigrationModule extends Module {
 				'deactivated' => ! empty( $data['deactivated'] ),
 				'refused'     => (string) ( $data['refused_message'] ?? '' ),
 				'failed'      => $failed,
+				'outcome'     => (string) ( $data['outcome'] ?? ( empty( $failed ) ? 'complete' : 'partial' ) ),
 				'panel_url'   => admin_url( 'admin.php?page=xspeed' ) . '#migration',
 			)
 		);
@@ -734,13 +735,14 @@ final class MigrationModule extends Module {
 				// Three outcomes, because a flat "Done" would hide a
 				// half-applied import or a plugin still running.
 				if (d.failed && d.failed.length) {
-					// The import SUCCEEDED — one optional group could not be
-					// enabled (no Redis for the object cache, say). Reporting
-					// that in red read as a failed migration and sent people
-					// looking for a problem that was not there.
+					// Most of it applied, some did not. Not red: that read as
+					// a failed migration (no Redis for the object cache, say).
+					// Not a green "now running" either: that overstated it
+					// when the part that failed was the page cache. Amber, and
+					// the headline says it was partial, like the panel. (#392)
 					say(
-						'ok',
-						name + ' <?php echo esc_js( __( 'settings are now running in xSpeed.', 'xspeed' ) ); ?>',
+						'partial',
+						name + ' <?php echo esc_js( __( 'settings were imported, but not all of them.', 'xspeed' ) ); ?>',
 						(d.deactivated
 							? '<?php echo esc_js( __( 'It has been switched off, so the two page caches cannot conflict.', 'xspeed' ) ); ?>'
 							: (d.refused || '<?php echo esc_js( __( 'It is still active — switch it off when you are ready.', 'xspeed' ) ); ?>')),
@@ -951,6 +953,10 @@ final class MigrationModule extends Module {
 		 */
 		$deactivate = ! empty( $params['deactivate_source'] );
 
+		// Taken before the import, not at the handover: importing the
+		// source's page-cache switch runs Cache::toggle( true ), which can
+		// already replace its drop-in. (#393)
+		$backup  = $deactivate ? self::back_up_foreign_dropin( $source ) : null;
 		$results = Migration::apply( $source );
 
 		$deactivated  = false;
@@ -980,6 +986,7 @@ final class MigrationModule extends Module {
 
 		$refused          = '';
 		$refused_message  = '';
+		$handover         = null;
 		$import_completed = Migration::completed_successfully( (array) $results );
 		// Gate the handover on the modules that MATTER, not on every one.
 		// completed_successfully() is all-or-nothing, so a host without Redis
@@ -1018,9 +1025,25 @@ final class MigrationModule extends Module {
 					// removes WP_CACHE and can take the shared drop-in file
 					// with it — leaving our own page cache configured-on but
 					// not actually serving. Re-assert both. (#219)
-					$this->restore_own_environment();
+					$handover = $this->restore_own_environment( $source, $backup );
+
+					// Page caching usually failed at import time BECAUSE the
+					// source held the drop-in. If it serves now, that failure
+					// is over: report the page cache as enabled, or the panel
+					// and the notice say "could not be applied" about a cache
+					// that is running (#392).
+					if ( $handover['enabled'] && isset( $results['cache'] ) && is_array( $results['cache'] ) && empty( $results['cache']['ok'] ) ) {
+						$results['cache'] = self::reconcile_cache_result( $results['cache'], $source_label );
+					}
 				}
 			}
+		}
+
+		// The copy was taken before the import, in case the switch happened.
+		// It didn't, so the old drop-in is still the live one: drop the copy
+		// rather than leave an unannounced file in wp-content on every retry.
+		if ( null === $handover ) {
+			self::discard_backup( $backup );
 		}
 
 		// The user declined (or was refused) and the source is still running.
@@ -1056,8 +1079,74 @@ final class MigrationModule extends Module {
 				// prints this verbatim rather than mapping codes to copy, so
 				// the network-vs-site distinction stays in one place.
 				'refused_message' => $refused_message,
+				// complete | partial | failed, from the results after any
+				// handover. The panel and the dashboard notice both read
+				// this, so the same import is never green in one place and
+				// red in the other (#392).
+				'outcome'         => self::outcome( (array) $results ),
+				// Set only when we switched the source off and took over:
+				// where its drop-in was saved, and whether the page cache
+				// answered a request as a HIT afterwards (#393).
+				'handover'        => $handover,
 			)
 		);
+	}
+
+	/**
+	 * The handover resolves the enable refusal, not other failed settings.
+	 *
+	 * @param array<string,mixed> $result The cache group's import result.
+	 * @param string $source_label Source plugin label.
+	 * @return array<string,mixed> The result with the resolved refusal removed.
+	 */
+	private static function reconcile_cache_result( array $result, string $source_label ): array {
+		$resolved = false;
+		$skipped  = array();
+		foreach ( (array) ( $result['skipped'] ?? array() ) as $row ) {
+			if ( 'enabled' === ( $row['key'] ?? '' ) && empty( $row['pinned'] ) ) {
+				$resolved = true;
+				continue;
+			}
+			$skipped[] = $row;
+		}
+		if ( ! $resolved ) {
+			return $result;
+		}
+		$result['skipped'] = $skipped;
+		$result['applied'] = array_values( array_unique( array_merge( (array) ( $result['applied'] ?? array() ), array( 'enabled' ) ) ) );
+		// Pinned values remain intentional choices under the import contract.
+		$result['ok'] = empty( array_filter( $skipped, static fn( $row ) => empty( $row['pinned'] ) ) );
+		$result['message'] = sprintf(
+			/* translators: %s: source plugin label. */
+			__( 'Enabled once %s was switched off.', 'xspeed' ),
+			$source_label
+		);
+		return $result;
+	}
+
+	/**
+	 * 'complete' when every attempted group applied, 'failed' when none did,
+	 * 'partial' in between.
+	 *
+	 * @param array<string,mixed> $results Per-module apply results.
+	 */
+	private static function outcome( array $results ): string {
+		$ok  = 0;
+		$bad = 0;
+		foreach ( $results as $r ) {
+			if ( ! is_array( $r ) ) {
+				continue;
+			}
+			if ( empty( $r['ok'] ) ) {
+				++$bad;
+			} else {
+				++$ok;
+			}
+		}
+		if ( 0 === $bad ) {
+			return 'complete';
+		}
+		return 0 === $ok ? 'failed' : 'partial';
 	}
 
 	/**
@@ -1184,10 +1273,19 @@ final class MigrationModule extends Module {
 	 * Not a licence to trample: toggle() still refuses on an occupied field,
 	 * so a page cache we were not asked to replace is left alone.
 	 */
-	private function restore_own_environment(): void {
+	private function restore_own_environment( string $source, ?string $backup = null ): array {
+		$out = array(
+			'backup'         => null,
+			'enabled'        => false,
+			'cache_verified' => 'unknown',
+		);
 		if ( ! class_exists( '\\XSpeed\\Cache' ) || ! class_exists( '\\XSpeed\\Settings' ) ) {
-			return;
+			return $out;
 		}
+
+		// Keep a copy of the source's drop-in (the caller's, if taken before
+		// the import), so the handover can be undone by hand. (#393)
+		$out['backup'] = $backup ?? self::back_up_foreign_dropin( $source );
 
 		/*
 		 * Turn caching ON, rather than only re-asserting it when it was
@@ -1202,6 +1300,105 @@ final class MigrationModule extends Module {
 		 * cannot trample a cache we were not asked to replace.
 		 */
 		\XSpeed\Cache::toggle( true );
+
+		$out['enabled'] = \XSpeed\Cache::page_cache_operational();
+		if ( $out['enabled'] ) {
+			$out['cache_verified'] = self::verify_page_cache();
+		}
+		return $out;
+	}
+
+	/**
+	 * Copy another plugin's advanced-cache.php aside before it is replaced.
+	 *
+	 * @param string $source Source plugin id, for the file name.
+	 * @return string|null The backup path, or null when there was nothing to keep.
+	 */
+	private static function back_up_foreign_dropin( string $source ): ?string {
+		$dropin = WP_CONTENT_DIR . '/advanced-cache.php';
+		if ( ! file_exists( $dropin ) || 0 === (int) filesize( $dropin ) ) {
+			return null; // Nothing there, or the 0-byte stub WP Rocket leaves.
+		}
+		// Anyone's but ours. With the source just switched off its file
+		// usually reads as ABANDONED (no running cache owns it), not FOREIGN.
+		$owner = \XSpeed\Cache::dropin_owner();
+		if ( ! in_array( $owner, array( \XSpeed\Cache::DROPIN_FOREIGN, \XSpeed\Cache::DROPIN_ABANDONED ), true ) ) {
+			return null;
+		}
+		$slug = sanitize_key( $source );
+		// No .php extension, so the copy is never executed. wp-content is
+		// web-served, and the copy is plain text there. The random tail
+		// keeps its URL from being guessed from the plugin name and the
+		// time of the import.
+		$backup = $dropin . '.xspeed-bak-' . ( '' !== $slug ? $slug : 'source' ) . '-' . gmdate( 'YmdHis' ) . '-' . bin2hex( random_bytes( 6 ) );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- a same-directory copy of one file; WP_Filesystem is not guaranteed in this REST context.
+		return @copy( $dropin, $backup ) ? $backup : null; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best effort; null reports it.
+	}
+
+	/**
+	 * Delete a drop-in copy that turned out not to be needed.
+	 *
+	 * @param string|null $backup Path from back_up_foreign_dropin().
+	 */
+	private static function discard_backup( ?string $backup ): void {
+		// Only ever a file this module named; never anything else in wp-content.
+		if ( null === $backup || false === strpos( basename( $backup ), 'advanced-cache.php.xspeed-bak-' ) || ! is_file( $backup ) ) {
+			return;
+		}
+		wp_delete_file( $backup );
+	}
+
+	/** Requests verify_page_cache() makes before it settles for MISS. */
+	private const VERIFY_ATTEMPTS = 5;
+
+	/** @var int Seconds between verify_page_cache()'s later requests. */
+	private static $verify_delay = 1;
+
+	/**
+	 * Does the page cache answer? Requests the home page until one comes
+	 * back as a HIT: the first can fill the cache, a later one should hit.
+	 *
+	 * Right after the switch the old plugin's drop-in can keep answering.
+	 * OPcache serves the file it compiled until it revalidates (two seconds
+	 * by default, never with validate_timestamps off), and a request already
+	 * in flight finishes on the old code. Both checks in a row used to land
+	 * there, so a working cache was reported as not serving. So: drop the
+	 * compiled copy first, then retry for a few seconds before settling on
+	 * MISS, which the panel words as "not confirmed yet". (#393)
+	 *
+	 * @return string 'HIT', 'MISS', or 'unknown' when the site could not be reached.
+	 */
+	private static function verify_page_cache(): string {
+		$dropin = WP_CONTENT_DIR . '/advanced-cache.php';
+		if ( function_exists( 'opcache_invalidate' ) && is_file( $dropin ) ) {
+			opcache_invalidate( $dropin, true );
+		}
+
+		$url  = home_url( '/' );
+		$seen = 'unknown';
+		for ( $i = 0; $i < self::VERIFY_ATTEMPTS; $i++ ) {
+			if ( $i >= 2 && self::$verify_delay > 0 ) {
+				sleep( self::$verify_delay ); // Past the fill and the first hit: give the old code time to drain.
+			}
+			$res = wp_remote_get(
+				$url,
+				array(
+					'timeout'     => 5,
+					'redirection' => 2,
+					'sslverify'   => false,
+					'user-agent'  => 'xSpeed-Migration-Check/1.0',
+				)
+			);
+			if ( is_wp_error( $res ) ) {
+				return 'unknown';
+			}
+			$header = (string) wp_remote_retrieve_header( $res, 'x-xspeed-cache' );
+			if ( 0 === stripos( $header, 'HIT' ) ) {
+				return 'HIT';
+			}
+			$seen = 'MISS';
+		}
+		return $seen;
 	}
 
 	public function cli_commands(): array {
@@ -1253,8 +1450,14 @@ final class MigrationModule extends Module {
 				return;
 			case 'apply':
 				$src = (string) ( $assoc['source'] ?? '' );
-				$r   = Migration::apply( $src );
+				// Before the import, which can replace the drop-in; see
+				// rest_apply(). (#393)
+				$backup = ( ! empty( $assoc['deactivate-source'] ) || ! empty( $assoc['deactivate_source'] ) )
+					? self::back_up_foreign_dropin( $src )
+					: null;
+				$r      = Migration::apply( $src );
 				if ( empty( $r ) ) {
+					self::discard_backup( $backup );
 					\WP_CLI::error( 'Nothing imported.' );
 				}
 				foreach ( $r as $mod => $info ) {
@@ -1316,6 +1519,7 @@ final class MigrationModule extends Module {
 				require_once ABSPATH . 'wp-admin/includes/plugin.php';
 				$still_on = '' !== $file && is_plugin_active( $file );
 
+				$handed_over = false;
 				if ( $want_off && $imported_something && $still_on ) {
 					if ( $this->deactivate_source( $src ) ) {
 						\WP_CLI::log( sprintf( 'Deactivated %s.', $src ) );
@@ -1326,10 +1530,23 @@ final class MigrationModule extends Module {
 						// at all -- reported as "Success: Import complete."
 						// CLI and REST must not disagree about what
 						// --deactivate-source means. (#391)
-						$this->restore_own_environment();
+						$handover    = $this->restore_own_environment( $src, $backup );
+						$handed_over = true;
+						if ( null !== $handover['backup'] ) {
+							\WP_CLI::log( sprintf( 'Saved the previous advanced-cache.php as %s.', $handover['backup'] ) );
+						}
+						\WP_CLI::log(
+							$handover['enabled']
+								? sprintf( 'Page cache on; home page check: %s.', $handover['cache_verified'] )
+								: 'Page cache is not on. Enable it from the xSpeed dashboard.'
+						);
 					} else {
 						\WP_CLI::warning( sprintf( 'Could not deactivate %s.', $src ) );
 					}
+				}
+				// No switch, so the pre-import copy is not needed; see rest_apply().
+				if ( ! $handed_over ) {
+					self::discard_backup( $backup );
 				}
 
 				if ( $still_on ) {

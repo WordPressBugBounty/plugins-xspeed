@@ -529,6 +529,7 @@ class Cache {
 				'cache-coverage', // read-only reporting.
 				'ai-privacy',     // consent flags for AI surfaces.
 				'database',       // DB cleanup schedule — no HTML impact.
+				'preloader',      // crawl schedule and batch size; purging empties what it fills (#757).
 				// Pro slugs — listed by name rather than by asking Pro, so
 				// Free stays unaware of it. A Pro module absent here simply
 				// purges, which is the safe default.
@@ -823,9 +824,12 @@ class Cache {
 	 *
 	 *   current — the marker matches what these settings generate.
 	 *   stale   — a marker came back, from a different version of the rules.
-	 *   absent  — the probe reached a verdict and saw no marker: either no
-	 *             rules are installed (the request fell through to PHP) or
-	 *             they predate the marker. Either way the fix is the same.
+	 *   unversioned — the server served the probe file statically but sent
+	 *             no marker: a block is installed that predates the marker
+	 *             (before 1.4.0) or was written by the host, as xCloud does.
+	 *             (#761)
+	 *   absent  — the probe reached a verdict, nothing served the file
+	 *             statically, and no marker came back: no rules installed.
 	 *   unknown — the probe could not tell, or this server has no rule set we
 	 *             generate.
 	 *
@@ -893,10 +897,15 @@ class Cache {
 			);
 		}
 
+		// The probe proved the server served the static file, so a block is
+		// installed, just one without the marker. xCloud writes its own block
+		// into the vhost when Page Caching is set to xSpeed Cache, and it has
+		// no X-XSpeed-Rules line. Calling that `absent` told the user "served
+		// by PHP" while nginx served every hit. (#761)
 		return array(
 			'expected' => $expected,
 			'observed' => '',
-			'state'    => 'absent',
+			'state'    => ! empty( $probe['active'] ) ? 'unversioned' : 'absent',
 			'changed'  => array(),
 			'copied'   => $copied,
 		);
@@ -2740,9 +2749,29 @@ class Cache {
 	public const NON_HTML_ACCEPT_TYPES = array( 'text/markdown', 'text/x-markdown' );
 
 	/**
+	 * WordPress's JSON media-type detector, also used before core loads.
+	 * Keep the fixed drop-in copy in step with this pattern.
+	 */
+	public const JSON_MEDIA_TYPE_PATTERN = '~(^|\s|,)application/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)~i';
+
+	/** A JSON request can produce HTML with frontend assets omitted (#776). */
+	public static function request_wants_json(): bool {
+		foreach ( array( 'HTTP_ACCEPT', 'CONTENT_TYPE' ) as $key ) {
+			// Header values are matched only, never echoed or used as paths.
+			if ( isset( $_SERVER[ $key ] ) && preg_match( self::JSON_MEDIA_TYPE_PATTERN, (string) $_SERVER[ $key ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Does the request's Accept header ask for a non-HTML representation?
 	 */
 	public static function accept_wants_non_html(): bool {
+		if ( self::request_wants_json() ) {
+			return true;
+		}
 		$accept = isset( $_SERVER['HTTP_ACCEPT'] )
 			? strtolower( (string) wp_unslash( $_SERVER['HTTP_ACCEPT'] ) ) // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- substring-tested only; never echoed, stored or used as a path.
 			: '';
@@ -2786,6 +2815,9 @@ class Cache {
 	 * the variant.
 	 */
 	public static function markdown_variant_request(): bool {
+		if ( self::request_wants_json() ) {
+			return false;
+		}
 		$accept = isset( $_SERVER['HTTP_ACCEPT'] ) ? (string) $_SERVER['HTTP_ACCEPT'] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- substring-tested only; never echoed, stored or used as a path.
 		if ( false === stripos( $accept, 'markdown' ) ) {
 			return false;
@@ -2827,7 +2859,8 @@ class Cache {
 	/**
 	 * Would storing a response of $content_type under this URL's key poison it?
 	 *
-	 * HTML is always storable. Anything else (Markdown, JSON, XML, plain
+	 * JSON requests are never storable, even when the response is HTML.
+	 * Other HTML is storable. Anything else (Markdown, JSON, XML, plain
 	 * text) is storable only where the URL itself is non-HTML: an opted-in
 	 * feed or a core sitemap, whose type the .meta sidecar replays. Elsewhere
 	 * a non-HTML body means a plugin negotiated another representation of an
@@ -2836,6 +2869,9 @@ class Cache {
 	 * @param string $content_type Response Content-Type ('' = PHP default).
 	 */
 	public static function content_type_blocks_write( string $content_type ): bool {
+		if ( self::request_wants_json() ) {
+			return true;
+		}
 		$type = strtolower( trim( explode( ';', $content_type )[0] ) );
 		if ( '' === $type || 'text/html' === $type || 'application/xhtml+xml' === $type ) {
 			return false;
@@ -4710,6 +4746,9 @@ class Cache {
 	}
 
 	private static function store_static( string $html ): void {
+		if ( self::request_wants_json() ) {
+			return;
+		}
 		// Search results are keyed by term in cache_key() (`|s=<term>`) but
 		// carry the *path* of whatever URL was searched from — for the usual
 		// `/?s=<term>` that path is `/`. Writing them here would file the
@@ -5361,10 +5400,19 @@ class Cache {
 			'wp_navigation',    // Navigation block menus.
 			'nav_menu_item',    // Classic menus.
 			'wp_block',         // Synced patterns / reusable blocks.
+			// Thrive Theme Builder and Architect. Symbols hold the header and
+			// footer of every page, and the rest are layouts. A symbol is
+			// viewable, and still took the narrow path to 9 URLs. (#759)
+			'tcb_symbol',
+			'thrive_template',
+			'thrive_section',
+			'thrive_layout',
+			'thrive_typography',
 		);
 
 		/**
-		 * Filter the non-viewable post types that still invalidate the cache.
+		 * Filter the post types whose saves clear the whole site because they
+		 * change how other pages render, viewable or not.
 		 *
 		 * Add a type here when it has no front end of its own but changes
 		 * how other pages render (a theme's own layout CPT, for example).
@@ -6512,6 +6560,7 @@ class Cache {
 		self::$purge_events_in_flight = array();
 		self::$purge_event_sequence   = 0;
 		self::$saves_purged           = array();
+		self::$held_announcements     = array();
 	}
 
 	/**
@@ -7403,62 +7452,79 @@ class Cache {
 		// never fires and a server cache keeps serving stale HTML. The local
 		// sweep is already done by this point, so swallowing is strictly safer
 		// than letting a listener decide the rest of the method runs.
-		try {
-			// Isolated per listener: one throwing used to cancel every
-			// listener queued behind it — Critical CSS, Unused CSS and the
-			// Cloudflare edge purge all hang off this hook. (QA #348)
-			self::do_action_isolated( 'xspeed_after_purge_all', $cause );
-		} catch ( \Throwable $e ) {
-			self::log_purge_listener_error( 'xspeed_after_purge_all', $e );
-		}
+		$announce = static function () use ( $cause, $host, $count, $adapter_scope, $intent, $urls, $fallback ): void {
+			try {
+				// Isolated per listener: one throwing used to cancel every
+				// listener queued behind it — Critical CSS, Unused CSS and the
+				// Cloudflare edge purge all hang off this hook. (QA #348)
+				self::do_action_isolated( 'xspeed_after_purge_all', $cause );
+			} catch ( \Throwable $e ) {
+				self::log_purge_listener_error( 'xspeed_after_purge_all', $e );
+			}
 
-		/**
-		 * Fires after a full purge, with the same bounded context shape as
-		 * `xspeed_after_purge_url`.
-		 *
-		 * Distinct from `xspeed_after_purge_all` on purpose. That action is
-		 * the long-standing internal signal — it passes a bare `$cause` string
-		 * and Free's own modules use it for local bookkeeping. This one is the
-		 * documented contract for OUTSIDE integrations: same argument shape as
-		 * the per-URL event, so a server-cache or CDN adapter can subscribe to
-		 * both with one handler and branch on a null `url`.
-		 *
-		 * Fires at most once per purge, and not at all when a listener's own
-		 * purge re-enters xSpeed.
-		 *
-		 * @since 1.2.3
-		 *
-		 * @param array $context {
-		 *     @type null   $url     Always null — a full purge has no single URL.
-		 *     @type string $host    Host swept, or '*' for the entire tree.
-		 *     @type null   $path    Always null.
-		 *     @type string $cause   Short label for who asked.
-		 *     @type int    $removed Number of cache files removed.
-		 *     @type string $scope   Adapter action: urls/site/network/none.
-		 *     @type string $intent  content/presentation/complete or a caller-defined intent.
-		 *     @type string[] $urls  Exact targets when scope is urls.
-		 *     @type string $fallback Why a change that would have cleared
-		 *                            only its own pages cleared the whole site
-		 *                            instead: `theme_list`, `limit`, `pending`
-		 *                            or `filter`. Empty for every other purge.
-		 *                            See the purge-event contract in
-		 *                            docs/guides/hooks-and-filters.md.
-		 * }
+			/**
+			 * Fires after a full purge, with the same bounded context shape as
+			 * `xspeed_after_purge_url`.
+			 *
+			 * Distinct from `xspeed_after_purge_all` on purpose. That action is
+			 * the long-standing internal signal — it passes a bare `$cause` string
+			 * and Free's own modules use it for local bookkeeping. This one is the
+			 * documented contract for OUTSIDE integrations: same argument shape as
+			 * the per-URL event, so a server-cache or CDN adapter can subscribe to
+			 * both with one handler and branch on a null `url`.
+			 *
+			 * Fires at most once per purge, and not at all when a listener's own
+			 * purge re-enters xSpeed.
+			 *
+			 * @since 1.2.3
+			 *
+			 * @param array $context {
+			 *     @type null   $url     Always null — a full purge has no single URL.
+			 *     @type string $host    Host swept, or '*' for the entire tree.
+			 *     @type null   $path    Always null.
+			 *     @type string $cause   Short label for who asked.
+			 *     @type int    $removed Number of cache files removed.
+			 *     @type string $scope   Adapter action: urls/site/network/none.
+			 *     @type string $intent  content/presentation/complete or a caller-defined intent.
+			 *     @type string[] $urls  Exact targets when scope is urls.
+			 *     @type string $fallback Why a change that would have cleared
+			 *                            only its own pages cleared the whole site
+			 *                            instead: `theme_list`, `limit`, `pending`
+			 *                            or `filter`. Empty for every other purge.
+			 *                            See the purge-event contract in
+			 *                            docs/guides/hooks-and-filters.md.
+			 * }
+			 */
+			self::dispatch_purge_event(
+				'xspeed_after_purge',
+				array(
+					'url'      => null,
+					'host'     => null === $host ? self::current_purge_host() : (string) $host,
+					'path'     => null,
+					'cause'    => $cause,
+					'removed'  => $count,
+					'scope'    => $adapter_scope,
+					'intent'   => $intent,
+					'urls'     => $urls,
+					'fallback' => $fallback,
+				)
+			);
+		};
+
+		/*
+		 * A purge that runs before `wp_loaded` may have nobody to tell. Modules wire
+		 * their listeners on `init` (the Cloudflare edge purge, Critical CSS,
+		 * Unused CSS), and the 1.3.6 upgrade step writes the Cache module's
+		 * option at `plugins_loaded` 21, which purged the site through
+		 * on_module_settings_change() with every listener still missing. The
+		 * edge kept HTML pointing at combined CSS the sweep had just deleted.
+		 * (#643) The sweep stays here; only the announcement waits.
 		 */
-		self::dispatch_purge_event(
-			'xspeed_after_purge',
-			array(
-				'url'      => null,
-				'host'     => null === $host ? self::current_purge_host() : (string) $host,
-				'path'     => null,
-				'cause'    => $cause,
-				'removed'  => $count,
-				'scope'    => $adapter_scope,
-				'intent'   => $intent,
-				'urls'     => $urls,
-				'fallback' => $fallback,
-			)
-		);
+		if ( self::purge_listeners_ready() ) {
+			$announce();
+		} else {
+			self::hold_purge_announcement( $announce, ( null === $host ? self::current_purge_host() : (string) $host ) . '|' . $adapter_scope );
+		}
 
 		/*
 		 * The generic event is published by the `dispatch_purge_event()` call
@@ -7482,6 +7548,61 @@ class Cache {
 		);
 
 		return $count;
+	}
+
+	/**
+	 * Whether the listeners a purge announces to are all registered.
+	 *
+	 * False from `plugins_loaded` until `wp_loaded`. Modules wire their
+	 * listeners on `init`, at priorities of their own, so a purge during
+	 * `init` can still run before the one it needs. Outside a full boot
+	 * (unit tests, the drop-in) there is nothing to wait for.
+	 */
+	private static function purge_listeners_ready(): bool {
+		if ( ! function_exists( 'did_action' ) ) {
+			return true;
+		}
+		return ! did_action( 'plugins_loaded' ) || did_action( 'wp_loaded' ) > 0;
+	}
+
+	/**
+	 * Purge announcements waiting for `wp_loaded`, one per host and scope.
+	 *
+	 * @var array<string,callable>
+	 */
+	private static $held_announcements = array();
+
+	/**
+	 * Announce an early purge once listeners exist.
+	 *
+	 * Several full sweeps of the same host and scope become one
+	 * announcement, so the edge is purged once: the first admin load after
+	 * an update purges twice (the 1.3.6 settings step and the 1.4.3 rebuild)
+	 * and used to purge the Cloudflare zone twice. A purge of another host
+	 * or scope keeps its own. Released on `wp_loaded`, and on `shutdown` for
+	 * a request that ends before it; the server-cache forwards inside the
+	 * announcement ran inline before this, so they must not be lost.
+	 *
+	 * @param callable $announce Fires the purge actions.
+	 * @param string   $key      Host and scope of the purge.
+	 */
+	private static function hold_purge_announcement( callable $announce, string $key ): void {
+		if ( array() === self::$held_announcements ) {
+			add_action( 'wp_loaded', array( __CLASS__, 'release_held_purge_announcement' ), 0 );
+			add_action( 'shutdown', array( __CLASS__, 'release_held_purge_announcement' ), 0 );
+		}
+		if ( ! isset( self::$held_announcements[ $key ] ) ) {
+			self::$held_announcements[ $key ] = $announce;
+		}
+	}
+
+	/** Fire the purge announcements held back from before `wp_loaded`. */
+	public static function release_held_purge_announcement(): void {
+		$held                     = self::$held_announcements;
+		self::$held_announcements = array();
+		foreach ( $held as $announce ) {
+			$announce();
+		}
 	}
 
 	/**
@@ -8687,8 +8808,65 @@ class Cache {
 		update_option( 'xspeed_stats', array_merge( self::get_stats_option(), $stats ) );
 	}
 
+	/**
+	 * Why static-rewrite hits are missing from the hit counter, or '' when
+	 * they are counted (or there is no static rewrite).
+	 *
+	 * 'litespeed': the Static Fast Path (#509). LiteSpeed's access log
+	 * records the original request line, so its hits can't be counted.
+	 *
+	 * 'apache_static': Apache counts static hits only by reading the server
+	 * access log, and only when a log line names the cached file. Shared
+	 * hosts don't let PHP read the log, and Apache's standard formats log
+	 * the page address the visitor asked for, not the file the rewrite
+	 * served, so the scan matches nothing. Every static hit went uncounted
+	 * while the dashboard showed the PHP-only ratio as the whole site, and
+	 * the audit called a working cache a 3% hit ratio. Counted only when a
+	 * scan has matched in the last week. (#760)
+	 *
+	 * rewrite_installed() is part of the condition (QA on #513): when the
+	 * .htaccess write failed, hits take the drop-in path and ARE counted.
+	 */
+	public static function static_hits_uncounted_reason(): string {
+		// Read several times per dashboard load, and each answer reads
+		// .htaccess and may stat the log locations.
+		if ( null === self::$static_hits_reason ) {
+			self::$static_hits_reason = self::compute_static_hits_uncounted_reason();
+		}
+		return self::$static_hits_reason;
+	}
+
+	/** Per-request answer of static_hits_uncounted_reason(). */
+	private static $static_hits_reason = null;
+
+	/** Forget the per-request answer (tests, long-running workers). */
+	public static function forget_static_hits_reason(): void {
+		self::$static_hits_reason = null;
+	}
+
+	private static function compute_static_hits_uncounted_reason(): string {
+		$server = Server::type();
+		if ( Server::LITESPEED !== $server && Server::APACHE !== $server ) {
+			return '';
+		}
+		if ( empty( Settings::get()['cache_enabled'] )
+			|| ! self::static_rewrite_allowed()
+			|| ! self::rewrite_installed() ) {
+			return '';
+		}
+		if ( Server::LITESPEED === $server ) {
+			return 'litespeed';
+		}
+		$matched = (int) get_option( Hit_Counter::SERVER_LOG_MATCHED_OPT, 0 );
+		if ( $matched > time() - 7 * DAY_IN_SECONDS && '' !== Server::access_log_path() ) {
+			return '';
+		}
+		return 'apache_static';
+	}
+
 	public static function get_stats() {
-		$count = 0;
+		$uncounted = self::static_hits_uncounted_reason();
+		$count     = 0;
 		$size  = 0;
 		// This site's entries only — on multisite the tree is shared, so an
 		// unscoped count reported the whole network's pages on every
@@ -8753,12 +8931,9 @@ class Cache {
 			// opposite of the truth. Health carries the "block missing"
 			// warning for that state; this flag only speaks when static
 			// serving is genuinely in effect.
-			'static_hits_uncounted' => (
-				Server::LITESPEED === Server::type()
-				&& ! empty( Settings::get()['cache_enabled'] )
-				&& self::static_rewrite_allowed()
-				&& self::rewrite_installed()
-			),
+			'static_hits_uncounted' => '' !== $uncounted,
+			// 'litespeed' or 'apache_static', so the dashboard can say why.
+			'static_hits_uncounted_reason' => $uncounted,
 			/*
 			 * Whether the page cache is actually SERVING, as opposed to
 			 * switched on in settings. The hero read the setting alone and
@@ -9352,7 +9527,11 @@ class Cache {
 		);
 	}
 
-	/** Acquire the local lock that serializes page-cache ownership changes. */
+	/**
+	 * Acquire the local lock that serializes page-cache ownership changes.
+	 * note_dropin_version() takes it too, through try_page_cache_lock(), so
+	 * a drop-in rewrite cannot land between its file read and its flag.
+	 */
 	private static function page_cache_lock() {
 		$path = WP_CONTENT_DIR . '/.xspeed-page-cache.lock';
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.PHP.NoSilencedErrors.Discouraged -- flock requires a local handle; failure is a safe blocked result.
@@ -10610,6 +10789,9 @@ class Cache {
 		$lines[] = 'set $xspeed_no_cache "no-cache";';
 		$lines[] = 'if ($request_method != GET) { set $xspeed_no_cache "$xspeed_no_cache-method"; }';
 		$lines[] = 'if ($args) { set $xspeed_no_cache "$xspeed_no_cache-args"; }';
+		$json_pattern = substr( self::JSON_MEDIA_TYPE_PATTERN, 1, -2 );
+		$lines[] = 'if ($http_accept ~* "' . $json_pattern . '") { set $xspeed_no_cache "$xspeed_no_cache-json"; }';
+		$lines[] = 'if ($http_content_type ~* "' . $json_pattern . '") { set $xspeed_no_cache "$xspeed_no_cache-json"; }';
 		// Cookie + user-agent exclusions, generated from the user's actual
 		// settings rather than a hardcoded list. Before this, the rule
 		// tested three fixed cookie names and no user agent at all, so
@@ -10891,6 +11073,9 @@ class Cache {
 			return;
 		}
 
+		// toggle() rewrote the drop-in if its bytes differed.
+		self::clear_dropin_stale_flag();
+
 		// Rewrite block goes last. It's what turns the static-cache
 		// tree into a PHP-bypass — every cache hit served by the web
 		// server directly. Without it we still cache, just at drop-in
@@ -10999,13 +11184,10 @@ class Cache {
 			'  RewriteEngine On',
 			'  RewriteCond %{REQUEST_METHOD} ^GET$',
 			'  RewriteCond %{QUERY_STRING} ^$',
-			// A Markdown request wants another representation of the page,
-			// not the cached HTML. Fixed copy of Cache::NON_HTML_ACCEPT_TYPES.
-			// nginx_snippet() deliberately has no twin: a new line there moves
-			// the rules hash and flags every pasted block, including hosts
-			// that write it themselves, as stale. On nginx such a client gets
-			// the HTML page, and nothing it receives can be stored. (#693)
+			// Negotiated requests must reach PHP rather than the static HTML.
 			'  RewriteCond %{HTTP_ACCEPT} !markdown [NC]',
+			'  RewriteCond %{HTTP_ACCEPT} !' . substr( self::JSON_MEDIA_TYPE_PATTERN, 1, -2 ) . ' [NC]',
+			'  RewriteCond %{HTTP:Content-Type} !' . substr( self::JSON_MEDIA_TYPE_PATTERN, 1, -2 ) . ' [NC]',
 			'  RewriteCond %{HTTP_COOKIE} !(' . $cookie_rule['regex'] . ') [NC]',
 		);
 
@@ -11461,11 +11643,198 @@ class Cache {
 	 * Returns 0 when absent (an un-stamped older copy reinstalls). Used to
 	 * detect a stale installed drop-in vs the bundled source.
 	 */
-	private static function dropin_version( string $contents ): int {
+	public static function dropin_version( string $contents ): int {
 		if ( preg_match( '/XSPEED_DROPIN_VERSION:\s*(\d+)/', $contents, $m ) ) {
 			return (int) $m[1];
 		}
 		return 0;
+	}
+
+	/**
+	 * The XSPEED_DROPIN_VERSION of the drop-in this plugin ships. A constant,
+	 * not a read of the file: note_dropin_version() runs on every request the
+	 * drop-in did not serve, and a file read or a transient lookup there
+	 * would cost every cache MISS. DropinRuntimeStampTest holds it equal to
+	 * the header in includes/advanced-cache.php.
+	 */
+	public const BUNDLED_DROPIN_VERSION = 21;
+
+	/** See BUNDLED_DROPIN_VERSION. */
+	public static function bundled_dropin_version(): int {
+		return self::BUNDLED_DROPIN_VERSION;
+	}
+
+	/**
+	 * Flag a drop-in copy that is older than the one this plugin ships.
+	 *
+	 * The drop-in is a copy made when caching was turned on. A plugin update
+	 * replaces the plugin's own files but not that copy, so until someone
+	 * loads wp-admin (where auto_heal() rewrites it) the site serves with the
+	 * old logic, and nothing said so (#396, #397). This runs on `init`, which
+	 * a request only reaches when the drop-in did not serve it (a MISS or a
+	 * bypass), and only records: no file is written on a front-end request.
+	 *
+	 * A drop-in from before v21 defines no XSPEED_DROPIN_RUNNING, and neither
+	 * does another plugin's. Neither is flagged: "not defined" cannot tell
+	 * an old copy of ours from someone else's cache.
+	 *
+	 * An old running copy is flagged only while the file on disk is old too.
+	 * Right after wp-admin rewrites the file, PHP can keep serving its
+	 * compiled copy of the old one: OPcache rechecks the timestamp every
+	 * `opcache.revalidate_freq` seconds, and opcache_invalidate() in the
+	 * writing process does not reach a PHP process with an opcache of its
+	 * own. Flagging then logged the warning again a second after it was
+	 * fixed (QA on #523), and loading wp-admin cannot help. The file is read
+	 * only on this path, after the transient check, and only its header.
+	 *
+	 * From that read to the log entry the request holds the lock toggle()
+	 * writes the drop-in under. Without it, wp-admin could rewrite the file
+	 * and clear the flag between the read and set_transient(), and the flag
+	 * came back for a copy already replaced; two MISSes could also both log
+	 * (review of #523). The request takes the lock only if it is free at
+	 * once, and opens the file read-only: a visitor's page never waits on a
+	 * toggle and never creates the file. Missing, unreadable or held, it
+	 * skips, and the next MISS asks again.
+	 *
+	 * @param int|null $running The running copy's version; read from the
+	 *                          constant when not given.
+	 */
+	public static function note_dropin_version( $running = null ): void {
+		// `init` passes nothing; a test passes the version it wants, since a
+		// constant cannot be undefined once any test has loaded the drop-in.
+		if ( ! is_int( $running ) ) {
+			if ( ! defined( 'XSPEED_DROPIN_RUNNING' ) ) {
+				return;
+			}
+			$running = (int) XSPEED_DROPIN_RUNNING;
+		}
+		$opts = get_option( 'xspeed_options', array() );
+		if ( ! is_array( $opts ) || empty( $opts['cache_enabled'] ) ) {
+			return;
+		}
+		$bundled = self::bundled_dropin_version();
+		if ( $running >= $bundled || false !== get_transient( 'xspeed_dropin_stale' ) ) {
+			return;
+		}
+		$lock = self::try_page_cache_lock();
+		if ( false === $lock ) {
+			return;
+		}
+		try {
+			// Another request may have flagged it since the look above.
+			if ( self::dropin_stale_flagged() ) {
+				return;
+			}
+			// 0 is a missing or unreadable file, someone else's, or ours caught
+			// mid-write. None is an old copy that wp-admin would replace.
+			$on_disk = self::installed_dropin_version();
+			if ( $on_disk <= 0 || $on_disk >= $bundled ) {
+				return;
+			}
+			set_transient(
+				'xspeed_dropin_stale',
+				array(
+					'running' => $running,
+					'bundled' => $bundled,
+					'since'   => time(),
+				),
+				7 * DAY_IN_SECONDS
+			);
+			Activity_Log::record(
+				'cache_dropin_stale',
+				sprintf(
+					/* translators: 1: running drop-in version, 2: bundled drop-in version. */
+					__( 'The page cache is serving with an older copy of its drop-in (v%1$d; this version of xSpeed ships v%2$d). Loading any wp-admin page replaces it.', 'xspeed' ),
+					$running,
+					$bundled
+				),
+				Activity_Log::WARN
+			);
+		} finally {
+			flock( $lock, LOCK_UN );
+			fclose( $lock ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes the lock handle.
+		}
+	}
+
+	/**
+	 * End the stale flag once the copy on disk is at least the bundled one.
+	 * auto_heal() calls this after toggle(), so any request that read the old
+	 * file under the lock had flagged before toggle() could write, and the
+	 * look here, past this request's cache, sees it.
+	 */
+	private static function clear_dropin_stale_flag(): void {
+		if ( ! self::dropin_stale_flagged() ) {
+			return;
+		}
+		$installed = self::read_file( WP_CONTENT_DIR . '/advanced-cache.php' );
+		if ( is_string( $installed ) && self::dropin_version( $installed ) >= self::bundled_dropin_version() ) {
+			delete_transient( 'xspeed_dropin_stale' );
+		}
+	}
+
+	/**
+	 * Whether xspeed_dropin_stale is set, asked of the store rather than of
+	 * this request, which may have looked before another request set or
+	 * cleared it. With a persistent object cache the transient lives there
+	 * and `$force` skips the local copy. Without one it is an option, and
+	 * WordPress remembers both a value and a "no such option" (`notoptions`)
+	 * for the rest of the request; both are dropped so the read reaches the
+	 * database. Device_Check::report() reads its token the same way.
+	 */
+	private static function dropin_stale_flagged(): bool {
+		$key = 'xspeed_dropin_stale';
+		if ( wp_using_ext_object_cache() ) {
+			return false !== wp_cache_get( $key, 'transient', true );
+		}
+		$names      = array( '_transient_' . $key, '_transient_timeout_' . $key );
+		$notoptions = wp_cache_get( 'notoptions', 'options' );
+		if ( is_array( $notoptions ) && array_intersect_key( $notoptions, array_flip( $names ) ) ) {
+			wp_cache_set( 'notoptions', array_diff_key( $notoptions, array_flip( $names ) ), 'options' );
+		}
+		foreach ( $names as $name ) {
+			wp_cache_delete( $name, 'options' );
+		}
+		return false !== get_transient( $key );
+	}
+
+	/**
+	 * The page-cache lock for a front-end request, or false when it cannot be
+	 * had at once. Unlike page_cache_lock() it never waits and never creates
+	 * the file: it opens the one toggle() made read-only, which flock() is
+	 * content with.
+	 *
+	 * @return resource|false
+	 */
+	private static function try_page_cache_lock() {
+		$path = WP_CONTENT_DIR . '/.xspeed-page-cache.lock';
+		if ( ! is_file( $path ) ) {
+			return false;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.PHP.NoSilencedErrors.Discouraged -- flock requires a local handle; an unreadable file means "skip".
+		$lock = @fopen( $path, 'r' );
+		if ( ! is_resource( $lock ) ) {
+			return false;
+		}
+		if ( ! flock( $lock, LOCK_EX | LOCK_NB ) ) {
+			fclose( $lock ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes the lock handle.
+			return false;
+		}
+		return $lock;
+	}
+
+	/**
+	 * The XSPEED_DROPIN_VERSION in the header of the installed drop-in, 0 when
+	 * there is no file, it cannot be read, or it carries no stamp. Reads the
+	 * first bytes only: the stamp is on the fourth line.
+	 */
+	private static function installed_dropin_version(): int {
+		$path = WP_CONTENT_DIR . '/advanced-cache.php';
+		if ( ! is_readable( $path ) ) {
+			return 0;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents, WordPress.PHP.NoSilencedErrors.Discouraged -- header read of a local file on a rare path; a failed read means "unknown".
+		$head = @file_get_contents( $path, false, null, 0, 512 );
+		return is_string( $head ) ? self::dropin_version( $head ) : 0;
 	}
 
 	/** The advanced-cache.php drop-in is ours. */

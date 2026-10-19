@@ -442,8 +442,8 @@ class Rest_Api {
 				'topology'     => Server::rewrite_topology(),
 				'behind_proxy' => Server::is_behind_proxy(),
 				// Whether the rules the web server is running are the rules
-				// these settings generate — `current`, `stale`, `absent` or
-				// `unknown`, with the hashes both sides compared. Nothing
+				// these settings generate — `current`, `stale`, `unversioned`,
+				// `absent` or `unknown`, with the hashes both sides compared. Nothing
 				// else can answer that: the nginx block lives in a server
 				// config WordPress cannot read. See Cache::rules_state().
 				'rules'        => Cache::rules_state( $probe ),

@@ -145,7 +145,7 @@ final class Recommendations {
 		}
 
 		// 4. Preloader off while the hit ratio is poor — with real traffic.
-		if ( empty( $state['preloader_enabled'] ) && $traffic >= 50 && $ratio < 0.5 ) {
+		if ( empty( $state['preloader_enabled'] ) && empty( $state['static_hits_uncounted'] ) && $traffic >= 50 && $ratio < 0.5 ) {
 			$out[] = array(
 				'id'       => 'preloader_off_low_ratio',
 				'priority' => 25,
@@ -233,6 +233,8 @@ final class Recommendations {
 			'hits_24h'            => (int) $totals['hits'],
 			'misses_24h'          => (int) $totals['misses'],
 			'hit_ratio'           => (float) $totals['ratio'],
+			// The ratio leaves out static hits it can't count. (#760)
+			'static_hits_uncounted' => '' !== Cache::static_hits_uncounted_reason(),
 			'objcache_enabled'    => ! empty( $oc_opts['enabled'] ),
 			'objcache_persistent' => $oc_persistent,
 			'cloudflare_enabled'  => ! empty( $cf_opts['enabled'] ),

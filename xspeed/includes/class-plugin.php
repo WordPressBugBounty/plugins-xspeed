@@ -62,6 +62,10 @@ class Plugin {
 		// admin page load after a plugin upgrade restores the state;
 		// front-end then serves from cache on the next request.
 		add_action( 'admin_init', array( Cache::class, 'auto_heal' ) );
+		// Records (never writes) when the drop-in copy that served this
+		// request is older than the one this plugin ships. See
+		// Cache::note_dropin_version(). (#396)
+		add_action( 'init', array( Cache::class, 'note_dropin_version' ), 99 );
 		// Cheap: returns immediately unless the stored schema version is
 		// behind. Covers updates and multisite, where activate() never runs.
 		add_action( 'admin_init', array( Score_Store::class, 'maybe_install' ) );

@@ -112,7 +112,7 @@ final class LazyModule extends Module {
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Add missing image sizes', 'xspeed' ),
-				'description' => __( 'Adds width and height to images that lack them, using the media library. This stops the page from jumping as images load.', 'xspeed' ),
+				'description' => __( 'Adds width and height to images that lack them, using the media library. For an image hosted on another site, xSpeed reads the start of the file while warming the cache. This stops the page from jumping as images load.', 'xspeed' ),
 			),
 			'excluded_images'        => array(
 				'type'        => 'list',
@@ -253,12 +253,11 @@ final class LazyModule extends Module {
 			 * our restorer sat ~17KB after the first block script in the
 			 * document, and the videos still downloaded on load.
 			 *
-			 * It costs ~1KB inline and installs only observers, so running it
-			 * early is cheap; a MutationObserver on documentElement catches
-			 * every <video> the moment it is inserted, whichever script did
-			 * the inserting.
+			 * It is close to 4 KB inline, so the final HTML pass removes it
+			 * from a page with no sign of a video. (#646)
 			 */
 			add_action( 'wp_head', array( $this, 'print_autoplay_script' ), 1 );
+			add_filter( 'xspeed_cache_final_html', array( Lazy_Loader::class, 'drop_unused_autoplay_script' ), 1 );
 		}
 	}
 
@@ -334,10 +333,10 @@ final class LazyModule extends Module {
 		 * plugin's script builds a <video> and starts fetching it, which
 		 * happens well before wp_footer.
 		 *
-		 * The cost of being unconditional is ~1KB inline on pages with no
-		 * video, and the script installs observers only — it does no work
-		 * and touches nothing when it finds no autoplay video. That is a
-		 * better trade than missing the one case the feature exists for.
+		 * Lazy_Loader::drop_unused_autoplay_script() takes it back out of
+		 * the finished page when nothing on it can make a <video>, so the
+		 * close to 4 KB it costs is paid only where it can do something.
+		 * (#646)
 		 */
 		$settings   = $this->get_settings();
 		$after_load = ! empty( $settings['video_after_load'] );

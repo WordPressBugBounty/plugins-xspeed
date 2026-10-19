@@ -1,12 +1,17 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 20
+ * XSPEED_DROPIN_VERSION: 21
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
- * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes so
- * Cache::ensure_dropin_current() reinstalls it on existing sites (the
- * "is it ours?" marker alone can't tell an old copy from a new one).
+ * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes, and
+ * set XSPEED_DROPIN_RUNNING below and Cache::BUNDLED_DROPIN_VERSION to the
+ * same number (DropinRuntimeStampTest fails if they differ). On `init`,
+ * Cache::note_dropin_version() compares the running copy's number with the
+ * bundled file's and flags a stale copy (Activity log, transient
+ * xspeed_dropin_stale). Cache::auto_heal() on admin_init rewrites any
+ * installed copy whose bytes differ from what the bundled file bakes to,
+ * and clears the flag. (#396, #397)
  * v2: read .meta on the fast path — replay 404 status + feed Content-Type
  *     and honor per-content TTL (FBS-82406, FBS-82407).
  * v3: conditional GET — emit Last-Modified + ETag, answer matching
@@ -86,6 +91,8 @@
  *      trusted request gets the copy Cloudflare keys it under, and any other
  *      request gets the mobile-split hold back. Without the bump an existing
  *      drop-in has no hold to put back once the bake lifts it.
+ * v21: define XSPEED_DROPIN_RUNNING, so WordPress can tell which copy of
+ *      this file served the request and flag an old one (#396).
  *
  * IMPORTANT: This file is included by wp-settings.php BEFORE
  * wp-includes/formatting.php and wp-includes/load.php are loaded, so NO
@@ -97,6 +104,13 @@
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
+}
+
+// Which copy of this file is running. Before every early return below, so a
+// MISS, a POST and a HEAD all define it. Must equal XSPEED_DROPIN_VERSION in
+// the header; a unit test holds them together.
+if ( ! defined( 'XSPEED_DROPIN_RUNNING' ) ) {
+	define( 'XSPEED_DROPIN_RUNNING', 21 );
 }
 
 // Serve only while xSpeed runs on this site, at this path (#597).
@@ -246,6 +260,17 @@ if ( ! empty( $_SERVER['HTTP_X_XSPEED_BYPASS'] ) ) {
 // from its own entry instead: Cache::cache_key() appends `|md` for it, and
 // so does the key below. Without the flag it falls through to WordPress.
 $xspeed_variant = '';
+// WordPress may omit frontend assets for JSON requests while returning HTML.
+// This runs before wp_is_json_request() exists. Match its media-type detector.
+// Keep this pattern in step with Cache::JSON_MEDIA_TYPE_PATTERN (#776).
+foreach ( array( 'HTTP_ACCEPT', 'CONTENT_TYPE' ) as $xspeed_json_header ) {
+	if ( isset( $_SERVER[ $xspeed_json_header ] )
+		&& preg_match( '~(^|\s|,)application/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)~i', (string) $_SERVER[ $xspeed_json_header ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- matched only; never echoed.
+		return;
+	}
+}
+unset( $xspeed_json_header );
+
 // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs before WP loads. Value is only substring-tested, never echoed.
 if ( isset( $_SERVER['HTTP_ACCEPT'] ) && false !== stripos( (string) $_SERVER['HTTP_ACCEPT'], 'markdown' ) ) {
 	if ( ! file_exists( WP_CONTENT_DIR . '/cache/xspeed/.cache-markdown' ) ) {

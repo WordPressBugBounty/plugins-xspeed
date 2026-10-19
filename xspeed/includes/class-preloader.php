@@ -36,6 +36,14 @@ final class Preloader {
 	public const STATE_KEY      = 'xspeed_preloader_state';
 	public const STATE_TTL      = 86400; // 24h — long enough for slow crawls.
 	public const CRON_HOOK      = 'xspeed_preloader_tick';
+
+	/**
+	 * Seconds without a sign of life before a running crawl counts as
+	 * stalled. A tick books the next one 10 seconds out, and a running batch
+	 * stamps `last_tick_at` at least once a minute (see tick()), so only a
+	 * crawl whose tick chain broke goes this long without one.
+	 */
+	public const STALL_AFTER    = 600;
 	/**
 	 * User-agent for every request the preloader makes.
 	 *
@@ -389,8 +397,23 @@ final class Preloader {
 	 */
 	private static $queue_source = 'none';
 
+	/**
+	 * URLs left out of the current crawl, counted by reason: `post_type`
+	 * (in the sitemap of an excluded post type), `excluded_url` (matches a
+	 * cache exclusion), `filtered` (removed by the xspeed_preloader_queue or
+	 * xspeed_preloader_skip_url filter) and `over_cap` (past the 5000-URL
+	 * cap). Reported beside the queued total so a partial crawl never reads
+	 * as "covered everything". (#239)
+	 *
+	 * @var array<string,int>
+	 */
+	private static $skipped = array();
+
 	/** Largest number of URLs the database fallback will enumerate. */
 	private const FALLBACK_LIMIT = 500;
+
+	/** Largest queue a crawl will hold, to bound the state transient. */
+	private const QUEUE_CAP = 5000;
 
 	/**
 	 * Kick off a fresh crawl. Returns the initial state.
@@ -423,6 +446,7 @@ final class Preloader {
 		$state = array(
 			'running'       => ! empty( $urls ),
 			'started_at'    => time(),
+			'last_tick_at'  => time(),
 			'finished_at'   => empty( $urls ) ? time() : 0,
 			'queue'         => array_values( $urls ),
 			'processed'     => 0,
@@ -435,6 +459,7 @@ final class Preloader {
 			// sitemap they configured.
 			'source'        => self::$queue_source,
 			'sitemap_error' => $sitemap_error,
+			'skipped'       => self::$skipped,
 			// Which copies each URL gets, for the panel and the status
 			// command. Each tick refreshes it: turning Separate Mobile
 			// Cache on or off mid-crawl purges the cache, and the rest of
@@ -466,6 +491,14 @@ final class Preloader {
 				1 === $state['total'] ? '' : 's'
 			);
 			$severity = $state['total'] > 0 ? Activity_Log::INFO : Activity_Log::WARN;
+		}
+		$skipped_total = array_sum( self::$skipped );
+		if ( $skipped_total > 0 ) {
+			$message .= ' ' . sprintf(
+				/* translators: %d: number of URLs left out of the crawl. */
+				__( 'Skipped %d (excluded post types, cache exclusions, filters or the 5000-URL cap).', 'xspeed' ),
+				$skipped_total
+			);
 		}
 		Activity_Log::record( 'preloader_started', $message, $severity );
 
@@ -512,14 +545,16 @@ final class Preloader {
 
 	private static function empty_state(): array {
 		return array(
-			'running'     => false,
-			'started_at'  => 0,
-			'finished_at' => 0,
-			'queue'       => array(),
-			'processed'   => 0,
-			'total'       => 0,
-			'last_url'    => '',
-			'errors'      => array(),
+			'running'      => false,
+			'started_at'   => 0,
+			'last_tick_at' => 0,
+			'finished_at'  => 0,
+			'queue'        => array(),
+			'processed'    => 0,
+			'total'        => 0,
+			'last_url'     => '',
+			'errors'       => array(),
+			'skipped'      => array(),
 		);
 	}
 
@@ -536,6 +571,11 @@ final class Preloader {
 			}
 			return;
 		}
+
+		// Stamp the tick before the batch runs, so a slow batch is not
+		// mistaken for a stalled crawl while it is still warming.
+		$state['last_tick_at'] = time();
+		set_transient( self::STATE_KEY, $state, self::STATE_TTL );
 
 		$opts  = Settings_Manager::get( 'preloader' );
 		$batch = max( 1, min( 50, (int) ( $opts['batch_size'] ?? 5 ) ) );
@@ -573,6 +613,15 @@ final class Preloader {
 			$state['processed']++;
 			$state['last_url'] = $url;
 			$requests         += $per_url;
+
+			// A heartbeat while the batch runs. One URL can take close to two
+			// minutes (its page plus up to 20 remote image lookups), so a big
+			// batch outlasted STALL_AFTER, and a status read then booked a
+			// second tick for the same URLs. (#756)
+			if ( time() - (int) $state['last_tick_at'] >= MINUTE_IN_SECONDS ) {
+				$state['last_tick_at'] = time();
+				set_transient( self::STATE_KEY, $state, self::STATE_TTL );
+			}
 		}
 
 		if ( empty( $state['queue'] ) ) {
@@ -600,6 +649,7 @@ final class Preloader {
 		if ( '' === $url ) {
 			return false;
 		}
+		Cache_GC::expire_static_url( $url );
 		$result = self::warm_devices( $url );
 		foreach ( $result['failures'] as $failure ) {
 			Activity_Log::record(
@@ -620,6 +670,10 @@ final class Preloader {
 	}
 
 	private static function warm_url( string $url, array &$state ): void {
+		// The web server would answer with an expired static page as a HIT
+		// and nothing would be rebuilt. (#645)
+		Cache_GC::expire_static_url( $url );
+
 		$limit  = self::tablet_page_limit();
 		$result = self::warm_devices(
 			$url,
@@ -750,7 +804,8 @@ final class Preloader {
 
 	/**
 	 * Build the URL queue for a fresh crawl: parse the sitemap, follow
-	 * nested indexes, drop excluded paths.
+	 * nested indexes, drop excluded post types and paths, then let site code
+	 * trim the list.
 	 *
 	 * @return string[]
 	 */
@@ -760,13 +815,16 @@ final class Preloader {
 		self::$last_sitemap_error = '';
 		self::$last_sitemap_url   = '';
 		self::$queue_source       = 'none';
+		self::$skipped            = array();
 
 		$sitemap = trim( (string) ( $opts['sitemap_url'] ?? '' ) );
 		if ( '' === $sitemap ) {
-			$sitemap = home_url( '/wp-sitemap.xml' );
+			$sitemap = self::default_sitemap_url();
 		}
 
-		$urls = self::fetch_sitemap_urls( $sitemap, 0 );
+		$skip_types = self::excluded_post_types( $opts );
+
+		$urls = self::fetch_sitemap_urls( $sitemap, 0, $skip_types );
 		$from = empty( $urls ) ? 'none' : 'sitemap';
 
 		/*
@@ -783,14 +841,15 @@ final class Preloader {
 		 * something else would be worse than doing nothing. (#142)
 		 */
 		if ( empty( $urls ) && '' !== self::$last_sitemap_error ) {
-			$urls = self::fallback_urls();
+			$urls = self::fallback_urls( $skip_types );
 			$from = empty( $urls ) ? 'none' : 'fallback';
 		}
 
 		$cache_opts = Settings_Manager::get( 'cache' );
 		$excluded   = is_array( $cache_opts['excluded_urls'] ?? null ) ? $cache_opts['excluded_urls'] : array();
 		if ( ! empty( $excluded ) ) {
-			$urls = array_filter(
+			$before = count( $urls );
+			$urls   = array_filter(
 				$urls,
 				static function ( $u ) use ( $excluded ) {
 					$path = (string) wp_parse_url( $u, PHP_URL_PATH );
@@ -802,11 +861,46 @@ final class Preloader {
 					return true;
 				}
 			);
+			self::count_skipped( 'excluded_url', $before - count( $urls ) );
 		}
 
-		// Dedup + cap at 5000 to bound the transient size on huge sites.
 		$urls = array_values( array_unique( $urls ) );
-		$urls = array_slice( $urls, 0, 5000 );
+
+		/**
+		 * Filter the preloader's queue before the crawl starts.
+		 *
+		 * For integrations that know which URLs can never be served from the
+		 * cache, such as gated lessons that an anonymous visitor only sees as
+		 * a login prompt. Return the URLs to keep.
+		 *
+		 * @since 1.3.6
+		 * @param string[] $urls   The URLs about to be queued.
+		 * @param string   $source Where they came from: 'sitemap', 'fallback' or 'none'.
+		 */
+		$before = count( $urls );
+		$urls   = array_values( array_filter( array_map( 'strval', (array) apply_filters( 'xspeed_preloader_queue', $urls, $from ) ), 'strlen' ) );
+		self::count_skipped( 'filtered', $before - count( $urls ) );
+
+		$kept = array();
+		foreach ( $urls as $url ) {
+			/**
+			 * Veto one URL from the preloader's queue.
+			 *
+			 * @since 1.3.6
+			 * @param bool   $skip True to leave the URL out of the crawl.
+			 * @param string $url  The URL.
+			 */
+			if ( true === (bool) apply_filters( 'xspeed_preloader_skip_url', false, $url ) ) {
+				self::count_skipped( 'filtered', 1 );
+				continue;
+			}
+			$kept[] = $url;
+		}
+		$urls = array_values( array_unique( $kept ) );
+
+		// Cap to bound the transient size on huge sites, and say so.
+		self::count_skipped( 'over_cap', count( $urls ) - self::QUEUE_CAP );
+		$urls = array_slice( $urls, 0, self::QUEUE_CAP );
 
 		/*
 		 * Commit the verdict only now, AFTER the exclusion filter — the
@@ -823,9 +917,128 @@ final class Preloader {
 	}
 
 	/**
+	 * Where WordPress core serves its sitemap index on this site.
+	 *
+	 * `/wp-sitemap.xml` exists only through a rewrite rule. With plain
+	 * permalinks the index is `/?sitemap=index`, and `/wp-sitemap.xml` is the
+	 * home page, so a crawl read a page of HTML, found no URLs and queued
+	 * nothing. get_sitemap_url() gives the right form for either setting.
+	 */
+	private static function default_sitemap_url(): string {
+		$url = function_exists( 'get_sitemap_url' ) ? get_sitemap_url( 'index' ) : false;
+		return is_string( $url ) && '' !== $url ? $url : home_url( '/wp-sitemap.xml' );
+	}
+
+	/** Add to one skip reason's count. Nothing to add is a no-op. */
+	private static function count_skipped( string $reason, int $n ): void {
+		if ( $n > 0 ) {
+			self::$skipped[ $reason ] = ( self::$skipped[ $reason ] ?? 0 ) + $n;
+		}
+	}
+
+	/**
+	 * The post types this crawl leaves out, from the `excluded_post_types`
+	 * setting.
+	 *
+	 * @return string[]
+	 */
+	private static function excluded_post_types( array $opts ): array {
+		$types = is_array( $opts['excluded_post_types'] ?? null ) ? $opts['excluded_post_types'] : array();
+		$types = array_map( 'sanitize_key', array_map( 'strval', $types ) );
+		return array_values( array_unique( array_filter( $types, 'strlen' ) ) );
+	}
+
+	/**
+	 * The post type a child sitemap lists, if its address says so and that
+	 * type is in $types.
+	 *
+	 * Recognises the WordPress core names (`wp-sitemap-posts-<type>-<n>.xml`,
+	 * or `?sitemap=posts&sitemap-subtype=<type>` without pretty permalinks)
+	 * and the `<type>-sitemap<n>.xml` form that Yoast SEO, Rank Math,
+	 * SEOPress and All in One SEO use. A sitemap named any other way is not
+	 * recognised, so its URLs are still queued.
+	 *
+	 * @param string   $url   Child sitemap URL from a sitemap index.
+	 * @param string[] $types Excluded post types.
+	 */
+	private static function excluded_child_sitemap( string $url, array $types ): string {
+		if ( empty( $types ) ) {
+			return '';
+		}
+
+		$query = (string) wp_parse_url( $url, PHP_URL_QUERY );
+		if ( '' !== $query ) {
+			parse_str( $query, $q );
+			if ( 'posts' === ( $q['sitemap'] ?? '' ) && isset( $q['sitemap-subtype'] ) ) {
+				$type = sanitize_key( (string) $q['sitemap-subtype'] );
+				return in_array( $type, $types, true ) ? $type : '';
+			}
+		}
+
+		$file = basename( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+		if ( preg_match( '/^wp-sitemap-posts-(.+)-\d+\.xml$/i', $file, $m )
+			|| preg_match( '/^(.+)-sitemap\d*\.xml$/i', $file, $m ) ) {
+			$type = sanitize_key( $m[1] );
+			return in_array( $type, $types, true ) ? $type : '';
+		}
+
+		return '';
+	}
+
+	/**
+	 * URLs the crawl warms whatever post types are excluded: the home page,
+	 * and the posts page when the site has one. They are usually the most
+	 * visited URLs on the site, and neither is what a post-type exclusion
+	 * is for.
+	 *
+	 * @return string[]
+	 */
+	private static function always_warmed_urls(): array {
+		$urls = array();
+		$home = (string) home_url( '/' );
+		if ( '' !== trim( $home, '/' ) ) {
+			$urls[] = $home;
+		}
+		$posts_page = self::posts_page_id();
+		if ( $posts_page > 0 ) {
+			$link = get_permalink( $posts_page );
+			if ( is_string( $link ) && '' !== $link ) {
+				$urls[] = $link;
+			}
+		}
+		return array_values( array_unique( $urls ) );
+	}
+
+	/** A URL compared without its scheme or trailing slash. */
+	private static function url_key( string $url ): string {
+		return strtolower( rtrim( (string) preg_replace( '#^https?://#i', '', $url ), '/' ) );
+	}
+
+	/**
+	 * @param string[] $urls
+	 * @return array<string,true> url_key() => true.
+	 */
+	private static function url_keys( array $urls ): array {
+		$keys = array();
+		foreach ( $urls as $url ) {
+			$keys[ self::url_key( $url ) ] = true;
+		}
+		return $keys;
+	}
+
+	/** The posts page's ID when the front page is a static page, else 0. */
+	private static function posts_page_id(): int {
+		if ( 'page' !== get_option( 'show_on_front' ) ) {
+			return 0;
+		}
+		return (int) get_option( 'page_for_posts' );
+	}
+
+	/**
 	 * Enumerate warmable URLs from the database, for sites whose sitemap
-	 * can't be fetched. Deliberately modest in scope: the home page, then
-	 * the most recently modified public posts across every public post type.
+	 * can't be fetched. Deliberately modest in scope: the home page and the
+	 * posts page (see always_warmed_urls()), then the most recently modified
+	 * public posts across every public post type.
 	 * Newest-first is the right bias — those are the URLs most likely to be
 	 * requested and least likely to be warm already.
 	 *
@@ -833,14 +1046,11 @@ final class Preloader {
 	 * handling and multisite switching all behave the way the rest of
 	 * WordPress does.
 	 *
+	 * @param string[] $skip_types Post types to leave out.
 	 * @return string[]
 	 */
-	private static function fallback_urls(): array {
-		$urls = array();
-		$home = (string) home_url( '/' );
-		if ( '' !== trim( $home, '/' ) ) {
-			$urls[] = $home;
-		}
+	private static function fallback_urls( array $skip_types = array() ): array {
+		$urls = self::always_warmed_urls();
 
 		$types = get_post_types(
 			array(
@@ -856,6 +1066,25 @@ final class Preloader {
 		if ( ! empty( $types ) ) {
 			$types['page'] = 'page';
 			unset( $types['attachment'] );
+			foreach ( $skip_types as $skip ) {
+				if ( ! isset( $types[ $skip ] ) ) {
+					continue;
+				}
+				unset( $types[ $skip ] );
+				// Counted, so the fallback reports what it left out just as
+				// the sitemap path does. Published posts of that type: the
+				// ones the query would otherwise have considered.
+				$counts = function_exists( 'wp_count_posts' ) ? wp_count_posts( $skip ) : null;
+				$kept   = 0;
+				// The static front page and the posts page are warmed
+				// anyway, so they are not skipped.
+				foreach ( array( 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_on_front' ) : 0, self::posts_page_id() ) as $id ) {
+					if ( $id > 0 && get_post_type( $id ) === $skip && 'publish' === get_post_status( $id ) ) {
+						++$kept;
+					}
+				}
+				self::count_skipped( 'post_type', max( 0, (int) ( $counts->publish ?? 0 ) - $kept ) );
+			}
 		}
 
 		if ( empty( $types ) || ! class_exists( '\WP_Query' ) ) {
@@ -877,7 +1106,7 @@ final class Preloader {
 			)
 		);
 
-		foreach ( $query->posts as $post_id ) {
+		foreach ( (array) $query->posts as $post_id ) {
 			$permalink = get_permalink( (int) $post_id );
 			if ( is_string( $permalink ) && '' !== $permalink ) {
 				$urls[] = $permalink;
@@ -888,10 +1117,51 @@ final class Preloader {
 	}
 
 	/**
+	 * The `<loc>` values of a sitemap, as URLs.
+	 *
+	 * A sitemap is XML, so `&` is written `&amp;`. WordPress's own sitemap
+	 * index does that on every site with plain permalinks
+	 * (`?sitemap=posts&amp;sitemap-subtype=post`), and reading the text
+	 * as-is fetched a child sitemap WordPress could not route, so the crawl
+	 * queued only a handful of a site's pages. A value wrapped in CDATA is
+	 * unwrapped. Characters outside ASCII are percent-encoded, the form a
+	 * URL takes on the wire, so `caf&#xE9;` is not rejected as invalid.
+	 * (#792)
+	 *
+	 * @param string $body Sitemap XML.
+	 * @return string[]
+	 */
+	private static function sitemap_locs( string $body ): array {
+		if ( ! preg_match_all( '#<loc>\s*(?:<!\[CDATA\[((?:(?!\]\]>|</loc>).)*)\]\]>|([^<]*))\s*</loc>#is', $body, $matches, PREG_SET_ORDER ) ) {
+			return array();
+		}
+		$out = array();
+		foreach ( $matches as $m ) {
+			$value = isset( $m[2] ) && '' !== $m[2] ? html_entity_decode( $m[2], ENT_QUOTES | ENT_XML1, 'UTF-8' ) : (string) $m[1];
+			$value = (string) preg_replace_callback(
+				'/[^\x00-\x7F]/',
+				static function ( array $c ): string {
+					return rawurlencode( $c[0] );
+				},
+				trim( $value )
+			);
+			if ( '' !== $value && false !== filter_var( $value, FILTER_VALIDATE_URL ) ) {
+				$out[] = $value;
+			}
+		}
+		return $out;
+	}
+
+	/**
 	 * Recursive sitemap parser. Depth-limited to 3 so a maliciously
 	 * deep index can't stack-overflow.
+	 *
+	 * A child sitemap for an excluded post type is still read, so its URLs
+	 * can be counted as skipped, but none of them are returned.
+	 *
+	 * @param string[] $skip_types Excluded post types.
 	 */
-	private static function fetch_sitemap_urls( string $sitemap_url, int $depth ): array {
+	private static function fetch_sitemap_urls( string $sitemap_url, int $depth, array $skip_types = array() ): array {
 		if ( $depth > 3 ) {
 			return array();
 		}
@@ -939,24 +1209,49 @@ final class Preloader {
 			return array();
 		}
 
+		// A 200 that is not a sitemap (a theme's home page, a login wall) is a
+		// failed fetch, not an empty site. Recorded like one, so the crawl
+		// falls back to the site's content instead of queuing nothing.
+		if ( 0 === $depth && false === stripos( $body, '<urlset' ) && false === stripos( $body, '<sitemapindex' ) ) {
+			self::$last_sitemap_error = sprintf(
+				/* translators: %s: sitemap URL. */
+				__( 'The address %s did not return a sitemap.', 'xspeed' ),
+				$sitemap_url
+			);
+			self::$last_sitemap_url = (string) $sitemap_url;
+			return array();
+		}
+
 		$urls = array();
 		// Sitemap index → recurse.
 		if ( false !== strpos( $body, '<sitemapindex' ) ) {
-			if ( preg_match_all( '#<loc>([^<]+)</loc>#i', $body, $matches ) ) {
-				foreach ( $matches[1] as $child ) {
-					$urls = array_merge( $urls, self::fetch_sitemap_urls( trim( $child ), $depth + 1 ) );
+			foreach ( self::sitemap_locs( $body ) as $child ) {
+				$child_urls = self::fetch_sitemap_urls( $child, $depth + 1, $skip_types );
+				if ( '' !== self::excluded_child_sitemap( $child, $skip_types ) ) {
+					// The home page and the posts page stay in the crawl
+					// whatever is excluded. Core lists a latest-posts home
+					// page in the page sitemap, so excluding Pages used to
+					// drop the home page with them.
+					$always = self::url_keys( self::always_warmed_urls() );
+					$kept   = array_values(
+						array_filter(
+							$child_urls,
+							static function ( $u ) use ( $always ) {
+								return isset( $always[ self::url_key( (string) $u ) ] );
+							}
+						)
+					);
+					self::count_skipped( 'post_type', count( $child_urls ) - count( $kept ) );
+					$urls = array_merge( $urls, $kept );
+					continue;
 				}
+				$urls = array_merge( $urls, $child_urls );
 			}
 			return $urls;
 		}
 		// URL set → collect.
-		if ( preg_match_all( '#<loc>([^<]+)</loc>#i', $body, $matches ) ) {
-			foreach ( $matches[1] as $u ) {
-				$u = trim( $u );
-				if ( '' !== $u && false !== filter_var( $u, FILTER_VALIDATE_URL ) ) {
-					$urls[] = $u;
-				}
-			}
+		foreach ( self::sitemap_locs( $body ) as $u ) {
+			$urls[] = $u;
 		}
 		return $urls;
 	}
@@ -966,11 +1261,18 @@ final class Preloader {
 	 * Manual = no cron schedule (user must hit "Start now" to crawl).
 	 */
 	public static function apply_schedule( string $schedule ): void {
+		$wanted = in_array( $schedule, array( 'hourly', 'daily', 'weekly' ), true ) ? $schedule : '';
+
+		// Every Preloader save lands here. Rebooking an unchanged schedule
+		// moved the crawl to the time of the save, so a batch-size edit at
+		// 23:52 turned a 21:48 daily crawl into a 23:53 one. (#757)
+		if ( $wanted === (string) wp_get_schedule( 'xspeed_preloader_recurring' ) ) {
+			return;
+		}
+
 		wp_clear_scheduled_hook( 'xspeed_preloader_recurring' );
-		if ( in_array( $schedule, array( 'hourly', 'daily', 'weekly' ), true ) ) {
-			if ( ! wp_next_scheduled( 'xspeed_preloader_recurring' ) ) {
-				wp_schedule_event( time() + 60, $schedule, 'xspeed_preloader_recurring' );
-			}
+		if ( '' !== $wanted ) {
+			wp_schedule_event( time() + 60, $wanted, 'xspeed_preloader_recurring' );
 		}
 	}
 
@@ -981,8 +1283,83 @@ final class Preloader {
 	public static function recurring_kickoff(): void {
 		$state = self::status();
 		if ( $state['running'] ) {
-			return;
+			if ( ! self::is_stalled( $state ) ) {
+				Activity_Log::record(
+					'preloader_skipped',
+					sprintf(
+						/* translators: 1: URLs warmed so far, 2: URLs in the crawl. */
+						__( 'Scheduled preload skipped: a crawl is still running (%1$d/%2$d URLs warmed).', 'xspeed' ),
+						$state['processed'],
+						$state['total']
+					),
+					Activity_Log::INFO
+				);
+				return;
+			}
+			// The queue may be hours old by now, so start over rather than
+			// finish it.
+			Activity_Log::record(
+				'preloader_restarted',
+				sprintf(
+					/* translators: 1: URLs warmed, 2: URLs in the crawl. */
+					__( 'Preloader restarted a crawl that had stopped moving (%1$d/%2$d URLs warmed).', 'xspeed' ),
+					$state['processed'],
+					$state['total']
+				),
+				Activity_Log::WARN
+			);
 		}
 		self::start();
+	}
+
+	/**
+	 * A crawl is stalled when it says `running`, has URLs left, has no tick
+	 * booked, and has not ticked for STALL_AFTER seconds.
+	 *
+	 * Each tick books the next one, and WP-Cron removes an event before it
+	 * runs the callback. A tick that comes due while a plugin update has
+	 * the callback unregistered is used up, and the chain ends with the
+	 * state still `running`. That blocked every scheduled crawl for up to
+	 * STATE_TTL. (#756)
+	 */
+	public static function is_stalled( array $state ): bool {
+		if ( empty( $state['running'] ) || empty( $state['queue'] ) ) {
+			return false;
+		}
+		if ( wp_next_scheduled( self::CRON_HOOK ) ) {
+			return false;
+		}
+		$last = max( (int) ( $state['last_tick_at'] ?? 0 ), (int) ( $state['started_at'] ?? 0 ) );
+		return time() - $last >= self::STALL_AFTER;
+	}
+
+	/**
+	 * Book a tick for a stalled crawl so it finishes. Status reads call
+	 * this, so opening the Preloader panel or asking for status is enough
+	 * to get a stuck crawl moving again.
+	 *
+	 * @return bool True when a tick was booked.
+	 */
+	public static function resume_if_stalled(): bool {
+		$state = self::status();
+		if ( ! self::is_stalled( $state ) ) {
+			return false;
+		}
+		// A second status read in the same moment loses WP-Cron's duplicate
+		// check, and a refused booking resumed nothing.
+		if ( true !== wp_schedule_single_event( time(), self::CRON_HOOK ) ) {
+			return false;
+		}
+		Activity_Log::record(
+			'preloader_resumed',
+			sprintf(
+				/* translators: 1: URLs warmed, 2: URLs in the crawl. */
+				__( 'Preloader resumed a crawl that had stopped moving (%1$d/%2$d URLs warmed).', 'xspeed' ),
+				$state['processed'],
+				$state['total']
+			),
+			Activity_Log::WARN
+		);
+		return true;
 	}
 }

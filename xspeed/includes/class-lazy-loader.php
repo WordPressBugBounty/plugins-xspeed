@@ -961,6 +961,134 @@ JS;
 	}
 
 	/**
+	 * Lower-case substrings that mean a page can end up with a <video>: the
+	 * tag itself, a video file, or a player or builder block that builds one
+	 * in script. Filterable through `xspeed_lazy_autoplay_markers`.
+	 */
+	public const AUTOPLAY_VIDEO_MARKERS = array(
+		'<video',
+		'.mp4',
+		'.webm',
+		'.m3u8',
+		'.ogv',
+		'.m4v',
+		'.mov',
+		"createelement('video'",
+		'createelement("video"',
+		'background_video',
+		'bg-video',
+		'video-bg',
+		'wp-block-video',
+		'elementor-video',
+		'fusion-video',
+		'et_pb_video',
+		'brxe-video',
+		'video-js',
+		'plyr',
+		'mejs-',
+		'mediaelement',
+		'jwplayer',
+		'flowplayer',
+		'presto-player',
+		'wistia',
+		'mux-player',
+		'<media-',
+	);
+
+	/**
+	 * The page with its <style> blocks taken out.
+	 *
+	 * Stylesheets name `.wp-block-video` and player classes on pages with no
+	 * video (block themes inline core's block CSS), and CSS cannot build a
+	 * <video>. Walked left to right rather than with one regex: a `<style>`
+	 * written inside a script string would otherwise start a match that ran
+	 * to the real `</style>` and hid every marker in between, and a single
+	 * very large style block hit the regex backtrack limit.
+	 *
+	 * @param string $html Page HTML.
+	 */
+	private static function without_style_blocks( string $html ): string {
+		$out = '';
+		$pos = 0;
+		$len = strlen( $html );
+		while ( $pos < $len ) {
+			$script = stripos( $html, '<script', $pos );
+			$style  = stripos( $html, '<style', $pos );
+			if ( false === $style ) {
+				break;
+			}
+			if ( false !== $script && $script < $style ) {
+				// Keep the script whole; a `<style>` in it is just text.
+				$end  = stripos( $html, '</script>', $script );
+				$stop = false === $end ? $len : $end + 9;
+				$out .= substr( $html, $pos, $stop - $pos );
+				$pos  = $stop;
+				continue;
+			}
+			$end  = stripos( $html, '</style>', $style );
+			$out .= substr( $html, $pos, $style - $pos );
+			$pos  = false === $end ? $len : $end + 8;
+		}
+		return $out . substr( $html, $pos );
+	}
+
+	/**
+	 * Remove the autoplay restorer from a page that cannot have a <video>.
+	 *
+	 * It prints in wp_head, before anything knows whether the page has a
+	 * video, because it must be listening before a player's script sets a
+	 * src. On a page with no video it was close to 4 KB of HTML and a
+	 * document-wide MutationObserver for nothing (#646). The finished page
+	 * is known here, so the script goes when neither the server pass
+	 * deferred a video nor any marker of one is in the HTML. A missed
+	 * marker costs one eagerly loaded video, never a broken one.
+	 *
+	 * @param string $html The finished page.
+	 */
+	public static function drop_unused_autoplay_script( $html ) {
+		if ( ! is_string( $html ) || false === stripos( $html, 'xspeed-lazy-autoplay' ) || self::needs_autoplay_script() ) {
+			return $html;
+		}
+
+		$rest = preg_replace( '#<script\b[^>]*\bid=(["\'])xspeed-lazy-autoplay\1[^>]*>.*?</script>\s*#is', '', $html, 1, $count );
+		if ( ! is_string( $rest ) || 1 !== $count ) {
+			return $html;
+		}
+
+		/**
+		 * Filter: xspeed_lazy_autoplay_markers
+		 *
+		 * Substrings (matched without case) whose presence keeps the
+		 * autoplay restorer on the page. Add one for a player that builds
+		 * its <video> in script from markup none of the defaults match.
+		 *
+		 * @param string[] $markers Lower-case substrings.
+		 */
+		$markers = (array) apply_filters( 'xspeed_lazy_autoplay_markers', self::AUTOPLAY_VIDEO_MARKERS );
+		$lower   = strtolower( self::without_style_blocks( $rest ) );
+		$needed  = false;
+		foreach ( $markers as $marker ) {
+			$marker = strtolower( (string) $marker );
+			if ( '' !== $marker && false !== strpos( $lower, $marker ) ) {
+				$needed = true;
+				break;
+			}
+		}
+
+		/**
+		 * Filter: xspeed_lazy_autoplay_script_needed
+		 *
+		 * Final say on keeping the autoplay restorer on this page.
+		 *
+		 * @param bool   $needed Whether a video marker was found.
+		 * @param string $html   The finished page, script included.
+		 */
+		$needed = (bool) apply_filters( 'xspeed_lazy_autoplay_script_needed', $needed, $html );
+
+		return $needed ? $html : $rest;
+	}
+
+	/**
 	 * Page-builder video blocks that render NO <video> tag server-side.
 	 *
 	 * Essential Blocks' advanced-video, and widgets shaped like it, ship a

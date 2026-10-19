@@ -83,6 +83,20 @@ class Minifier {
 			// the default 10 have printed their markers, before our defer
 			// (20) and delay (30) look at the tag. (#456)
 			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'restore_marked_script_src' ), 15, 3 );
+			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'restore_preload_hints' ), 4 );
+			// The filter above fires only on a cacheable MISS. Logged-in
+			// visitors, excluded URLs (Borlabs runs on the cart and
+			// checkout too) and sites with the page cache off get the same
+			// pass from a buffer of our own. It returns at once unless a
+			// script was restored, and on a cacheable request it runs before
+			// the cache's buffer, so the stored page is already right. (#644)
+			add_action(
+				'template_redirect',
+				static function () {
+					ob_start( array( Minify_Filters::class, 'restore_preload_hints' ) );
+				},
+				9
+			);
 		}
 
 		// Phase 4.1a — filter-only "smarter minifier" features. Each is
@@ -93,6 +107,11 @@ class Minifier {
 		}
 		if ( ! empty( $opts['defer_js'] ) ) {
 			add_filter( 'script_loader_tag', array( Minify_Filters::class, 'defer_script_tag' ), 20, 3 );
+			// A consent banner pasted into the theme never reaches
+			// script_loader_tag, so the opt-in defer needs the buffer too.
+			if ( ! empty( $opts['defer_consent'] ) ) {
+				add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'defer_raw_consent_tags' ), 19 );
+			}
 		}
 		if ( ! empty( $opts['delay_js'] ) ) {
 			// Delay applies a transform that's mutually exclusive with
@@ -259,7 +278,13 @@ class Minifier {
 			$html
 		);
 
-		$html = preg_replace( '/<!--(?!\[if).*?-->/s', '', $html );
+		// Keep conditional comments, including the two markers of the
+		// downlevel-revealed form (`<!-->` and `<!--<![endif]-->`). Thrive
+		// wraps `<html>` in one; matching from its `<!-->` ran to the next
+		// `-->` and deleted the tag, leaving an unclosed comment and a blank
+		// page. (#758) `<!--->` is a complete, empty comment too, so it is
+		// never taken as the start of one.
+		$html = preg_replace( '/<!--(?!\[if|-?>|<!\[endif).*?-->/s', '', $html );
 		$html = preg_replace( '/\s+/', ' ', $html );
 
 		/*

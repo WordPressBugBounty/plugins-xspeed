@@ -108,6 +108,10 @@ final class Pro_Audit {
 			// so a low number is an attribution artefact, not a cache problem.
 			// Rule 2 must not fire an upsell off it. (#118)
 			'edge_cache'    => ! empty( $cloudflare['enabled'] ),
+			// Static-rewrite hits the counter can't see make the ratio
+			// PHP-only, so the same reasoning applies. (#760)
+			'static_hits_uncounted' => class_exists( '\\XSpeed\\Cache' )
+				&& '' !== Cache::static_hits_uncounted_reason(),
 			'totals_24h'    => array(
 				'hits'     => (int) ( $totals['hits'] ?? 0 ),
 				'misses'   => (int) ( $totals['misses'] ?? 0 ),
@@ -548,6 +552,7 @@ final class Pro_Audit {
 		// that the cache is failing, so firing a "your cache is bad" upsell off
 		// it is selling against a measurement artefact.
 		if ( empty( $s['edge_cache'] )
+			&& empty( $s['static_hits_uncounted'] )
 			&& $s['totals_24h']['total'] >= 50
 			&& $s['totals_24h']['ratio'] < 0.5 ) {
 			$pct   = (int) round( $s['totals_24h']['ratio'] * 100 );

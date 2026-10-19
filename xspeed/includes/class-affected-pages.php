@@ -375,6 +375,12 @@ final class Affected_Pages {
 			if ( 'any' === $spec['kind'] ) {
 				return true;
 			}
+			if ( 'unknown' === $spec['kind'] ) {
+				if ( self::unknown_list_may_show( $post, $before ) ) {
+					return true;
+				}
+				continue;
+			}
 			if ( 'dated' === $spec['kind'] ) {
 				if ( $status_changed || $date_changed ) {
 					return true;
@@ -612,6 +618,7 @@ final class Affected_Pages {
 		self::$old_terms             = array();
 		self::$old_terms_by_taxonomy = array();
 		self::$post_list_specs       = null;
+		self::$static_widget_bases   = null;
 		self::$theme_blocks          = null;
 		self::$site_lists_comments   = null;
 		self::$sticky_changed        = array();
@@ -1137,6 +1144,65 @@ final class Affected_Pages {
 	}
 
 	/**
+	 * Widgets and plugin blocks that never list posts. Any other active
+	 * widget, or plugin block in a widget area or template part, is read as
+	 * a list of unknown content.
+	 *
+	 * @return string[]
+	 */
+	private static function static_widget_bases(): array {
+		if ( null !== self::$static_widget_bases ) {
+			return self::$static_widget_bases;
+		}
+		/**
+		 * Filter: xspeed_static_widget_bases
+		 *
+		 * Widget id bases (the part before `-N`) and plugin block names
+		 * (`namespace/name`) that never show a list of posts. Any other active
+		 * widget or plugin block makes a save of a custom post type clear the
+		 * whole site. Add one here when it shows no posts.
+		 *
+		 * @param string[] $bases Widget id bases and block names.
+		 */
+		self::$static_widget_bases = (array) apply_filters(
+			'xspeed_static_widget_bases',
+			array(
+				// Core.
+				'text', 'custom_html', 'media_image', 'media_video', 'media_audio', 'media_gallery', 'search', 'nav_menu', 'meta', 'rss', 'block', 'recent-comments',
+				// Common plugin widgets and blocks that show no posts.
+				'woocommerce_widget_cart', 'woocommerce_product_search', 'woocommerce_price_filter', 'woocommerce_layered_nav', 'woocommerce_layered_nav_filters', 'woocommerce_rating_filter',
+				'woocommerce/mini-cart', 'woocommerce/customer-account', 'woocommerce/product-search', 'woocommerce/cart-link',
+				'bbp_login_widget', 'bbp_search_widget', 'mc4wp_form_widget', 'wpforms-widget',
+			)
+		);
+		return self::$static_widget_bases;
+	}
+
+	/** Per-request answer of static_widget_bases(). @var string[]|null */
+	private static $static_widget_bases = null;
+
+	/**
+	 * Whether an unreadable widget may show this post.
+	 *
+	 * Posts and pages are what core lists draw, and Listing_Pages records
+	 * those at render. A custom post type is what a plugin widget lists with
+	 * its own query, and a recorded list of the same type says nothing about
+	 * it: Events Manager orders by event date in post meta, not post_date.
+	 * The type the post had before counts too, so moving an event to a post
+	 * still clears the widget's pages.
+	 *
+	 * @param \WP_Post      $post   The saved post.
+	 * @param \WP_Post|null $before The post before the save.
+	 */
+	private static function unknown_list_may_show( \WP_Post $post, ?\WP_Post $before ): bool {
+		$types = array( (string) $post->post_type );
+		if ( $before instanceof \WP_Post ) {
+			$types[] = (string) $before->post_type;
+		}
+		return array() !== array_diff( $types, array( 'post', 'page', 'attachment' ) );
+	}
+
+	/**
 	 * Post lists drawn outside the main loop, as specs lists_changed_by()
 	 * can test a change against.
 	 *
@@ -1146,7 +1212,8 @@ final class Affected_Pages {
 		if ( null !== self::$post_list_specs ) {
 			return self::$post_list_specs;
 		}
-		$specs = array();
+		$specs  = array();
+		$static = self::static_widget_bases();
 
 		foreach ( self::active_widget_ids() as $widget_id ) {
 			if ( 0 === strpos( $widget_id, 'recent-posts-' ) ) {
@@ -1160,6 +1227,11 @@ final class Affected_Pages {
 				$specs[] = array( 'kind' => 'pages' );
 			} elseif ( 0 === strpos( $widget_id, 'categories-' ) || 0 === strpos( $widget_id, 'tag_cloud-' ) ) {
 				$specs[] = array( 'kind' => 'terms' );
+			} elseif ( ! in_array( (string) preg_replace( '/-\d+$/', '', $widget_id ), $static, true ) ) {
+				// A widget we can't read may list posts with its own SQL, which
+				// no recorded list sees. Events Manager's shows upcoming events
+				// on every page, and a new event cleared none of them. (#759)
+				$specs[] = array( 'kind' => 'unknown' );
 			}
 		}
 
@@ -1267,6 +1339,18 @@ final class Affected_Pages {
 					'sticky' => '' === $sticky,
 				)
 				: array( 'kind' => 'any' );
+		}
+
+		// A legacy widget wrapped in a block, or a plugin's own block (an
+		// events list, say), in a widget area or a template part. (#759)
+		if ( 'core/legacy-widget' === $name ) {
+			$base = (string) ( $attrs['idBase'] ?? '' );
+			return '' !== $base && ! in_array( $base, self::static_widget_bases(), true ) && ! in_array( $base, array( 'recent-posts', 'archives', 'calendar', 'pages', 'categories', 'tag_cloud' ), true )
+				? array( 'kind' => 'unknown' )
+				: null;
+		}
+		if ( '' !== $name && 0 !== strpos( $name, 'core/' ) && ! in_array( $name, self::static_widget_bases(), true ) ) {
+			return array( 'kind' => 'unknown' );
 		}
 
 		return null;

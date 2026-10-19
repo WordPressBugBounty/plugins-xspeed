@@ -123,7 +123,35 @@ final class PreloaderModule extends Module {
 				'description' => __( 'A new comment clears the page from the cache. This caches the page again right away.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
 			),
+			'excluded_post_types' => array(
+				'type'        => 'list',
+				'default'     => array(),
+				'item_type'   => 'string',
+				'label'       => __( 'Skip these post types', 'xspeed' ),
+				'description' => __( 'Leave these post types out of the crawl, for example members-only lessons that a logged-out visitor only sees as a login prompt. Works with the WordPress, Yoast SEO, Rank Math, SEOPress and All in One SEO sitemaps; a sitemap named another way is crawled in full.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'enabled' ),
+			),
 		);
+	}
+
+	/**
+	 * Post types a crawl can warm, for the panel's exclusion list and the
+	 * CLI's validation: public ones, minus attachments.
+	 *
+	 * @return array<int,array{name:string,label:string}>
+	 */
+	public static function warmable_post_types(): array {
+		$out = array();
+		foreach ( get_post_types( array( 'public' => true ), 'objects' ) as $name => $obj ) {
+			if ( 'attachment' === $name ) {
+				continue;
+			}
+			$out[] = array(
+				'name'  => (string) $name,
+				'label' => isset( $obj->labels->name ) ? (string) $obj->labels->name : (string) $name,
+			);
+		}
+		return $out;
 	}
 
 	public function rest_routes(): array {
@@ -156,16 +184,49 @@ final class PreloaderModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed preloader',
-				'risk'      => array( 'start' => 'write', 'stop' => 'write', 'status' => 'read' ),
+				// `status` stays read: the one thing it can write is a tick for
+				// a crawl that stopped moving, the crawl the admin already
+				// started. (#756)
+				'risk'      => array( 'start' => 'write', 'stop' => 'write', 'status' => 'read', 'set' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Drive the cache preloader (start | stop | status).',
+				'shortdesc' => 'Drive the cache preloader (start | stop | status | set).',
 				'ai_hint'   => 'Cache warming: crawl the site so visitors hit a warm cache instead of paying for the first render. Use after a full purge, or when the first visitor to each page reports a slow load.',
 				'synopsis'  => array(
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'start', 'stop', 'status' ),
+						'options'  => array( 'start', 'stop', 'status', 'set' ),
 						'optional' => false,
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'enabled',
+						'optional'    => true,
+						'description' => 'set: turn the preloader on (1) or off (0).',
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'schedule',
+						'optional'    => true,
+						'description' => 'set: manual, hourly, daily or weekly.',
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'batch-size',
+						'optional'    => true,
+						'description' => 'set: URLs warmed per cron tick (1-50).',
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'sitemap-url',
+						'optional'    => true,
+						'description' => 'set: sitemap to crawl; empty for /wp-sitemap.xml.',
+					),
+					array(
+						'type'        => 'assoc',
+						'name'        => 'excluded-post-types',
+						'optional'    => true,
+						'description' => 'set: comma-separated post types to leave out of the crawl; empty to clear.',
 					),
 				),
 			),
@@ -309,7 +370,13 @@ final class PreloaderModule extends Module {
 	}
 
 	public function rest_status( \WP_REST_Request $request ) {
-		return rest_ensure_response( Preloader::status() );
+		Preloader::resume_if_stalled();
+		$state = Preloader::status();
+		// The panel's post-type exclusion list. Here rather than in the
+		// schema: post types are registered on `init`, after the schema can
+		// first be built.
+		$state['post_types'] = self::warmable_post_types();
+		return rest_ensure_response( $state );
 	}
 
 	public function cli_handler( array $args, array $assoc ): void {
@@ -319,7 +386,7 @@ final class PreloaderModule extends Module {
 			case 'start':
 				$opts = Settings_Manager::get( self::SLUG );
 				if ( empty( $opts['enabled'] ) ) {
-					\WP_CLI::error( 'Preloader is disabled. Enable it via wp xspeed preloader set --enabled=1 first.' );
+					\WP_CLI::error( 'Preloader is disabled. Enable it with `wp xspeed preloader set --enabled=1`, or over MCP with update_settings (module preloader, enabled true).' );
 					return;
 				}
 				$state = Preloader::start();
@@ -345,7 +412,11 @@ final class PreloaderModule extends Module {
 					);
 					return;
 				}
-				\WP_CLI::success( sprintf( 'Queued %d URL%s.', $state['total'], 1 === $state['total'] ? '' : 's' ) );
+				\WP_CLI::success( sprintf( 'Queued %d URL%s.%s', $state['total'], 1 === $state['total'] ? '' : 's', self::skipped_suffix( $state ) ) );
+				return;
+
+			case 'set':
+				$this->cli_set( $assoc );
 				return;
 
 			case 'stop':
@@ -354,9 +425,20 @@ final class PreloaderModule extends Module {
 				return;
 
 			case 'status':
+				if ( Preloader::resume_if_stalled() ) {
+					\WP_CLI::warning( 'The crawl had stopped moving. A tick is booked to resume it.' );
+				}
 				$state = Preloader::status();
 				\WP_CLI::log( 'Running   : ' . ( $state['running'] ? 'yes' : 'no' ) );
 				\WP_CLI::log( 'Processed : ' . $state['processed'] . ' / ' . $state['total'] );
+				$skipped = is_array( $state['skipped'] ?? null ) ? $state['skipped'] : array();
+				if ( array_sum( $skipped ) > 0 ) {
+					$parts = array();
+					foreach ( $skipped as $reason => $n ) {
+						$parts[] = $reason . ' ' . (int) $n;
+					}
+					\WP_CLI::log( 'Skipped   : ' . array_sum( $skipped ) . ' (' . implode( ', ', $parts ) . ')' );
+				}
 				// Which copies each URL gets; the phone copy only with
 				// Separate Mobile Cache on. (#596)
 				\WP_CLI::log( 'Copies    : ' . implode( ', ', ! empty( $state['devices'] ) ? (array) $state['devices'] : Preloader::devices() ) );
@@ -392,6 +474,85 @@ final class PreloaderModule extends Module {
 
 			default:
 				\WP_CLI::error( "Unknown action: $action" );
+		}
+	}
+	/** " (N skipped)" for a start message, or '' when nothing was left out. */
+	private static function skipped_suffix( array $state ): string {
+		$n = is_array( $state['skipped'] ?? null ) ? (int) array_sum( $state['skipped'] ) : 0;
+		// Plain text: the Hub shows this Success line as its toast, so no CLI
+		// syntax in it. `status` has the per-reason breakdown.
+		return $n > 0 ? sprintf( ' Skipped %d.', $n ) : '';
+	}
+
+	/**
+	 * `wp xspeed preloader set` — write the preloader's settings.
+	 *
+	 * The disabled-preloader error used to point at this command before it
+	 * existed (#238). It goes through the same schema check as
+	 * `wp xspeed settings update`: anything invalid is refused and nothing
+	 * is written.
+	 *
+	 * @param array<string,string> $assoc Flags.
+	 */
+	private function cli_set( array $assoc ): void {
+		$map = array(
+			'enabled'             => 'enabled',
+			'schedule'            => 'schedule',
+			'batch-size'          => 'batch_size',
+			'sitemap-url'         => 'sitemap_url',
+			'excluded-post-types' => 'excluded_post_types',
+		);
+
+		$values = array();
+		foreach ( $map as $flag => $key ) {
+			if ( ! array_key_exists( $flag, $assoc ) ) {
+				continue;
+			}
+			$raw = (string) $assoc[ $flag ];
+			switch ( $key ) {
+				case 'excluded_post_types':
+					$values[ $key ] = array_values( array_filter( array_map( 'trim', explode( ',', $raw ) ), 'strlen' ) );
+					break;
+				default:
+					$values[ $key ] = $raw;
+			}
+		}
+
+		if ( empty( $values ) ) {
+			\WP_CLI::error( 'Nothing to set. Pass at least one of --enabled, --schedule, --batch-size, --sitemap-url or --excluded-post-types.' );
+			return;
+		}
+
+		$problems = array();
+
+		if ( isset( $values['excluded_post_types'] ) ) {
+			$known   = wp_list_pluck( self::warmable_post_types(), 'name' );
+			$unknown = array_diff( $values['excluded_post_types'], $known );
+			if ( ! empty( $unknown ) ) {
+				$problems[] = sprintf( '  excluded-post-types — not a public post type: %s (public post types: %s)', implode( ', ', $unknown ), implode( ', ', $known ) );
+			}
+		}
+
+		// The schema decides the rest: an out-of-range batch size, an unknown
+		// schedule or a non-boolean --enabled is refused, not clamped.
+		$report = Settings_Manager::inspect_input( self::SLUG, $values );
+		foreach ( $report['invalid'] as $key ) {
+			$problems[] = sprintf( '  %s — value rejected (wrong type, or outside the allowed range/options)', array_search( $key, $map, true ) );
+		}
+		foreach ( $report['locked'] as $key ) {
+			$problems[] = sprintf( '  %s — pinned by a constant in wp-config.php', array_search( $key, $map, true ) );
+		}
+
+		if ( ! empty( $problems ) ) {
+			\WP_CLI::error( "Refused to update the preloader:\n" . implode( "\n", $problems ) . "\n\nNothing was written." );
+			return;
+		}
+
+		$saved = Settings_Manager::update( self::SLUG, $values );
+		\WP_CLI::success( 'Updated the preloader.' );
+		foreach ( array_keys( $values ) as $key ) {
+			$v = $saved[ $key ] ?? null;
+			\WP_CLI::log( sprintf( '  %-20s %s', $key, is_array( $v ) ? ( empty( $v ) ? '(none)' : implode( ', ', $v ) ) : ( is_bool( $v ) ? ( $v ? 'on' : 'off' ) : (string) $v ) ) );
 		}
 	}
 }

@@ -197,7 +197,7 @@ final class CacheModule extends Module {
 				'max'         => 720,
 				'label'       => __( 'Cache expiry (hours)', 'xspeed' ),
 				'unit'        => 'hours',
-				'description' => __( 'How long a cached page is kept before xSpeed builds it again. 1 to 720 hours (30 days).', 'xspeed' ),
+				'description' => __( 'How long a cached page is kept before xSpeed builds it again. 1 to 720 hours (30 days). When the web server serves cached pages itself (the nginx or Apache fast path), an hourly sweep deletes expired pages, so one is usually served for up to an hour past this time; a very large cache, or a site with little traffic (which runs scheduled tasks less often), can take longer.', 'xspeed' ),
 			),
 			'excluded_urls' => array(
 				'type'        => 'list',
@@ -273,7 +273,7 @@ final class CacheModule extends Module {
 				'label'       => __( 'Clear only the pages a change affects', 'xspeed' ),
 				'description' => __( 'When you publish, edit or delete a post, clear that post, the pages that list it and its feeds instead of the whole site. Pages with a post grid from a page builder, a block plugin or the theme are noted as they are built and cleared when the change can affect their list; turn this off if a grid still shows an old list.', 'xspeed' ),
 				'info_title'  => __( 'Which pages are cleared', 'xspeed' ),
-				'info'        => __( 'The post, its old address if it moved, the home page, the blog page, its categories, tags and author pages with every page of each, the date archives, feeds, the posts next to it, pages that show a Latest Posts or Query Loop block, directly or in a synced pattern, and pages noted running a post grid of their own (a page builder, block plugin, related-posts or theme list) that the change can affect. If your theme shows a list that can be on any page, and the change alters it, xSpeed clears the whole site instead: a Recent Posts, Archives or Calendar widget, a post list block, or a latest-posts grid from a page builder or plugin (usually a new post, or an edit to one of the newest few it shows), a page list or menu (a page published, withdrawn, renamed or moved), or a Categories or Tag Cloud list (a post moved to other categories or tags).', 'xspeed' ),
+				'info'        => __( 'The post, its old address if it moved, the home page, the blog page, its categories, tags and author pages with every page of each, the date archives, feeds, the posts next to it, pages that show a Latest Posts or Query Loop block, directly or in a synced pattern, and pages noted running a post grid of their own (a page builder, block plugin, related-posts or theme list) that the change can affect. If your theme shows a list that can be on any page, and the change alters it, xSpeed clears the whole site instead: a Recent Posts, Archives or Calendar widget, a post list block, or a latest-posts grid from a page builder or plugin (usually a new post, or an edit to one of the newest few it shows), a page list or menu (a page published, withdrawn, renamed or moved), or a Categories or Tag Cloud list (a post moved to other categories or tags). While a widget from another plugin is active (an events list, for example), a change to a custom post type clears the whole site, and so does a change to a theme builder layout such as a Thrive symbol or template.', 'xspeed' ),
 			),
 			'mobile_separate' => array(
 				'type'        => 'bool',
@@ -445,13 +445,14 @@ final class CacheModule extends Module {
 			\XSpeed\Cache::reconcile_mobile_separate();
 			// Re-bake the cookie / user-agent exclusion rules into the
 			// drop-in. It runs before WordPress loads and so carries a
-			// COPY of those rules, substituted at install time — and
-			// auto_heal() deliberately only reinstalls when the file is
-			// missing, foreign, or an older version, none of which a
-			// settings change makes true. Without this, adding an
-			// excluded cookie left the drop-in serving the shared
-			// anonymous page to exactly the visitors it excluded, until
-			// the next plugin upgrade happened to reinstall it.
+			// COPY of those rules, substituted at install time.
+			// auto_heal() rewrites the drop-in on every wp-admin load
+			// whenever its bytes differ from what the bundled file bakes
+			// to, so a settings change would reach it eventually; this
+			// re-bake exists so a save takes effect at once, without
+			// waiting for an admin visit. Before it, adding an excluded
+			// cookie left the drop-in serving the shared anonymous page to
+			// exactly the visitors it excluded until wp-admin was loaded.
 			//
 			// ONLY when page caching is actually on, for the same reason
 			// refresh_rewrite_if_installed() below refuses to write a
@@ -485,6 +486,7 @@ final class CacheModule extends Module {
 		// assets. Scheduled here as well as in activate() because a site that
 		// upgrades into this version never runs the activation hook again.
 		add_action( \XSpeed\Cache_GC::CRON_HOOK, array( \XSpeed\Cache_GC::class, 'run' ) );
+		add_action( \XSpeed\Cache_GC::STATIC_CRON_HOOK, array( \XSpeed\Cache_GC::class, 'run_static' ) );
 		\XSpeed\Cache_GC::ensure_scheduled();
 	}
 
@@ -1319,8 +1321,12 @@ final class CacheModule extends Module {
 			);
 			return;
 		}
+		if ( 'unversioned' === $state ) {
+			\WP_CLI::log( 'Cache rules: unversioned — the web server served xSpeed\'s static files, but its rules carry no version marker, so they cannot be compared with your settings. If you pasted them yourself, paste the block again and reload the server to add the marker.' );
+			return;
+		}
 		if ( 'absent' === $state ) {
-			\WP_CLI::log( 'Cache rules: absent — no xSpeed rules are installed, or they predate the version marker.' );
+			\WP_CLI::log( 'Cache rules: absent — no xSpeed rules are installed, so PHP serves cached pages.' );
 			return;
 		}
 

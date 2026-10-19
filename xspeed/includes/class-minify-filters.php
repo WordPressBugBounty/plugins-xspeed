@@ -466,7 +466,54 @@ final class Minify_Filters {
 		if ( '' === $original || '' === (string) $src || false === strpos( $tag, (string) $src ) ) {
 			return $tag;
 		}
+		self::$restored_src[ (string) $src ] = $original;
 		return str_replace( (string) $src, $original, $tag );
+	}
+
+	/**
+	 * Minified URL => original URL, for each script whose tag got its
+	 * original src back this request.
+	 *
+	 * @var array<string,string>
+	 */
+	private static $restored_src = array();
+
+	/**
+	 * Give a preload hint for a restored script the URL the tag loads.
+	 *
+	 * Another plugin can read a script's URL through script_loader_src and
+	 * print its own preload hint. Borlabs Cookie does for its config, so the
+	 * hint got the minified URL while restore_marked_script_src() put the
+	 * original back on the tag, and every first visit downloaded the config
+	 * twice. (#644)
+	 *
+	 * @param string $html The finished page.
+	 */
+	public static function restore_preload_hints( $html ) {
+		if ( ! is_string( $html ) || empty( self::$restored_src ) ) {
+			return $html;
+		}
+		$map = array();
+		foreach ( self::$restored_src as $minified => $original ) {
+			// The raw spelling last, so it wins when the three are the same
+			// string (a URL with no `&`).
+			$map[ esc_url( $minified ) ]  = esc_url( $original );
+			$map[ esc_attr( $minified ) ] = esc_attr( $original );
+			$map[ $minified ]             = $original;
+		}
+		$out = preg_replace_callback(
+			'#<link\b[^>]*\brel=["\']?(?:preload|modulepreload)\b[^>]*>#i',
+			static function ( array $m ) use ( $map ) {
+				return strtr( $m[0], $map );
+			},
+			$html
+		);
+		return is_string( $out ) ? $out : $html;
+	}
+
+	/** Forget the restored scripts between requests (tests, long-running workers). */
+	public static function reset_restored_src(): void {
+		self::$restored_src = array();
 	}
 
 	/**
@@ -527,7 +574,8 @@ final class Minify_Filters {
 		if ( '' === (string) $src ) {
 			return $tag;
 		}
-		if ( self::is_excluded_script( (string) $handle, (string) $src ) ) {
+		if ( self::is_excluded_script( (string) $handle, (string) $src )
+			&& ! self::defers_consent_manager( (string) $handle, (string) $src ) ) {
 			return $tag;
 		}
 		// The tag itself asked to be left alone. (#456)
@@ -805,6 +853,9 @@ final class Minify_Filters {
 		// do to such a tag we do on behalf of a decision the visitor has not
 		// made yet, so the only correct move is to leave it alone. (#274)
 		'text/plain',
+		// Real Cookie Banner parks a blocked script under this type, the same
+		// job text/plain does for Complianz.
+		'application/consent',
 	);
 
 	/**
@@ -1031,6 +1082,99 @@ final class Minify_Filters {
 					$tag,
 					1
 				);
+			},
+			$html
+		);
+	}
+
+	/**
+	 * Is this a consent manager the site has chosen to defer?
+	 *
+	 * The floor keeps consent managers out of Defer JS because an
+	 * auto-blocking banner only intercepts scripts that run after it. A
+	 * synchronous one costs that much render time, though: on the site behind
+	 * this setting the banner script held first paint back 1.4 s on mobile,
+	 * and blocking it outright took Lighthouse from 70 to 97. With
+	 * `defer_consent` on, a script kept out ONLY by the floor is deferred; it
+	 * is still never delayed, so the banner shows as soon as the page has
+	 * parsed. The site's own exclusion list and our own scripts still win.
+	 *
+	 * @param string $handle Script handle ('' when none survived).
+	 * @param string $src    Script URL.
+	 */
+	private static function defers_consent_manager( string $handle, string $src ): bool {
+		$opts = self::opts();
+		if ( empty( $opts['defer_js'] ) || empty( $opts['defer_consent'] ) ) {
+			return false;
+		}
+		if ( in_array( $handle, self::ALWAYS_EXCLUDED_HANDLES, true ) || 0 === strpos( $handle, 'xspeed-' ) ) {
+			return false;
+		}
+		$on_floor = false;
+		foreach ( self::exclusion_floor() as $needle ) {
+			if ( self::floor_matches( $needle, $handle, $src ) ) {
+				$on_floor = true;
+				break;
+			}
+		}
+		if ( ! $on_floor ) {
+			return false;
+		}
+		$excluded = is_array( $opts['defer_js_excluded'] ?? null ) ? $opts['defer_js_excluded'] : array();
+		foreach ( $excluded as $needle ) {
+			if ( self::target_matches( (string) $needle, $handle, $src ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Defer consent managers printed straight into the page.
+	 *
+	 * Defer JS works on `script_loader_tag`, so it never sees a banner pasted
+	 * into the theme's head code, which is how GetTerms, Cookiebot and
+	 * OneTrust are usually installed. This pass adds `defer` to those tags
+	 * when defers_consent_manager() allows it, and touches nothing else.
+	 *
+	 * @param string $html Complete page HTML.
+	 */
+	public static function defer_raw_consent_tags( $html ): string {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return (string) $html;
+		}
+		if ( self::skip_in_non_frontend_context() ) {
+			return $html;
+		}
+
+		return (string) preg_replace_callback(
+			'#<script\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>#is',
+			static function ( array $m ): string {
+				$tag = $m[0];
+
+				if ( self::tag_opts_out( $tag ) || self::carries_optimizer_opt_out( $tag ) ) {
+					return $tag;
+				}
+				if ( ! preg_match( '#(?<![-\w])src\s*=\s*(["\'])(.*?)\1#is', $tag, $src_m ) ) {
+					return $tag;
+				}
+				if ( preg_match( '#(?<![-\w])(?:defer|async)(?![-\w])#i', $tag ) ) {
+					return $tag;
+				}
+				$type = self::extract_type( $tag );
+				if ( 'module' === $type || in_array( $type, self::NON_EXECUTABLE_TYPES, true ) ) {
+					return $tag;
+				}
+
+				$tag_handle = '';
+				if ( preg_match( '#(?<![-\w])id\s*=\s*(["\'])(.*?)\1#is', $tag, $id_m ) ) {
+					$tag_handle = (string) preg_replace( '/-js$/', '', trim( $id_m[2] ) );
+				}
+				if ( ! self::defers_consent_manager( $tag_handle, $src_m[2] ) ) {
+					return $tag;
+				}
+
+				return (string) preg_replace( '#^<script\b#i', '<script defer', $tag, 1 );
 			},
 			$html
 		);
@@ -2207,6 +2351,10 @@ final class Minify_Filters {
 		// CookieYes / GDPR Cookie Consent. Handle and plugin directory are
 		// the same string, so this covers both paths.
 		'cookie-law-info',
+		// CookieYes connected to its web app loads the banner from its CDN,
+		// printed as `id="cookieyes"`, so neither the handle nor the plugin
+		// directory is in the tag (lite/frontend/class-frontend.php:231).
+		'cdn-cookieyes.com/client_data/',
 		// Complianz: the plugin directory, covering -gdpr and -gdpr-premium.
 		// Was the `cmplz-cookiebanner` handle, which needed the `id` tag.
 		'complianz',
@@ -2238,18 +2386,56 @@ final class Minify_Filters {
 		'usercentrics.eu',
 		// Iubenda: both the consent solution and the consent database SDK.
 		'cdn.iubenda.com',
+		// iubenda's unified embed loads the banner from here, printed with
+		// no `id`, so only the URL can match it.
+		'embeds.iubenda.com/widgets/',
+		// iubenda auto-blocking and consent sync, printed beside the banner.
+		'cs.iubenda.com/',
 		// OneTrust. Pasted snippet rather than a wordpress.org plugin, so
 		// this is the SDK host rather than a verified plugin path.
 		'cdn.cookielaw.org',
+		// OneTrust self-hosted, or through CookiePro, its small-business
+		// brand: the stub keeps its filename whatever host serves it.
+		'otSDKStub.js',
+		'OtAutoBlock.js',
+		'cookie-cdn.cookiepro.com',
 		// Borlabs is commercial and renames its files per release; the
 		// vendor's own guidance is that this string stays in every path.
 		'borlabs-cookie',
-		// Real Cookie Banner, free and pro. Its anti-adblock mode serves the
-		// banner from an anonymised path that no URL token can match — use
-		// `xspeed_js_exclusion_floor` to add the handle on such a site.
+		// Real Cookie Banner, free and pro. Not covered: its anti-ad-block
+		// mode serves the banner from wp-content/<hash>/<md5>.js AND strips
+		// the `id` WordPress prints (DeliverAnonymousAsset.php), so the
+		// enqueue path can floor it by handle but the buffer sweep sees
+		// neither handle nor path and delays it. Needs the sweep to resolve a
+		// URL back to its handle (the #374 note in delay_raw_script_tags()).
 		'real-cookie-banner',
 		// SureCookie.
 		'surecookie',
+		// Termageddon with geolocation on: the banner is suppressed inline and
+		// only this script ever shows it. The Usercentrics loader tags carry
+		// their own opt-out attributes.
+		'termageddon-usercentrics/public/js/termageddon-usercentrics-ajax',
+		// CookieAdmin (400k installs). Only slug on wordpress.org with this
+		// string; also covers the premium build's dependency.
+		'cookieadmin',
+		// WPConsent (200k): /build/frontend.js attaches the banner's shadow root.
+		'wpconsent-cookies-banner-privacy-suite',
+		// TermsFeed, through AutoTerms or the pasted snippet.
+		'termsfeed.com/public/cookie-consent',
+		// Beautiful Cookie Consent Banner. The file name is the one string
+		// in its URL; the handle (nsc_bar_nice-cookie-consent_js) is not.
+		'cookieNSCconsent',
+		// Cookie Consent by Elementor. Its handle is just `banner`, far too
+		// generic, so match the file path.
+		'/cookiez/assets/build/banner',
+		// Adapta RGPD. Its inline init calls `new CookiesEuBanner`, so the
+		// file must run first.
+		'adapta-rgpd',
+		// Asesor de Cookies.
+		'asesor-cookies-para-la-ley-en-espana',
+		// GetTerms. A pasted embed with an auto-blocking mode (`?auto=true`),
+		// so its host rather than a plugin path.
+		'gettermscmp.com',
 	);
 
 	/**
@@ -2261,9 +2447,13 @@ final class Minify_Filters {
 	 * (`cookiebot`, not `consent.cookiebot.com`), and it is always a substring
 	 * of the token, so an entry that names the vendor this way still matches
 	 * the vendor's URL. A brand name that appears nowhere in the URL
-	 * (`cookieyes`, `onetrust`, `cmplz`) is deliberately not a keyword: it
+	 * (`onetrust`, `cmplz`) is deliberately not a keyword: it
 	 * could never match the tag, so offering it would promise a lift that
 	 * cannot happen. The exact handle always works as well.
+	 *
+	 * `vendor` groups the tokens one vendor owns (OneTrust, iubenda), so
+	 * naming the vendor by any of its keywords names all of them. Without a
+	 * `vendor`, a token is its own group.
 	 *
 	 * Cookiebot in Usercentrics CMP mode loads from web.cmp.usercentrics.eu,
 	 * so the floor catches it as Usercentrics and `usercentrics` names it,
@@ -2279,11 +2469,26 @@ final class Minify_Filters {
 		'gdpr-cookie-compliance' => array( 'label' => 'GDPR Cookie Compliance (Moove)', 'keyword' => 'gdpr-cookie-compliance' ),
 		'app.termly.io'          => array( 'label' => 'Termly', 'keyword' => 'termly' ),
 		'usercentrics.eu'        => array( 'label' => 'Usercentrics', 'keyword' => 'usercentrics' ),
-		'cdn.iubenda.com'        => array( 'label' => 'Iubenda', 'keyword' => 'iubenda' ),
-		'cdn.cookielaw.org'      => array( 'label' => 'OneTrust', 'keyword' => 'cookielaw' ),
+		'cdn.iubenda.com'        => array( 'label' => 'Iubenda', 'keyword' => 'iubenda', 'vendor' => 'iubenda' ),
+		'cdn.cookielaw.org'      => array( 'label' => 'OneTrust', 'keyword' => 'cookielaw', 'vendor' => 'onetrust' ),
 		'borlabs-cookie'         => array( 'label' => 'Borlabs Cookie', 'keyword' => 'borlabs' ),
 		'real-cookie-banner'     => array( 'label' => 'Real Cookie Banner', 'keyword' => 'real-cookie-banner' ),
 		'surecookie'             => array( 'label' => 'SureCookie', 'keyword' => 'surecookie' ),
+		'cdn-cookieyes.com/client_data/' => array( 'label' => 'CookieYes web app', 'keyword' => 'cookieyes' ),
+		'embeds.iubenda.com/widgets/'    => array( 'label' => 'Iubenda', 'keyword' => 'iubenda', 'vendor' => 'iubenda' ),
+		'cs.iubenda.com/'                => array( 'label' => 'Iubenda', 'keyword' => 'iubenda', 'vendor' => 'iubenda' ),
+		'otSDKStub.js'                   => array( 'label' => 'OneTrust self-hosted', 'keyword' => 'otSDKStub', 'vendor' => 'onetrust' ),
+		'OtAutoBlock.js'                 => array( 'label' => 'OneTrust auto-blocking', 'keyword' => 'OtAutoBlock', 'vendor' => 'onetrust' ),
+		'cookie-cdn.cookiepro.com'       => array( 'label' => 'CookiePro', 'keyword' => 'cookiepro', 'vendor' => 'onetrust' ),
+		'termageddon-usercentrics/public/js/termageddon-usercentrics-ajax' => array( 'label' => 'Termageddon', 'keyword' => 'termageddon' ),
+		'cookieadmin'                    => array( 'label' => 'CookieAdmin', 'keyword' => 'cookieadmin' ),
+		'wpconsent-cookies-banner-privacy-suite' => array( 'label' => 'WPConsent', 'keyword' => 'wpconsent' ),
+		'termsfeed.com/public/cookie-consent' => array( 'label' => 'TermsFeed', 'keyword' => 'termsfeed' ),
+		'cookieNSCconsent'               => array( 'label' => 'Beautiful Cookie Consent Banner', 'keyword' => 'cookieNSCconsent' ),
+		'/cookiez/assets/build/banner'   => array( 'label' => 'Cookie Consent by Elementor', 'keyword' => 'cookiez' ),
+		'adapta-rgpd'                    => array( 'label' => 'Adapta RGPD', 'keyword' => 'adapta-rgpd' ),
+		'asesor-cookies-para-la-ley-en-espana' => array( 'label' => 'Asesor de Cookies', 'keyword' => 'asesor-cookies' ),
+		'gettermscmp.com'        => array( 'label' => 'GetTerms', 'keyword' => 'getterms' ),
 	);
 
 	/**
@@ -2303,7 +2508,8 @@ final class Minify_Filters {
 			);
 			$out[] = $name['label'] . ' (' . $name['keyword'] . ')';
 		}
-		return $out;
+		// iubenda owns three tokens with the same label and keyword; list it once.
+		return array_values( array_unique( $out ) );
 	}
 
 	/**
@@ -2535,7 +2741,18 @@ final class Minify_Filters {
 		$targets = is_array( $opts['delay_js_targets'] ?? null ) ? $opts['delay_js_targets'] : array();
 		$names   = array( $floor_token );
 		if ( isset( self::CONSENT_MANAGER_NAMES[ $floor_token ] ) ) {
-			$names[] = self::CONSENT_MANAGER_NAMES[ $floor_token ]['keyword'];
+			// One vendor can own several tokens, and one tag can match more
+			// than one of them: OneTrust's cdn.cookielaw.org/…/otSDKStub.js
+			// matches both the host and the stub. Every matching token has to
+			// be named (see is_excluded_script()), so naming the vendor has to
+			// name all of its tokens, or `cookielaw` could never lift OneTrust.
+			$vendor = self::CONSENT_MANAGER_NAMES[ $floor_token ]['vendor'] ?? $floor_token;
+			foreach ( self::CONSENT_MANAGER_NAMES as $token => $name ) {
+				if ( ( $name['vendor'] ?? $token ) === $vendor ) {
+					$names[] = $token;
+					$names[] = $name['keyword'];
+				}
+			}
 		}
 		foreach ( $targets as $needle ) {
 			$needle = trim( (string) $needle );

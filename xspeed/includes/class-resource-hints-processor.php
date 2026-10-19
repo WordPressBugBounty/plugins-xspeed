@@ -445,7 +445,21 @@ final class Resource_Hints_Processor {
 			}
 		);
 
-		$winners = array_slice( $candidates, 0, $count );
+		// One preload per image. With "Images to preload" above 1, a loop that
+		// repeats one picture (a store's placeholder in every card) took every
+		// slot with the same file. (#702)
+		$winners = array();
+		foreach ( $candidates as $c ) {
+			if ( count( $winners ) >= $count ) {
+				break;
+			}
+			foreach ( $winners as $w ) {
+				if ( self::same_url( (string) $c['src'], (string) $w['src'] ) ) {
+					continue 2;
+				}
+			}
+			$winners[] = $c;
+		}
 
 		// PASS 2 — emit the preload links and promote the winning tags.
 		$chosen = array();
@@ -481,15 +495,39 @@ final class Resource_Hints_Processor {
 		// lower, or that the user kept out of the pick, keeps its hint: the
 		// ranking can be wrong, and core or the theme may have named the real
 		// hero. (#558)
+		//
+		// Two more kinds of image provably can't be the LCP once an <img>
+		// has won, so they lose `high` too (#702): another copy of an image
+		// already holding it (theme cards print a thumbnail twice, one copy
+		// hidden by CSS, and a WooCommerce loop repeats the placeholder in
+		// every card, 19 `high` images on one page), and an image whose
+		// declared size is smaller than the winner's. An image with no
+		// declared size keeps its hint, for the reason above.
 		$demote = ! empty( $chosen ) || null !== $video_at ? $ruled_out : array();
+		$winner = self::winner_facts( $html, $chosen );
+		$kept   = array();
 		$seen   = -1;
 		$html   = preg_replace_callback(
 			'#<img\b[^>]*>#i',
-			static function ( array $m ) use ( &$seen, $chosen, $demote ) {
+			static function ( array $m ) use ( &$seen, &$kept, $chosen, $demote, $winner, $exclusions ) {
 				++$seen;
 				if ( ! isset( $chosen[ $seen ] ) ) {
-					if ( isset( $demote[ $seen ] ) && 'high' === strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+					if ( 'high' !== strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+						return $m[0];
+					}
+					$src  = self::effective_image_src( $m[0] )[0];
+					$key  = html_entity_decode( $src, ENT_QUOTES );
+					$lose = isset( $demote[ $seen ] );
+					// An image the user kept out of the pick keeps its hint.
+					if ( ! $lose && null !== $winner && ! self::matches_any( $m[0], $exclusions ) ) {
+						$lose = ( '' !== $src && ( self::same_url( $src, $winner['src'] ) || isset( $kept[ $key ] ) ) )
+							|| self::provably_smaller( $m[0], $winner );
+					}
+					if ( $lose ) {
 						return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
+					}
+					if ( '' !== $src ) {
+						$kept[ $key ] = true;
 					}
 					return $m[0];
 				}
@@ -504,6 +542,71 @@ final class Resource_Hints_Processor {
 		);
 
 		return array( (string) $html, $preload );
+	}
+
+	/**
+	 * The src and declared area of the first winning <img>, or null when no
+	 * <img> won.
+	 *
+	 * @param string            $html   Page HTML.
+	 * @param array<int,bool>   $chosen Winning <img> indexes.
+	 * @return array{src:string,area:int}|null
+	 */
+	private static function winner_facts( string $html, array $chosen ): ?array {
+		if ( empty( $chosen ) || ! preg_match_all( '#<img\b[^>]*>#i', $html, $imgs ) ) {
+			return null;
+		}
+		$index = (int) min( array_keys( $chosen ) );
+		if ( ! isset( $imgs[0][ $index ] ) ) {
+			return null;
+		}
+		$tag = $imgs[0][ $index ];
+		return array(
+			'src'    => self::effective_image_src( $tag )[0],
+			'width'  => self::declared_dimension( $tag, 'width' ),
+			'height' => self::declared_dimension( $tag, 'height' ),
+		);
+	}
+
+	/**
+	 * Whether an image is certainly drawn smaller than the winner, so its
+	 * `high` competes for nothing.
+	 *
+	 * `width`/`height` are the file's own size, not the drawn size, so they
+	 * alone prove little: a phone-only hero is narrower than the desktop one
+	 * and is still the LCP on phones, and a featured image with
+	 * `sizes="100vw"` is drawn full width whatever its attributes say. So
+	 * it takes all of: smaller in both directions, no `vw` in `sizes`, and
+	 * no `srcset` candidate as wide as the winner. Unknown sizes keep the
+	 * hint, as #558 intends.
+	 *
+	 * @param string                                   $tag    The <img> tag.
+	 * @param array{src:string,width:int,height:int}   $winner From winner_facts().
+	 */
+	private static function provably_smaller( string $tag, array $winner ): bool {
+		$w = self::declared_dimension( $tag, 'width' );
+		$h = self::declared_dimension( $tag, 'height' );
+		if ( 0 === $w || 0 === $h || 0 === $winner['width'] || 0 === $winner['height'] ) {
+			return false;
+		}
+		if ( $w >= $winner['width'] || $h >= $winner['height'] ) {
+			return false;
+		}
+		if ( false !== stripos( self::effective_image_src( $tag )[2], 'vw' ) ) {
+			return false;
+		}
+		if ( preg_match_all( '/\s(\d+)w\b/', ' ' . self::effective_image_src( $tag )[1], $widths ) ) {
+			if ( max( array_map( 'intval', $widths[1] ) ) >= $winner['width'] ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** A width or height attribute in pixels, or 0 when missing or not a number (`100%`). */
+	private static function declared_dimension( string $tag, string $name ): int {
+		$value = trim( self::attr( $tag, $name ) );
+		return is_numeric( $value ) && (float) $value > 0 ? (int) $value : 0;
 	}
 
 	/**

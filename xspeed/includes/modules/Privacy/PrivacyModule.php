@@ -59,7 +59,7 @@ final class PrivacyModule extends Module {
 				// Only the site owner can opt in; an MCP call may only opt out.
 				'consent'     => true,
 				'label'       => __( 'Share usage data', 'xspeed' ),
-				'description' => __( 'Sends your WordPress and PHP versions, theme, plugins, server type and the features you use, never page content. Turn it off to stop all sending.', 'xspeed' ),
+				'description' => __( 'When you turn this on, WPDeveloper receives your email address and display name. After that, once a day: the site URL and name, your WordPress and PHP versions, theme, plugins, server type and xSpeed settings. Never page content. Turn it off to stop all sending.', 'xspeed' ),
 			),
 		);
 	}

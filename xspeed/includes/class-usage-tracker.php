@@ -271,7 +271,8 @@ if ( ! class_exists( __NAMESPACE__ . '\\Usage_Tracker' ) ) :
 		}
 
 		/**
-		 * Assemble the non-sensitive diagnostic payload. Documented verbatim in
+		 * Assemble the diagnostic payload, which includes the current admin's
+		 * email and name when someone is logged in. Documented verbatim in
 		 * readme.txt — keep the two in sync if you add a field here.
 		 */
 		public function get_data() {

@@ -75,6 +75,13 @@ final class MinifyModule extends Module {
 				'label'       => __( 'Defer JavaScript', 'xspeed' ),
 				'description' => __( 'Runs scripts after the page has loaded, so content shows sooner. jQuery and scripts that need it are skipped.', 'xspeed' ),
 			),
+			'defer_consent' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Defer the cookie consent banner', 'xspeed' ),
+				'description' => __( 'Loads the consent banner script without holding up the page. The banner still appears as soon as the page loads, and Delay JS never postpones it. Leave this off if your consent tool must block other scripts that run before it.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'defer_js' ),
+			),
 			'delay_js' => array(
 				'type'        => 'bool',
 				'default'     => false,

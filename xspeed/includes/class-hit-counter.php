@@ -218,6 +218,7 @@ final class Hit_Counter {
 		fclose( $fp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- pairs with the flock'd fopen above; WP_Filesystem can't model flock.
 
 		if ( $count > 0 ) {
+			update_option( self::SERVER_LOG_MATCHED_OPT, time(), false );
 			self::record_hits_batch( $count );
 			// Flush immediately — the next read of totals_24h() happens
 			// inline in Cache::get_stats(), before register_shutdown_function
@@ -230,6 +231,14 @@ final class Hit_Counter {
 
 	/** Option key storing the last-scanned byte offset of the access log. */
 	public const SERVER_LOG_OFFSET_OPT = 'xspeed_access_log_offset';
+
+	/**
+	 * When the access-log scan last matched a static hit. Apache's standard
+	 * log formats record the page address a visitor asked for, not the
+	 * cached file the rewrite served, so most logs never match. Only a scan
+	 * that has matched proves static hits are being counted. (#760)
+	 */
+	public const SERVER_LOG_MATCHED_OPT = 'xspeed_access_log_matched_at';
 
 	/**
 	 * Count Apache/LiteSpeed static-rewrite HITs by scanning the web

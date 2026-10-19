@@ -105,8 +105,10 @@ function xspeed_uninstall_cleanup() {
 	// reached still loses it.
 	delete_option( 'xspeed_db_clean_cursor' );
 	delete_option( 'xspeed_gc_cursor' );
+	delete_option( 'xspeed_gc_static_cursor' );
 	delete_option( 'xspeed_mcp_rl_gen' );
 	wp_clear_scheduled_hook( 'xspeed_gc' );
+	wp_clear_scheduled_hook( 'xspeed_gc_static' );
 	delete_option( 'xspeed_cache_off_notice_dismissed' );
 	// Device_Check's notes of pages that ask for the device, and their check.
 	delete_option( 'xspeed_device_pages' );

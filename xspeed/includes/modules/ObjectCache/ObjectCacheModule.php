@@ -21,6 +21,7 @@ defined( 'ABSPATH' ) || exit;
 use XSpeed\Module;
 use XSpeed\Object_Cache;
 use XSpeed\Object_Cache_Takeover;
+use XSpeed\Settings_Manager;
 
 final class ObjectCacheModule extends Module {
 
@@ -666,6 +667,75 @@ final class ObjectCacheModule extends Module {
 		);
 	}
 
+	/**
+	 * Refuse a Redis username or password the server does not accept.
+	 *
+	 * A browser password manager filled the site's WordPress login into these
+	 * two fields, the panel saved them, and xSpeed wrote them into
+	 * wp-config.php. Redis refused the login and the object cache stopped
+	 * storing anything, with the admin's password left in plain text. Testing
+	 * the new pair first keeps the working connection and constants in place
+	 * whatever sent the change. (#700)
+	 *
+	 * @param array<string,mixed> $params The request's settings.
+	 */
+	public function settings_refusal( array $params ): ?\WP_Error {
+		$refusal = parent::settings_refusal( $params );
+		if ( null !== $refusal ) {
+			return $refusal;
+		}
+
+		$current = Settings_Manager::get( self::SLUG );
+		$next    = $current;
+		$changed = false;
+		foreach ( array( 'redis_user', 'redis_password' ) as $key ) {
+			if ( ! array_key_exists( $key, $params ) || ! is_string( $params[ $key ] ) ) {
+				continue;
+			}
+			// The panel echoes the masked password back on every save.
+			if ( 'redis_password' === $key && Settings_Manager::is_masked_secret( $params[ $key ] ) ) {
+				continue;
+			}
+			if ( (string) ( $current[ $key ] ?? '' ) !== $params[ $key ] ) {
+				$next[ $key ] = $params[ $key ];
+				$changed      = true;
+			}
+		}
+		if ( ! $changed ) {
+			return null;
+		}
+
+		foreach ( array( 'backend', 'redis_host', 'redis_port', 'redis_database' ) as $key ) {
+			if ( array_key_exists( $key, $params ) ) {
+				$next[ $key ] = $params[ $key ];
+			}
+		}
+		if ( 'redis' !== (string) ( $next['backend'] ?? 'redis' ) ) {
+			return null;
+		}
+
+		// A check inside an admin POST, so the timeout is clamped the same
+		// way the post-save write probe clamps it.
+		$next['connection_timeout'] = min( 2, max( 1, (int) ( $next['connection_timeout'] ?? 1 ) ) );
+		$test                       = Object_Cache::test_connection( $next );
+		if ( ! empty( $test['ok'] ) ) {
+			return null;
+		}
+
+		return new \WP_Error(
+			'xspeed_object_cache_credentials_rejected',
+			sprintf(
+				/* translators: %s: the connection test's message. */
+				__( 'The Redis username or password was not saved, because the connection test with them failed: %s Your other settings are unchanged.', 'xspeed' ),
+				(string) ( $test['message'] ?? '' )
+			),
+			array(
+				'status' => 422,
+				'fields' => array( 'redis_user', 'redis_password' ),
+			)
+		);
+	}
+
 	public function rest_detect( \WP_REST_Request $request ) {
 		/*
 		 * Carry the write probe alongside detection. `detect()` answers "is a
@@ -776,6 +846,13 @@ final class ObjectCacheModule extends Module {
 			unset( $body['takeover'] );
 		}
 		if ( is_array( $body ) && ! empty( $body ) ) {
+			// Enable and "Switch to xSpeed" post the whole panel, so a pair a
+			// password manager filled in arrives here too. Same test as a
+			// settings save, before anything is stored. (#700)
+			$refusal = $this->settings_refusal( $body );
+			if ( null !== $refusal ) {
+				return $refusal;
+			}
 			\XSpeed\Settings_Manager::update( self::SLUG, $body );
 		}
 		$result = Object_Cache::enable( $this->get_settings(), array( 'takeover' => $takeover ) );
