@@ -1,3 +1,4 @@
+import { useResolvedSettings } from '../useResolvedSettings';
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, RefreshCw, Trash2, AlertCircle } from 'lucide-react';
 import { Callout } from '../Callout';
@@ -9,6 +10,8 @@ import { api } from '../../api/client';
 import { useVisibleFields } from '../fieldVisibility';
 import { reconcileSaved } from '../reconcileSaved';
 import { renderField } from '../ModulePanel';
+import { HeldBySetting } from '../DefinedInConfig';
+import type { SettingOrigin } from '../../types';
 import type { SchemaField } from '../../types';
 import type { PanelProps } from '../customPanels';
 
@@ -33,6 +36,7 @@ export function CloudflarePanel({ module, onSaved, getModule }: PanelProps) {
   const debounceRef = useRef<number | null>(null);
   const initial = useRef(true);
   const lastApplied = useRef<string>(JSON.stringify(module.settings));
+  useResolvedSettings(module, setSettings, lastApplied);
   // Live mirror so the save response reconciles against current edits, not
   // the snapshot it was sent with (prevents mid-flight keystroke loss).
   const settingsRef = useRef(settings);
@@ -177,6 +181,7 @@ export function CloudflarePanel({ module, onSaved, getModule }: PanelProps) {
               key={key}
               fieldKey={key}
               spec={spec}
+              origin={module.setting_origins?.[key]}
               value={settings[key]}
               onChange={(v) => set(key, v)}
               first={false}
@@ -267,6 +272,9 @@ export function CloudflarePanel({ module, onSaved, getModule }: PanelProps) {
                 <div className="font-medium text-neutral-900 dark:text-neutral-50">
                   {autoPurgeSpec.label ?? 'Auto-purge Cloudflare on xSpeed purge'}
                 </div>
+                {module.setting_origins?.auto_purge_on_update?.source === 'managed' && (
+                  <HeldBySetting by={module.setting_origins.auto_purge_on_update.managed_by ?? ''} />
+                )}
                 <div className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">
                   {autoPurgeSpec.description}
                   {!cfEnabled && ' Enable the integration above to change this.'}
@@ -277,7 +285,7 @@ export function CloudflarePanel({ module, onSaved, getModule }: PanelProps) {
                   checked={Boolean(settings.auto_purge_on_update ?? autoPurgeSpec.default)}
                   onChange={(v) => set('auto_purge_on_update', v)}
                   label={autoPurgeSpec.label ?? 'Auto-purge Cloudflare on xSpeed purge'}
-                  disabled={!cfEnabled}
+                  disabled={!cfEnabled || module.setting_origins?.auto_purge_on_update?.source === 'managed'}
                 />
               </div>
             </div>
@@ -314,12 +322,14 @@ function labelFor(b: 'verify' | 'purge' | 'devon' | 'devoff' | null): string {
 }
 
 function SettingRow({
+  origin,
   fieldKey,
   spec,
   value,
   onChange,
   first,
 }: {
+  origin?: SettingOrigin;
   fieldKey: string;
   spec: SchemaField;
   value: unknown;
@@ -327,6 +337,7 @@ function SettingRow({
   first: boolean;
 }) {
   const label = spec.label ?? fieldKey;
+  const heldBy = origin?.source === 'managed' ? origin.managed_by : undefined;
   return (
     // Anchor so a notice/recommendation CTA can land on this control
     // (issue #49). Custom panels render no anchors by default, which made
@@ -337,11 +348,12 @@ function SettingRow({
     >
       <div className="min-w-0 pr-2">
         <div className="font-medium text-neutral-900 dark:text-neutral-50">{label}</div>
+          {heldBy && <HeldBySetting by={heldBy} />}
         {spec.description && (
           <div className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">{spec.description}</div>
         )}
       </div>
-      <div className="shrink-0">{renderControl(spec, value, onChange, label)}</div>
+      <fieldset disabled={!!heldBy} className="shrink-0 min-w-0">{renderControl(spec, value, onChange, label)}</fieldset>
     </div>
   );
 }

@@ -435,6 +435,11 @@ final class BloatModule extends Module {
 	 * Block anonymous /wp-json/ access. Logged-in users + already-errored
 	 * requests pass through untouched.
 	 *
+	 * The error carries core's `rest_not_logged_in` code, the one WordPress
+	 * returns when a route needs a logged-in user. Other plugins look for that
+	 * code to tell a login-only REST API from a firewall or host block, and
+	 * with a private code they reported an unexplained 401 instead. (#795)
+	 *
 	 * @param \WP_Error|null|true $result
 	 * @return \WP_Error|null|true
 	 */
@@ -446,8 +451,8 @@ final class BloatModule extends Module {
 			return $result;
 		}
 		return new \WP_Error(
-			'rest_forbidden_anonymous',
-			__( 'Anonymous REST access is disabled on this site.', 'xspeed' ),
+			'rest_not_logged_in',
+			__( 'This site only answers REST API requests from logged-in users.', 'xspeed' ),
 			array( 'status' => 401 )
 		);
 	}

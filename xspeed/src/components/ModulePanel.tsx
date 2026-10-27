@@ -1,3 +1,4 @@
+import { useResolvedSettings } from './useResolvedSettings';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { Select } from './Select';
@@ -5,7 +6,7 @@ import { Toggle } from './Toggle';
 import { Callout } from './Callout';
 import { MediaField } from './MediaField';
 import { InfoPopover } from './InfoPopover';
-import { DefinedInConfig } from './DefinedInConfig';
+import { DefinedInConfig, HeldBySetting } from './DefinedInConfig';
 import { OverrideConfirm } from './OverrideConfirm';
 import { customPanels, type PanelProps } from './customPanels';
 import { getProPanel, usePanelsVersion } from './proPanels';
@@ -161,6 +162,8 @@ export function SchemaModulePanel({
   // what lets reconcileSaved keep keystrokes made while the save was in flight.
   const valuesRef = useRef(values);
   useEffect(() => { valuesRef.current = values; }, [values]);
+
+  useResolvedSettings(module, setValues, lastApplied);
 
   // Reset when navigating between modules.
   useEffect(() => {
@@ -366,6 +369,11 @@ function SchemaRow({
   // the site would go on ignoring. Show the effective value, read-only, and
   // name the constant. DESIGN.md §24.35.
   const pinnedTo = origin?.source === 'constant' ? origin.constant : null;
+  // Held by an add-on setting that needs this value. Read-only like a pin,
+  // with no way to take it back here: change the setting that holds it.
+  // DESIGN.md §24.56.
+  const heldBy = origin?.source === 'managed' ? origin.managed_by ?? null : null;
+  const locked = !!pinnedTo || !!heldBy;
   // Deliberately taken back from wp-config: editable again, but still say what
   // it is shadowing and offer the way back. DESIGN.md §24.36.
   const overriding = origin?.overriding ?? null;
@@ -401,7 +409,7 @@ function SchemaRow({
           </div>
           <FieldHint spec={spec} />
         </div>
-        {renderField(spec, value, onChange, label, !!pinnedTo)}
+        {renderField(spec, value, onChange, label, locked)}
         {(pinnedTo || overriding) && (
           <DefinedInConfig
             constant={(pinnedTo ?? overriding) as string}
@@ -411,6 +419,7 @@ function SchemaRow({
             onRevert={onSetOverride ? () => onSetOverride(false) : undefined}
           />
         )}
+        {heldBy && <HeldBySetting by={heldBy} />}
         {confirming && pinnedTo && (
           <div className="mt-2">
             <OverrideConfirm
@@ -424,7 +433,7 @@ function SchemaRow({
             />
           </div>
         )}
-        {!pinnedTo && suggestion && <FieldSuggestionStrip strip={suggestion} />}
+        {!locked && suggestion && <FieldSuggestionStrip strip={suggestion} />}
       </div>
     );
   }
@@ -455,8 +464,9 @@ function SchemaRow({
             onRevert={onSetOverride ? () => onSetOverride(false) : undefined}
           />
         )}
+        {heldBy && <HeldBySetting by={heldBy} />}
       </div>
-        <div className="shrink-0">{renderField(spec, value, onChange, label, !!pinnedTo)}</div>
+        <div className="shrink-0">{renderField(spec, value, onChange, label, locked)}</div>
       </div>
       {/* Full row width, beneath the label/control pair — the label column is
           narrow and the card needs room for its copy and two buttons. */}
@@ -476,7 +486,7 @@ function SchemaRow({
       {/* Full-width beneath the label/control row — a recommendation needs
           room for its value and two buttons, which the right-hand control
           column doesn't have. */}
-      {!pinnedTo && suggestion && <FieldSuggestionStrip strip={suggestion} />}
+      {!locked && suggestion && <FieldSuggestionStrip strip={suggestion} />}
     </div>
   );
 }
@@ -541,6 +551,7 @@ export function ListField({
   label,
   onChange,
   defaultValue,
+  readOnly = false,
 }: {
   value: unknown;
   label: string;
@@ -552,6 +563,7 @@ export function ListField({
    * or how far their list has drifted from stock. (#131)
    */
   defaultValue?: unknown;
+  readOnly?: boolean;
 }) {
   const stored = Array.isArray(value) ? value.map(String) : [];
   const [draft, setDraft] = useState<string | null>(null);
@@ -566,7 +578,8 @@ export function ListField({
   // While typing, show the draft verbatim (blank lines and all). Otherwise
   // mirror the stored array, so an external change (reset, save reconcile,
   // another tab) still lands in the field.
-  const text = draft ?? stored.join('\n');
+  const text = readOnly ? stored.join('\n') : draft ?? stored.join('\n');
+  useEffect(() => { if (readOnly) setDraft(null); }, [readOnly]);
 
   // True while an IME candidate window is open (see onCompositionStart).
   const composing = useRef(false);
@@ -578,6 +591,7 @@ export function ListField({
    * them here is what silently dropped lines mid-typing.
    */
   const pushRaw = (raw: string) => {
+    if (readOnly) return;
     const arr = raw.split('\n').map((s) => s.trim());
     if (arr.length !== stored.length || arr.some((v, i) => v !== stored[i])) {
       onChange(arr);
@@ -585,6 +599,7 @@ export function ListField({
   };
 
   const commit = (raw: string) => {
+    if (readOnly) return;
     const arr = raw
       .split('\n')
       .map((s) => s.trim())
@@ -602,6 +617,7 @@ export function ListField({
   const editor = (
     <textarea
       value={text}
+      disabled={readOnly}
       rows={8}
       onCompositionStart={() => {
         composing.current = true;
@@ -663,7 +679,7 @@ export function ListField({
                 setDraft(null);
                 onChange([...defaults]);
               }}
-              disabled={isDefault}
+              disabled={readOnly || isDefault}
               className="inline-flex items-center gap-1 rounded-control border border-line px-2 py-0.5 text-[11.5px] text-ink-soft transition-colors hover:bg-panel disabled:cursor-default disabled:opacity-40"
               title={
                 isDefault
@@ -814,6 +830,7 @@ export function renderField(
             }))}
             onChange={onChange}
             ariaLabel={label}
+            disabled={readOnly}
             className="w-56"
           />
         );
@@ -868,6 +885,7 @@ export function renderField(
           value={value === undefined || value === null ? '' : String(value)}
           onChange={(url) => onChange(url)}
           label={label}
+          readOnly={readOnly}
         />
       );
     case 'list':
@@ -877,6 +895,7 @@ export function renderField(
           label={label}
           onChange={onChange}
           defaultValue={spec.default}
+          readOnly={readOnly}
         />
       );
     default:

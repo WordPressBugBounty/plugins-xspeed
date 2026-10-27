@@ -311,6 +311,22 @@ final class SettingsModule extends Module {
 			);
 		}
 
+		// A field an add-on holds is dropped by update() just as quietly as
+		// a secret, so refuse it by name here too.
+		$managed = Settings_Manager::managed_in_input( $module, $values );
+		if ( ! empty( $managed ) ) {
+			$pairs = array();
+			foreach ( $managed as $field => $by ) {
+				$pairs[] = $field . ' (' . $by . ')';
+			}
+			\WP_CLI::error(
+				sprintf(
+					'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them. Nothing was changed.',
+					implode( ', ', $pairs )
+				)
+			);
+		}
+
 		// Pro licence write gate — the CLI writes through
 		// Settings_Manager::update() and so never reaches
 		// Module::update_settings(), where the gate lives. Without this a

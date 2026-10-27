@@ -1,3 +1,4 @@
+import { useResolvedSettings } from '../useResolvedSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Database as DbIcon, RefreshCw, Trash2, Zap } from 'lucide-react';
 import { Callout } from '../Callout';
@@ -10,6 +11,8 @@ import { reconcileSaved } from '../reconcileSaved';
 import type { SchemaField } from '../../types';
 import type { PanelProps } from '../customPanels';
 import { renderField } from '../ModulePanel';
+import { HeldBySetting } from '../DefinedInConfig';
+import type { SettingOrigin } from '../../types';
 import { __, sprintf } from '../../i18n';
 
 interface ScanRow {
@@ -46,6 +49,7 @@ export function DatabaseCleanerPanel({ module, onSaved }: PanelProps) {
   const debounceRef = useRef<number | null>(null);
   const initial = useRef(true);
   const lastApplied = useRef<string>(JSON.stringify(module.settings));
+  useResolvedSettings(module, setSettings, lastApplied);
   // Live mirror so the save response reconciles against current edits, not
   // the snapshot it was sent with (prevents mid-flight keystroke loss).
   const settingsRef = useRef(settings);
@@ -340,6 +344,7 @@ export function DatabaseCleanerPanel({ module, onSaved }: PanelProps) {
               key={key}
               fieldKey={key}
               spec={spec}
+              origin={module.setting_origins?.[key]}
               value={settings[key]}
               labels={labels}
               onChange={(v) => set(key, v)}
@@ -356,6 +361,7 @@ export function DatabaseCleanerPanel({ module, onSaved }: PanelProps) {
 }
 
 function SettingRow({
+  origin,
   fieldKey,
   spec,
   value,
@@ -363,6 +369,7 @@ function SettingRow({
   onChange,
   first,
 }: {
+  origin?: SettingOrigin;
   fieldKey: string;
   spec: SchemaField;
   value: unknown;
@@ -371,6 +378,7 @@ function SettingRow({
   first: boolean;
 }) {
   const label = spec.label ?? fieldKey;
+  const heldBy = origin?.source === 'managed' ? origin.managed_by : undefined;
   const isTypeList = fieldKey === 'included_types';
   return (
     <div
@@ -379,6 +387,7 @@ function SettingRow({
       <div className="flex items-start justify-between gap-3 sm:gap-4">
         <div className="min-w-0 pr-2">
           <div className="font-medium text-ink">{label}</div>
+          {heldBy && <HeldBySetting by={heldBy} />}
           {spec.description && (
             <div className="text-[12px] text-muted mt-0.5">
               {spec.description}
@@ -386,15 +395,17 @@ function SettingRow({
           )}
         </div>
         {!isTypeList && (
-          <div className="shrink-0">{renderControl(spec, value, onChange, label)}</div>
+          <fieldset disabled={!!heldBy} className="shrink-0 min-w-0">{renderControl(spec, value, onChange, label)}</fieldset>
         )}
       </div>
       {isTypeList && Object.keys(labels).length > 0 && (
-        <TypeListPicker
-          value={Array.isArray(value) ? (value as string[]) : []}
-          labels={labels}
-          onChange={onChange}
-        />
+        <fieldset disabled={!!heldBy} className="min-w-0">
+          <TypeListPicker
+            value={Array.isArray(value) ? (value as string[]) : []}
+            labels={labels}
+            onChange={onChange}
+          />
+        </fieldset>
       )}
     </div>
   );

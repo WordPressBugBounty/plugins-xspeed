@@ -15,7 +15,7 @@ class Plugin {
 	 * Data-schema version for one-time migrations, independent of the
 	 * plugin version header. Bump when adding a step to maybe_upgrade().
 	 */
-	public const DATA_VERSION = '1.4.3';
+	public const DATA_VERSION = '1.4.4';
 
 	private static $instance = null;
 
@@ -32,6 +32,7 @@ class Plugin {
 	}
 
 	public function init() {
+		Edge_Hold_Health::boot();
 		// v1 services that are NOT yet wrapped as Modules (Admin, Rest_Api,
 		// Cache, Onboarding) are instantiated directly. Minifier is now
 		// instantiated by MinifyModule::boot(); Gzip is purely static.
@@ -317,7 +318,9 @@ class Plugin {
 							update_site_option( 'xspeed_security_network_purged_1_4_3', true );
 						}
 					}
-					// Retry later if execution stops before the purge completes.
+					// Keep completed security work separate from optional diagnostic retries.
+					update_option( 'xspeed_data_version', '1.4.3', false );
+					if ( ! Edge_Hold_Health::initialize() ) { return; }
 					update_option( 'xspeed_data_version', self::DATA_VERSION, false );
 				},
 				99
@@ -325,6 +328,7 @@ class Plugin {
 			return;
 		}
 
+		if ( ! Edge_Hold_Health::initialize() ) { return; }
 		update_option( 'xspeed_data_version', self::DATA_VERSION, false );
 	}
 
@@ -619,6 +623,7 @@ class Plugin {
 	}
 
 	public static function activate() {
+		Edge_Hold_Health::rotate();
 		// Nothing below can see a module the registry does not hold — the
 		// conflict-safe profile Settings::set_defaults() may pick is composed
 		// from it, and activate_all() walks it. See ensure_modules_registered()

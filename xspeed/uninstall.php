@@ -15,6 +15,9 @@ xspeed_uninstall_cleanup();
  * Run all uninstall cleanup. Wrapped in a function so locals don't pollute global scope.
  */
 function xspeed_uninstall_cleanup() {
+	if ( class_exists( '\XSpeed\Edge_Hold_Health', false ) ) {
+		\XSpeed\Edge_Hold_Health::begin_teardown();
+	}
 	/*
 	 * Everything here is ours to delete. `wpdeveloper_xspeed_offer` is NOT — it
 	 * is the site's answer about whether it wants this plugin, written by
@@ -46,6 +49,9 @@ function xspeed_uninstall_cleanup() {
 		}
 	}
 	delete_option( 'xspeed_data_version' );
+	delete_option( 'xspeed_overridden_constants' );
+	delete_option( 'xspeed_edge_hold_health' );
+	if ( ! is_multisite() ) { delete_option( 'xspeed_edge_hold_generation' ); }
 	delete_option( 'xspeed_security_edge_pending' );
 	delete_site_option( 'xspeed_security_network_purged_1_4_3' );
 	delete_option( 'xspeed_security_purge_attempt_1_4_3' );
@@ -55,6 +61,7 @@ function xspeed_uninstall_cleanup() {
 		do {
 			$ids = get_sites( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
 			foreach ( $ids as $id ) {
+				delete_blog_option( $id, 'xspeed_edge_hold_health' );
 				delete_blog_option( $id, 'xspeed_security_edge_pending' );
 				delete_blog_option( $id, 'xspeed_security_purge_attempt_1_4_3' );
 			}
@@ -65,6 +72,7 @@ function xspeed_uninstall_cleanup() {
 		do {
 			$networks = get_networks( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
 			foreach ( $networks as $network_id ) {
+				delete_blog_option( get_main_site_id( $network_id ), 'xspeed_edge_hold_generation' );
 				delete_network_option( $network_id, 'xspeed_security_network_purged_1_4_3' );
 				delete_network_option( $network_id, 'xspeed_security_purge_attempt_1_4_3' );
 			}
@@ -76,7 +84,6 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_oc_dropin_synced' );
 	delete_option( 'xspeed_oc_generation' );
 	delete_option( 'xspeed_oc_sync_attempts' );
-	delete_option( 'xspeed_overridden_constants' );
 	delete_option( 'xspeed_last_mobile_separate' );
 	delete_option( 'xspeed_home_cache_verdict' );
 	delete_option( 'xspeed_last_tablet_split' );

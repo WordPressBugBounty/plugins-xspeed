@@ -6,6 +6,7 @@ import { __ } from '../../i18n';
 import type { Settings, Stats, RewriteProbe, Recommendation, ProSuggestion } from '../../types';
 import { buildDeepLink } from '../deepLink';
 import { AddonTag } from '../AddonTag';
+import { rewriteProvenInactive } from '../../rewriteProbe';
 
 /** Where the "book expert setup" offer points — the expert-setup booking page. */
 const SETUP_REVIEW_URL = 'https://xspeedcache.com/support#book-a-call';
@@ -113,7 +114,8 @@ export function Recommendations({
   // LiteSpeed Static Fast Path is on — its hits are served below the
   // counter, so the number is structurally low by choice. (QA on #513)
   const lowRatio = traffic >= 50 && (stats.hit_ratio ?? 0) < 0.5 && !stats.static_hits_uncounted;
-  const rewriteInactive = rewriteProbe ? rewriteProbe.active === false : false;
+  // A pending or inconclusive probe is not a misconfigured site. (#766)
+  const rewriteInactive = rewriteProvenInactive(rewriteProbe);
   const showExpertOffer = !settings.cache_enabled || rewriteInactive || lowRatio;
 
   const hasContent = (recs && recs.length > 0) || pro.length > 0 || showExpertOffer;

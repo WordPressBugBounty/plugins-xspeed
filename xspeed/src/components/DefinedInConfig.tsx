@@ -1,4 +1,4 @@
-import { FileLock2, PencilLine, RotateCcw } from 'lucide-react';
+import { FileLock2, Link2, PencilLine, RotateCcw } from 'lucide-react';
 import { __ } from '../i18n';
 
 /**
@@ -85,6 +85,29 @@ export function DefinedInConfig({
           <PencilLine size={13} />
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The "another setting holds this value" marker.
+ *
+ * An add-on can hold a field at a value while one of its own settings needs
+ * it (Settings_Manager::managed()). The row shows the value in force with its
+ * control disabled, like a wp-config.php pin, and names the setting that
+ * holds it, because turning that one off is the way to change this one. No
+ * override here: the add-on setting depends on this value, so the place to
+ * change it is the add-on setting.
+ *
+ * DESIGN.md §24.56.
+ */
+export function HeldBySetting({ by }: { by: string }) {
+  return (
+    <div className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-ink-soft">
+      <Link2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+      <span>
+        {__('Set by')} <span className="font-medium text-ink">{by}</span>
+      </span>
     </div>
   );
 }

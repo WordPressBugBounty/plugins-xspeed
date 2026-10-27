@@ -1,3 +1,4 @@
+import { useResolvedSettings } from '../useResolvedSettings';
 import { useEffect, useRef, useState } from 'react';
 import { Play, Square as StopIcon, RefreshCw } from 'lucide-react';
 import { Toggle } from '../Toggle';
@@ -9,6 +10,8 @@ import { useVisibleFields } from '../fieldVisibility';
 import type { SchemaField, PreloaderState } from '../../types';
 import type { PanelProps } from '../customPanels';
 import { renderField } from '../ModulePanel';
+import { HeldBySetting } from '../DefinedInConfig';
+import type { SettingOrigin } from '../../types';
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -25,6 +28,7 @@ export function PreloaderPanel({ module, onSaved }: PanelProps) {
   const debounceRef = useRef<number | null>(null);
   const initial = useRef(true);
   const lastApplied = useRef<string>(JSON.stringify(module.settings));
+  useResolvedSettings(module, setSettings, lastApplied);
   // Live mirror so the save response reconciles against current edits, not
   // the snapshot it was sent with (prevents mid-flight keystroke loss).
   const settingsRef = useRef(settings);
@@ -147,6 +151,7 @@ export function PreloaderPanel({ module, onSaved }: PanelProps) {
             key={key}
             fieldKey={key}
             spec={spec}
+            origin={module.setting_origins?.[key]}
             value={settings[key]}
             onChange={(v) => set(key, v)}
             first={i === 0}
@@ -280,6 +285,7 @@ function StatusCard({
 }
 
 function SettingRow({
+  origin,
   fieldKey,
   spec,
   value,
@@ -287,6 +293,7 @@ function SettingRow({
   first,
   postTypes,
 }: {
+  origin?: SettingOrigin;
   fieldKey: string;
   spec: SchemaField;
   value: unknown;
@@ -295,6 +302,7 @@ function SettingRow({
   postTypes: Array<{ name: string; label: string }>;
 }) {
   const label = spec.label ?? fieldKey;
+  const heldBy = origin?.source === 'managed' ? origin.managed_by : undefined;
   if (fieldKey === 'excluded_post_types') {
     return (
       <PostTypeExclusions
@@ -303,6 +311,7 @@ function SettingRow({
         value={Array.isArray(value) ? value.map(String) : []}
         onChange={onChange}
         postTypes={postTypes}
+        heldBy={heldBy}
       />
     );
   }
@@ -314,11 +323,12 @@ function SettingRow({
     >
       <div className="min-w-0 pr-2">
         <div className="font-medium text-neutral-900 dark:text-neutral-50">{label}</div>
+        {heldBy && <HeldBySetting by={heldBy} />}
         {spec.description && (
           <div className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">{spec.description}</div>
         )}
       </div>
-      <div className="shrink-0">{renderControl(spec, value, onChange, label)}</div>
+      <fieldset disabled={!!heldBy} className="shrink-0 min-w-0">{renderControl(spec, value, onChange, label)}</fieldset>
     </div>
   );
 }
@@ -334,12 +344,14 @@ function PostTypeExclusions({
   value,
   onChange,
   postTypes,
+  heldBy,
 }: {
   label: string;
   description?: string;
   value: string[];
   onChange: (v: unknown) => void;
   postTypes: Array<{ name: string; label: string }>;
+  heldBy?: string | null;
 }) {
   const known = new Set(postTypes.map((t) => t.name));
   const options = [
@@ -352,26 +364,29 @@ function PostTypeExclusions({
   return (
     <div className="px-4 sm:px-5 py-4 border-t border-neutral-200 dark:border-neutral-800">
       <div className="font-medium text-neutral-900 dark:text-neutral-50">{label}</div>
+      {heldBy && <HeldBySetting by={heldBy} />}
       {description && (
         <div className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-0.5">{description}</div>
       )}
-      {options.length === 0 ? (
-        <div className="mt-2 text-[12px] text-neutral-500 dark:text-neutral-400">Loading post types…</div>
-      ) : (
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5" role="group" aria-label={label}>
-          {options.map((t) => (
-            <label key={t.name} className="inline-flex items-center gap-1.5 text-[13px] text-neutral-700 dark:text-neutral-300">
-              <input
-                type="checkbox"
-                checked={value.includes(t.name)}
-                onChange={(e) => toggle(t.name, e.target.checked)}
-              />
-              {t.label}
-              <span className="text-[11px] text-neutral-500 dark:text-neutral-400 font-mono">{t.name}</span>
-            </label>
-          ))}
-        </div>
-      )}
+      <fieldset disabled={!!heldBy} className="min-w-0">
+        {options.length === 0 ? (
+          <div className="mt-2 text-[12px] text-neutral-500 dark:text-neutral-400">Loading post types…</div>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5" role="group" aria-label={label}>
+            {options.map((t) => (
+              <label key={t.name} className="inline-flex items-center gap-1.5 text-[13px] text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={value.includes(t.name)}
+                  onChange={(e) => toggle(t.name, e.target.checked)}
+                />
+                {t.label}
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400 font-mono">{t.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </fieldset>
     </div>
   );
 }

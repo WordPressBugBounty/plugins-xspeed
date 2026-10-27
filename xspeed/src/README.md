@@ -5,7 +5,7 @@ This builds into `assets/admin.js` and `assets/admin.css`, which are committed. 
 | Where | What lives there | Read before changing |
 |---|---|---|
 | `main.tsx`, `App.tsx` | `main.tsx` mounts the dashboard or onboarding (PHP sets the class); `App.tsx` is the dashboard shell and routing | [guides/build-pipeline](../docs/guides/build-pipeline.md) (the mount split) |
-| `components/` | Shared primitives (Sidebar, Toggle, Toast, ModulePanel, StatCard, Callout, Tabs, Modal, Select…). **Reuse them before adding one.** | [DESIGN.md](../DESIGN.md) §7–§16 and §24.x |
+| `components/` | Shared primitives (Sidebar, Toggle, Toast, ModulePanel, StatCard, Callout, Tabs, Modal, Select…). `moduleSettingsOverride.ts` reconciles saved values on descriptor refresh; `useResolvedSettings.ts` applies held values in mounted panels. **Reuse them before adding one.** | [DESIGN.md](../DESIGN.md) §7–§16 and §24.x |
 | `components/<module>/` | One subfolder per module panel: `cache/`, `cloudflare/`, `compression/`, `cssjs/`, `database/`, `health/`, `mcp/`, `media/`, `migration/`, `objectcache/`, `preloader/`, `resourcehints/`, `settings/`, `support/` | the module's page in [docs/user/](../docs/user/) |
 | `onboarding/` | The setup wizard (`steps/` and `components/`) | IMPLEMENTATION.md |
 | `upsell/` | Pro surfaces: ProAudit, LockedPanel, `useTier`, `proModuleManifest`, `mergeProModules`. Pro panels mount into these; Free code never names Pro. | [architecture/free-pro-coupling](../docs/architecture/free-pro-coupling.md) |

@@ -32,7 +32,9 @@ export function purgeNotice(report?: PurgeReport | null): PurgeNotice {
   const page = report?.types.page;
   const pageCleared = page?.status === 'cleared';
   const otherCleared = rows
-    .filter(([slug, row]) => slug !== 'page' && row.status === 'cleared')
+    // A store that reported removing nothing is not news. Stores that cannot
+    // count (object cache, the edge) report null and still count as cleared.
+    .filter(([slug, row]) => slug !== 'page' && row.status === 'cleared' && row.entries !== 0)
     .map(([, row]) => row.label);
   const failed = rows.filter(([, row]) => row.status === 'failed').map(([, row]) => row);
 

@@ -322,8 +322,41 @@ class Minifier {
 	}
 
 	public static function rewrite_style( $src, $handle ) {
-		unset( $handle );
+		// On an RTL site, WP_Styles::do_item() runs this filter for
+		// "{$handle}-rtl" on the LTR src, then swaps ".css" for "-rtl.css"
+		// in whatever we return. A rewritten src became min/<key>-rtl.css,
+		// a file we never write, and with `rtl => replace` the page lost the
+		// stylesheet. Leave the src alone so core reaches the real -rtl.css.
+		// (#768)
+		if ( self::is_derived_rtl_handle( $handle ) ) {
+			return $src;
+		}
 		return self::rewrite_asset( $src, 'css' );
+	}
+
+	/**
+	 * Is $handle the "-rtl" handle core derives for a style whose RTL file
+	 * it builds by renaming the LTR one?
+	 *
+	 * Only `rtl => true` and `rtl => 'replace'` work that way. A string is
+	 * the RTL file's own URL, which core prints as it is, so that one is
+	 * still minified.
+	 *
+	 * @param mixed $handle Handle passed to style_loader_src.
+	 */
+	private static function is_derived_rtl_handle( $handle ): bool {
+		if ( ! is_string( $handle ) || strlen( $handle ) < 5 || '-rtl' !== substr( $handle, -4 ) ) {
+			return false;
+		}
+		$styles = $GLOBALS['wp_styles'] ?? null;
+		if ( ! is_object( $styles ) || 'rtl' !== ( $styles->text_direction ?? '' ) ) {
+			return false;
+		}
+		$base = $styles->registered[ substr( $handle, 0, -4 ) ] ?? null;
+		if ( ! is_object( $base ) || ! isset( $base->extra['rtl'] ) ) {
+			return false;
+		}
+		return true === $base->extra['rtl'] || 'replace' === $base->extra['rtl'];
 	}
 
 	public static function rewrite_script( $src, $handle ) {

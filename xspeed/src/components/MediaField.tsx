@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 
 /**
@@ -33,15 +34,19 @@ export function MediaField({
   value,
   onChange,
   label,
+  readOnly = false,
 }: {
   value: string;
   onChange: (url: string) => void;
   label: string;
+  readOnly?: boolean;
 }) {
   const media = getWpMedia();
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   const pick = () => {
-    if (!media) return;
+    if (!media || readOnlyRef.current) return;
     const frame = media({
       title: label,
       button: { text: 'Use this image' },
@@ -50,7 +55,7 @@ export function MediaField({
     });
     frame.on('select', () => {
       const attachment = frame.state().get('selection').first();
-      if (attachment) onChange(attachment.toJSON().url);
+      if (attachment && !readOnlyRef.current) onChange(attachment.toJSON().url);
     });
     frame.open();
   };
@@ -61,6 +66,7 @@ export function MediaField({
     return (
       <input
         type="url"
+        disabled={readOnly}
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value)}
         className="w-56"
@@ -82,6 +88,7 @@ export function MediaField({
           <button
             type="button"
             onClick={pick}
+            disabled={readOnly}
             className="text-[12px] px-2.5 py-1 rounded border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
           >
             Change
@@ -89,6 +96,7 @@ export function MediaField({
           <button
             type="button"
             onClick={() => onChange('')}
+            disabled={readOnly}
             aria-label={`Remove ${label}`}
             className="text-neutral-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
@@ -99,6 +107,7 @@ export function MediaField({
         <button
           type="button"
           onClick={pick}
+          disabled={readOnly}
           className="text-[12px] px-2.5 py-1 rounded border border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors inline-flex items-center gap-1.5"
         >
           <ImagePlus size={13} />

@@ -73,6 +73,13 @@ final class Settings_Manager {
 				$clean[ $key ] = self::coerce( self::constant_value( $key, $constant, $spec ), $spec );
 				continue;
 			}
+			// An add-on holding this field at a value while one of its own
+			// settings is on. A constant still wins: the host's word is final.
+			$managed = self::managed( $slug, $key );
+			if ( null !== $managed ) {
+				$clean[ $key ] = self::coerce( $managed['value'], $spec );
+				continue;
+			}
 			/*
 			 * A module whose runtime reads its config before WordPress loads
 			 * may keep it OUTSIDE the option row -- the object cache writes a
@@ -101,6 +108,124 @@ final class Settings_Manager {
 		}
 
 		return $clean;
+	}
+
+	/**
+	 * The value an add-on holds this field at, or null when it holds none.
+	 *
+	 * An add-on can make one of its own settings depend on a Free setting:
+	 * Cloudflare keeping a copy per device only works while the page cache
+	 * keeps one too. While that add-on setting is on, the add-on answers
+	 * `xspeed_setting_managed` for the Free field. The field then reads back
+	 * the add-on's value everywhere, shows read-only in the panel, and refuses
+	 * writes (REST, MCP and CLI refuse a different value; update() drops it).
+	 * The customer's own stored value is never touched, so it is what
+	 * the site runs on again the moment the add-on stops answering, including
+	 * when the add-on is deactivated.
+	 *
+	 * The add-on must hook the filter before Free's modules boot (plugins_loaded
+	 * priority 20), and answer the same way for the whole request. Free
+	 * reconciles device-keyed artifacts at boot, and an answer that changes
+	 * between boot and a later read looks like a settings flip.
+	 * Modules declaring `MANAGED_SETTINGS = false` cannot be held: their early runtime
+	 * reads a separate store that cannot resolve this filter.
+	 *
+	 * @return array{value:mixed,by:string}|null
+	 */
+	public static function managed( string $slug, string $key ): ?array {
+		$module = Module_Registry::get( $slug );
+		// Early readers cannot run this filter, so their stores cannot carry a temporary hold.
+		if ( $module && ! $module::MANAGED_SETTINGS ) {
+			return null;
+		}
+		/**
+		 * Filter: xspeed_setting_managed
+		 *
+		 * Hold a module setting at a value while an add-on setting needs it.
+		 * Answer `array( 'value' => mixed, 'by' => string )`, where `by` names
+		 * the setting that holds it, as the customer reads it (the panel
+		 * shows "Set by <by>"). Return the incoming value for every field you
+		 * do not hold. An answer without a non-empty `by` or without a
+		 * `value` key is ignored.
+		 *
+		 * @param array|null $managed Null, or another add-on's answer.
+		 * @param string     $slug    Module slug.
+		 * @param string     $key     Field key.
+		 */
+		$managed = apply_filters( 'xspeed_setting_managed', null, $slug, $key );
+		if ( ! is_array( $managed ) || ! array_key_exists( 'value', $managed ) ) {
+			return null;
+		}
+		$by = isset( $managed['by'] ) && is_string( $managed['by'] ) ? trim( $managed['by'] ) : '';
+		if ( '' === $by ) {
+			return null;
+		}
+		return array(
+			'value' => $managed['value'],
+			'by'    => $by,
+		);
+	}
+
+	/**
+	 * A raw settings row with the managed values for the named fields laid on.
+	 *
+	 * For readers that skip get() because they run where the module registry
+	 * may not exist yet, the cache serve path among them. They name the
+	 * fields they read, since without the schema there is no field list.
+	 * Values are not coerced: the raw row is not coerced either.
+	 *
+	 * @param array<string,mixed> $opts The stored row.
+	 * @param string[]            $keys Fields to resolve.
+	 * @return array<string,mixed>
+	 */
+	public static function with_managed( string $slug, array $opts, array $keys ): array {
+		foreach ( $keys as $key ) {
+			$managed = self::managed( $slug, $key );
+			if ( null !== $managed ) {
+				$opts[ $key ] = $managed['value'];
+			}
+		}
+		return $opts;
+	}
+
+	/**
+	 * The subset of an incoming patch that tries to change a managed field.
+	 *
+	 * Same rules as locked_in_input(): an echo of the value in force is not
+	 * a write (the panel posts every field it drew), and only a different
+	 * value counts.
+	 *
+	 * @param array<string,mixed> $input Proposed settings patch.
+	 * @return array<string,string> Field key => what manages it.
+	 */
+	public static function managed_in_input( string $slug, array $input ): array {
+		$module = Module_Registry::get( $slug );
+		if ( ! $module ) {
+			return array();
+		}
+		$resolved = null;
+		$public   = null;
+		$hits     = array();
+		foreach ( $module->settings_schema() as $key => $spec ) {
+			if ( ! array_key_exists( $key, $input ) ) {
+				continue;
+			}
+			$managed = self::managed( $slug, $key );
+			if ( null === $managed ) {
+				continue;
+			}
+			$resolved    = $resolved ?? self::get( $slug );
+			$public      = $public ?? self::get_public( $slug );
+			[ $coerced ] = self::validate_field( $input[ $key ], $spec );
+			$submitted   = $input[ $key ];
+			$echoes      = ( $coerced === ( $resolved[ $key ] ?? null ) )
+				|| ( is_string( $submitted ) && $submitted === ( $public[ $key ] ?? null ) )
+				|| ( self::is_secret_field( $key, $spec ) && is_string( $submitted ) && self::is_masked_secret( $submitted ) );
+			if ( ! $echoes ) {
+				$hits[ $key ] = $managed['by'];
+			}
+		}
+		return $hits;
 	}
 
 	/**
@@ -742,6 +867,16 @@ final class Settings_Manager {
 				);
 				continue;
 			}
+			$managed = self::managed( $slug, $key );
+			if ( null !== $managed ) {
+				$origins[ $key ] = array(
+					'source'     => 'managed',
+					'constant'   => null,
+					'overriding' => null,
+					'managed_by' => $managed['by'],
+				);
+				continue;
+			}
 			// An overridden field reports its real source -- the option row --
 			// but still names the constant it is shadowing, so the panel can
 			// say WHAT is being overridden and offer to hand it back. Without
@@ -840,6 +975,10 @@ final class Settings_Manager {
 		}
 		$schema  = $module->settings_schema();
 		$current = self::get( $slug );
+		// The row as stored, for the fields an add-on manages: get() reports
+		// the managed value, and the row must keep the customer's own.
+		$raw = get_option( self::option_key( $slug ), array() );
+		$raw = is_array( $raw ) ? $raw : array();
 
 		// An MCP agent must not silently rewrite credentials — repointing the
 		// Cloudflare or object-cache backend at an attacker endpoint — unless the
@@ -874,6 +1013,12 @@ final class Settings_Manager {
 			// the constant's name; this is the choke-point backstop for any
 			// caller that reaches update() directly. (#398)
 			if ( null !== self::write_blocking_constant( $slug, $key, $spec ) ) {
+				continue;
+			}
+			// Held by an add-on: the write cannot take effect while it is.
+			// REST and CLI refuse it first (managed_in_input()); this is the
+			// backstop for callers that reach update() directly.
+			if ( null !== self::managed( $slug, $key ) ) {
 				continue;
 			}
 			// A secret field whose incoming value is the masked placeholder means
@@ -935,6 +1080,17 @@ final class Settings_Manager {
 			// leave a stale row behind if the constant later changes. (#398)
 			if ( null !== self::write_blocking_constant( $slug, $key, $spec ) ) {
 				unset( $stored[ $key ] );
+				continue;
+			}
+			// A managed field keeps whatever the customer stored, or stays
+			// absent. Writing the managed value would leave the field held
+			// after the add-on lets go.
+			if ( null !== self::managed( $slug, $key ) ) {
+				if ( array_key_exists( $key, $raw ) ) {
+					$stored[ $key ] = $raw[ $key ];
+				} else {
+					unset( $stored[ $key ] );
+				}
 				continue;
 			}
 			if ( 'secret' === ( $spec['type'] ?? '' ) ) {

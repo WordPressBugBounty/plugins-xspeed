@@ -1,4 +1,8 @@
-import { RefreshCw, Check, AlertTriangle, Cloud, Sun, Moon, ChevronLeft, Search, Menu } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { RefreshCw, Check, AlertTriangle, Cloud, Sun, Moon, ChevronLeft, ChevronDown, Search, Menu } from 'lucide-react';
+import { Menu as ActionMenu } from './Menu';
+import { api } from '../api/client';
+import type { PurgeTypeOption } from '../types';
 import { CacheSwitch } from './CacheSwitch';
 import { StatusChip } from './StatusChip';
 import { StatusItemBoundary, useStatusItems } from './statusItems';
@@ -58,7 +62,8 @@ export function TopBar({
   onOpenSearch: () => void;
   /** Open the off-canvas nav drawer. Below `md` only. */
   onOpenNav?: () => void;
-  onPurge: () => void;
+  /** Purge one cache type (a slug from GET /cache/purge-types), or `all`. */
+  onPurge: (type: string) => void;
   /**
    * Flip the master page-cache switch. Disabling always confirms first;
    * enabling confirms only when it would replace a leftover drop-in.
@@ -176,21 +181,46 @@ function StatusItems() {
 }
 
 /**
- * Purge all, and for a moment afterwards what it did: a check and "Cleared",
- * or the amber callout colours and "Partly cleared" when a store refused. The
- * toast carries the detail; the button only answers "did my click work". The
- * button keeps its natural width — the result label shows for only a moment,
- * so a brief nudge of the bar beats an oversized button at rest.
+ * The types every site can purge, shown until the site's own list arrives.
+ * Object cache and CSS/JS files only apply when they are switched on, so
+ * they wait for the server to say so.
+ */
+const BASE_PURGE_TYPES: PurgeTypeOption[] = [
+  { type: 'all', label: __('Everything'), hint: __('Pages, CSS and JS files, object cache and REST cache') },
+  { type: 'page', label: __('Page cache'), hint: __('The saved HTML pages only') },
+  { type: 'rest', label: __('REST API cache'), hint: __('Cached REST responses') },
+];
+
+/**
+ * Purge all as a split button (DESIGN.md §24.40): the main half clears
+ * everything, the chevron lists the narrower purges this site can run. For a
+ * moment after a purge the main half says what it did: a check and
+ * "Cleared", or the amber callout colours and "Partly cleared" when a store
+ * refused. The toast carries the detail; the button only answers "did my
+ * click work". It keeps its natural width — the result label shows for only
+ * a moment, so a brief nudge of the bar beats an oversized button at rest.
  */
 function PurgeButton({
   onPurge,
   purging,
   outcome,
 }: {
-  onPurge: () => void;
+  onPurge: (type: string) => void;
   purging: boolean;
   outcome: PurgeOutcome | null;
 }) {
+  const [types, setTypes] = useState<PurgeTypeOption[]>(BASE_PURGE_TYPES);
+  // Re-read on every open: turning on minification or the object cache
+  // changes the list, and the top bar outlives those settings screens.
+  const refreshTypes = useCallback(() => {
+    api.getPurgeTypes().then(
+      (list) => {
+        if (Array.isArray(list) && list.length > 0) setTypes(list);
+      },
+      () => {}
+    );
+  }, []);
+
   const warn = outcome === 'partial' || outcome === 'failed';
   const label =
     outcome === 'cleared'
@@ -204,29 +234,53 @@ function PurgeButton({
             : __('Purge all');
   const tone = warn
     ? 'border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100'
-    : 'border-transparent bg-primary text-on-primary shadow-primary-glow hover:bg-primary-hover';
+    : 'border-transparent bg-primary text-on-primary hover:bg-primary-hover';
+  const focus = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1';
 
   return (
-    <button
-      type="button"
-      onClick={onPurge}
-      disabled={purging}
-      aria-busy={purging || undefined}
-      className={`inline-flex items-center justify-center gap-2 rounded-control border px-3 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${tone}`}
-    >
-      {outcome === null ? (
-        <RefreshCw size={14} className={purging ? 'xspeed-anim-spin animate-spin' : ''} aria-hidden="true" />
-      ) : warn ? (
-        <AlertTriangle
-          key={outcome}
-          size={14}
-          className="xspeed-anim-pop text-amber-600 dark:text-amber-400"
-          aria-hidden="true"
-        />
-      ) : (
-        <Check key={outcome} size={14} className="xspeed-anim-pop" aria-hidden="true" />
-      )}
-      {label}
-    </button>
+    <div className={`inline-flex rounded-control ${warn ? '' : 'shadow-primary-glow'}`}>
+      <button
+        type="button"
+        onClick={() => onPurge('all')}
+        disabled={purging}
+        aria-busy={purging || undefined}
+        className={`inline-flex items-center justify-center gap-2 rounded-l-control border px-3 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-60 ${focus} ${tone}`}
+      >
+        {outcome === null ? (
+          <RefreshCw size={14} className={purging ? 'xspeed-anim-spin animate-spin' : ''} aria-hidden="true" />
+        ) : warn ? (
+          <AlertTriangle
+            key={outcome}
+            size={14}
+            className="xspeed-anim-pop text-amber-600 dark:text-amber-400"
+            aria-hidden="true"
+          />
+        ) : (
+          <Check key={outcome} size={14} className="xspeed-anim-pop" aria-hidden="true" />
+        )}
+        {label}
+      </button>
+      <ActionMenu
+        label={__('Purge options')}
+        onOpen={refreshTypes}
+        items={types.map((t) => ({
+          label: t.label,
+          hint: t.hint || undefined,
+          disabled: purging,
+          onSelect: () => onPurge(t.type),
+        }))}
+        trigger={({ toggle, ariaProps }) => (
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={purging}
+            {...ariaProps}
+            className={`inline-flex items-center rounded-r-control border px-1.5 transition-colors disabled:opacity-60 ${focus} ${tone} ${warn ? '' : 'border-l-white/30'}`}
+          >
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+        )}
+      />
+    </div>
   );
 }

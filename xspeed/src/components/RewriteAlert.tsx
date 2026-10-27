@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Zap, X } from 'lucide-react';
 import type { RewriteProbe } from '../types';
+import { rewriteProvenInactive } from '../rewriteProbe';
 import { __ } from '../i18n';
 
 /**
@@ -41,7 +42,7 @@ export function RewriteAlert({
   // "nginx detected — configure for max cache speed" in those states nagged
   // users whose server was already configured correctly, with no way to
   // dismiss it permanently or force a re-check. (FBS-84012)
-  const visible = !!probe && !probe.active && !probe.pending && !probe.inconclusive;
+  const visible = rewriteProvenInactive(probe);
   const dismissKey = probe?.snippet
     ? `xspeed:rewrite_alert:${hashCode(probe.snippet)}`
     : 'xspeed:rewrite_alert:apache';
@@ -56,7 +57,7 @@ export function RewriteAlert({
     }
   }, [visible, dismissKey]);
 
-  if (!visible || dismissed) return null;
+  if (!visible || dismissed || !probe) return null;
 
   const dismiss = () => {
     try {

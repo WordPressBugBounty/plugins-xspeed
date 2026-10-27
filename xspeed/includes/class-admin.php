@@ -522,6 +522,48 @@ class Admin {
 		return in_array( $state, array( 'not_installed', 'unlicensed', 'active' ), true ) ? $state : $default;
 	}
 
+	/**
+	 * The static-rewrite probe as the dashboard reads it.
+	 *
+	 * The bootstrap and GET /status both call this. The bootstrap used to
+	 * build its own copy and dropped `pending`, `inconclusive` and `reason`,
+	 * so an expired or inconclusive probe reached first paint as a bare
+	 * `active: false` and the Cache page asked the user to reinstall rules
+	 * that were working. (#766)
+	 *
+	 * Cache-only: probe_static_rewrite() without $allow_probe never makes the
+	 * loopback request, which on hosts that stall self-requests would add
+	 * seconds to every admin page load. (FBS-82142)
+	 *
+	 * @param string $server_type Server::type() for this request.
+	 * @return array<string, mixed>
+	 */
+	public static function rewrite_probe_payload( string $server_type ): array {
+		$probe = Cache::probe_static_rewrite();
+
+		return array(
+			'active'       => (bool) ( $probe['active'] ?? false ),
+			// Without these the dashboard cannot tell "proven inactive" from
+			// "no result yet" or "probe failed". (FBS-84012)
+			'pending'      => (bool) ( $probe['pending'] ?? false ),
+			'inconclusive' => (bool) ( $probe['inconclusive'] ?? false ),
+			'reason'       => (string) ( $probe['reason'] ?? '' ),
+			'server_type'  => $server_type,
+			'snippet'      => Cache::nginx_snippet(), // null on non-nginx hosts
+			'topology'     => Server::rewrite_topology(),
+			// A reverse proxy / CDN in front (X-Forwarded-* present) usually
+			// means the request-terminating nginx isn't user-editable on this
+			// host, and the banner says so instead of offering a snippet the
+			// user can't apply.
+			'behind_proxy' => Server::is_behind_proxy(),
+			// Whether the rules the web server runs are the rules these
+			// settings generate: `current`, `stale`, `unversioned`, `absent`
+			// or `unknown`. On first paint this is usually `unknown` until the
+			// Health tab runs a live probe. See Cache::rules_state().
+			'rules'        => Cache::rules_state( $probe ),
+		);
+	}
+
 	private static function bootstrap_payload() {
 		$opts  = Settings::get();
 		$stats = Cache::get_stats();
@@ -538,26 +580,7 @@ class Admin {
 		// probe is N/A there — surfacing it would pop the "PHP fallback" nag
 		// for a setup working as designed. Only nginx + Apache probe.
 		$rewrite_capable = ( $server_type === Server::NGINX || $server_type === Server::APACHE );
-		$rewrite_probe   = null;
-		if ( $opts['cache_enabled'] && $rewrite_capable ) {
-			$probe         = Cache::probe_static_rewrite();
-			$rewrite_probe = array(
-				'active'       => (bool) ( $probe['active'] ?? false ),
-				'server_type'  => $server_type,
-				'snippet'      => Cache::nginx_snippet(), // null on non-nginx hosts
-				'topology'     => Server::rewrite_topology(),
-				// A reverse proxy / CDN in front (X-Forwarded-* present) usually
-				// means the request-terminating nginx isn't user-editable on this
-				// host — the banner uses this to switch to honest messaging
-				// instead of dangling a snippet the user can't apply.
-				'behind_proxy' => Server::is_behind_proxy(),
-				// Mirrors /status (see the note there). On first paint the
-				// probe is whatever was last cached, so this is usually
-				// `unknown` until the Health tab runs a live probe — the
-				// dashboard needs the key present either way.
-				'rules'        => Cache::rules_state( $probe ),
-			);
-		}
+		$rewrite_probe   = $opts['cache_enabled'] && $rewrite_capable ? self::rewrite_probe_payload( $server_type ) : null;
 
 		return array(
 			'settings' => $opts,

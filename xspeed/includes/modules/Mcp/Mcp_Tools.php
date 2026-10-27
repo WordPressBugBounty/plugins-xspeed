@@ -1869,6 +1869,29 @@ final class Mcp_Tools {
 				)
 			);
 		}
+		// A field another setting holds (Settings_Manager::managed()). update()
+		// drops the write as a backstop, which would return success over a
+		// partial save, so refuse the whole request here, as REST and the CLI
+		// do. An echo of the held value is not a change and passes.
+		$held_fields = Settings_Manager::managed_in_input( $module, $values );
+		if ( ! empty( $held_fields ) ) {
+			$pairs = array();
+			foreach ( $held_fields as $field => $by ) {
+				$pairs[] = $field . ' (' . $by . ')';
+			}
+			return new \WP_Error(
+				'xspeed_setting_managed',
+				sprintf(
+					/* translators: %s: comma-separated list of "field (setting that holds it)" pairs. */
+					__( 'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them.', 'xspeed' ),
+					implode( ', ', $pairs )
+				),
+				array(
+					'status'         => 409,
+					'refused_fields' => $held_fields,
+				)
+			);
+		}
 		// The Pro licence WRITE gate. `settings_module_reachable()` above already
 		// hides locked Pro modules, but that is a VISIBILITY check answered by
 		// the `xspeed_module_descriptor` filter — a different question from "may

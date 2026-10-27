@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.4
+Stable tag: 1.4.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -326,6 +326,35 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.5] – 2026-10-27 =
+
+**Purge all can clear one cache type at a time, cached pages keep changes other plugins make to the page, and saving a Divi layout clears the cache.**
+
+Dashboard & Admin UX:
+- New: Purge all is a split button. Its menu clears one cache type: page cache, CSS and JS files, object cache, REST API cache, or a type an add-on adds.
+- New: An add-on can hold a setting at a fixed value while one of its own settings needs it. The field is read-only and says what set it, and a different value is refused from REST, the command line and MCP.
+- Fixed: The Cache page no longer asks you to install the .htaccess or nginx rules again when the rewrite check has only expired or could not decide.
+
+Caching:
+- Fixed: A page that another plugin rewrites from its own output buffer, such as ShortPixel's WebP delivery, is cached the way visitors receive it, so cache hits keep the change.
+- Fixed: Saving a Divi Theme Builder layout or Divi Theme Options clears the whole site, so cached pages no longer link stylesheets Divi has deleted.
+- Fixed: Cache cleanup removes cached pages that link a Divi static CSS file that no longer exists.
+- Fixed: Purging the cache no longer stops with an error when the object cache is broken.
+
+Optimization:
+- Fixed: Preload hints go ahead of inline Critical CSS in the head, so the hero image starts loading sooner.
+- Fixed: On right-to-left sites, Minify CSS no longer drops stylesheets that have their own -rtl.css file.
+- Fixed: REST API for logged-in users only refuses visitors with WordPress's own error code, so plugins that check for a login-only REST API recognise it.
+
+Health:
+- Fixed: The edge cache row reports when code running after xSpeed replaces the headers that keep a page out of a shared cache, instead of always showing OK.
+
+AI / MCP:
+- Fixed: xSpeed no longer answers another MCP plugin's OAuth discovery address at the site root, so that plugin's clients sign in to the right server.
+
+Reliability:
+- Fixed: A site no longer shows a fatal error when another plugin asks Composer which package versions are installed.
 
 = [1.4.4] – 2026-10-19 =
 

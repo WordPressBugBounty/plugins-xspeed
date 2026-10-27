@@ -26,6 +26,10 @@
  *   min     wp-content/cache/xspeed/min/**\/*.css|js   long max-age
  *           plus min/manifests/**\/*.json               long max-age, orphans only
  *
+ * The page phases also drop a fresh page that links a page builder's file
+ * that is gone (Divi's et-cache/, #764). That needs the page read, which is
+ * why it happens here and not while a page is served.
+ *
  * Deliberately NOT swept: `rest/*.json`. A REST entry's TTL is resolved per
  * request through the `xspeed_rest_cache_ttl` filter and is never written to
  * disk (Rest_Cache::ttl_for), so nothing on disk tells GC when one expired.
@@ -58,6 +62,18 @@ final class Cache_GC {
 
 	/** Sweep order. A run walks these in sequence until the budget is spent. */
 	private const PHASES = array( 'flat', 'static', 'min' );
+
+	/**
+	 * Folders under wp-content where a page builder writes CSS and JS it
+	 * deletes and renames on its own schedule.
+	 *
+	 * Divi's Static CSS File Generation writes to et-cache/ and deletes from
+	 * places that fire no hook xSpeed can hear, such as the Builder's
+	 * "Clear" button. A new file carries a new timestamp in its name, so a
+	 * cached page keeps linking a file that will never exist again and loads
+	 * without its layout. (#764)
+	 */
+	private const BUILDER_ASSET_DIRS = array( 'et-cache' );
 
 	/**
 	 * Register the daily event if it isn't already scheduled.
@@ -102,6 +118,7 @@ final class Cache_GC {
 		if ( null === $root ) {
 			return 0;
 		}
+		self::reset_reference_index();
 		$budget      = self::budget();
 		$after       = (string) get_option( self::STATIC_CURSOR_OPTION, '' );
 		$default_ttl = self::default_ttl();
@@ -362,6 +379,10 @@ final class Cache_GC {
 
 			$max_age = 'min' === $phase ? $asset_ttl : self::page_max_age( $phase, $path, $default_ttl );
 			if ( ! self::is_stale( $path, $now, $max_age ) ) {
+				if ( 'min' !== $phase && self::links_missing_builder_asset( $path ) ) {
+					self::delete_entry( $path );
+					++$removed;
+				}
 				continue;
 			}
 
@@ -588,7 +609,78 @@ final class Cache_GC {
 
 	/** Forget the memo — the next run rebuilds it. */
 	public static function reset_reference_index(): void {
-		self::$referenced = null;
+		self::$referenced     = null;
+		self::$builder_roots  = null;
+		self::$builder_exists = array();
+	}
+
+	/**
+	 * URL path prefix => folder, for the builder folders that exist on this
+	 * install. Memoized per run.
+	 *
+	 * @var array<string,string>|null
+	 */
+	private static $builder_roots = null;
+
+	/**
+	 * Whether each builder file checked this run exists.
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $builder_exists = array();
+
+	/**
+	 * Does this cached page link a builder file that is no longer on disk?
+	 *
+	 * Reads the page, so it runs only from the collector, never while a
+	 * page is served, and only on installs that have a builder folder.
+	 *
+	 * @param string $path Absolute path to a cached page.
+	 */
+	private static function links_missing_builder_asset( string $path ): bool {
+		if ( null === self::$builder_roots ) {
+			self::$builder_roots = array();
+			$base                = defined( 'WP_CONTENT_DIR' ) ? rtrim( WP_CONTENT_DIR, '/' ) : '';
+			$url_path            = rtrim( (string) wp_parse_url( content_url(), PHP_URL_PATH ), '/' );
+			foreach ( self::BUILDER_ASSET_DIRS as $dir ) {
+				if ( '' !== $base && is_dir( $base . '/' . $dir ) ) {
+					self::$builder_roots[ $url_path . '/' . $dir . '/' ] = $base . '/' . $dir;
+				}
+			}
+		}
+		if ( ! self::$builder_roots ) {
+			return false;
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading our own cache file; WP_Filesystem is unavailable in cron context.
+		$html = (string) @file_get_contents( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a concurrent purge can unlink mid-walk; '' is handled.
+		if ( '' === $html ) {
+			return false;
+		}
+
+		foreach ( self::$builder_roots as $prefix => $dir ) {
+			if ( false === strpos( $html, $prefix ) ) {
+				continue;
+			}
+			if ( ! preg_match_all( '~' . preg_quote( $prefix, '~' ) . '([^"\'\s?#<>()]+\.(?:css|js))~', $html, $m ) ) {
+				continue;
+			}
+			foreach ( array_unique( $m[1] ) as $rel ) {
+				// A page is not trusted to name a path outside the folder.
+				if ( false !== strpos( $rel, '..' ) ) {
+					continue;
+				}
+				$file = $dir . '/' . $rel;
+				if ( ! isset( self::$builder_exists[ $file ] ) ) {
+					self::$builder_exists[ $file ] = file_exists( $file );
+				}
+				if ( ! self::$builder_exists[ $file ] ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**

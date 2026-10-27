@@ -1,4 +1,4 @@
-import type { Settings, Status, ToggleResult, OnboardingChoices, OnboardingApplyResult, ModuleDescriptor, Branding, MobileEqualityProbe, Recommendation, ProSuggestion, ActivityEntry, PurgeReport, PreloaderState } from '../types';
+import type { Settings, Status, ToggleResult, OnboardingChoices, OnboardingApplyResult, ModuleDescriptor, Branding, MobileEqualityProbe, Recommendation, ProSuggestion, ActivityEntry, PurgeReport, PurgeTypeOption, PreloaderState } from '../types';
 
 const cfg = window.XSpeedConfig;
 
@@ -94,7 +94,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
-  purge: () => request<{ stats: Status['stats']; report?: PurgeReport }>('/cache/purge', { method: 'POST' }),
+  /** Purge one cache type, or everything. `type` is a slug from getPurgeTypes(). */
+  purge: (type = 'all') =>
+    request<{ stats: Status['stats']; report?: PurgeReport }>('/cache/purge', {
+      method: 'POST',
+      body: JSON.stringify({ type }),
+    }),
+  /** What the purge menu lists on this site, `all` first. */
+  getPurgeTypes: () => request<PurgeTypeOption[]>('/cache/purge-types'),
   /**
    * Kick off the cache preloader crawl (Overview hero quick action). Reuses
    * the Preloader module's existing /preloader/start route — no new endpoint.

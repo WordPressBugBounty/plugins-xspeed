@@ -202,10 +202,7 @@ final class Object_Cache {
 	 * compliant drop-in OR the WP default in-memory cache.
 	 */
 	public static function flush(): bool {
-		if ( ! function_exists( 'wp_cache_flush' ) ) {
-			return false;
-		}
-		return (bool) wp_cache_flush();
+		return Cache::flush_object_cache( true );
 	}
 
 	/**

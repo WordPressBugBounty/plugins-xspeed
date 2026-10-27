@@ -104,6 +104,10 @@ export function Select({
     if (open) reposition();
   }, [open, reposition]);
 
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   // Re-position on viewport / ancestor scroll while open.
   useEffect(() => {
     if (!open) return;
@@ -143,6 +147,7 @@ export function Select({
   }, [open, options, value]);
 
   const commit = (idx: number) => {
+    if (disabled) return;
     const opt = options[idx];
     if (!opt) return;
     onChange(opt.value);
@@ -159,6 +164,7 @@ export function Select({
   };
 
   const onMenuKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       setOpen(false);
@@ -267,8 +273,11 @@ export function Select({
                   key={opt.value}
                   role="option"
                   aria-selected={isSelected ? 'true' : 'false'}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  onMouseDown={(e) => { e.preventDefault(); commit(i); }}
+                  onMouseEnter={() => { if (!disabled) setActiveIndex(i); }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    if (!disabled) commit(i);
+                  }}
                   className={`flex items-start gap-2 px-3 py-2 cursor-pointer text-[13px] ${
                     active
                       ? 'bg-accent/10 dark:bg-accent/20 text-neutral-900 dark:text-neutral-50'

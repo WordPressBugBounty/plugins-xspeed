@@ -33,6 +33,9 @@ abstract class Module {
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.0.0';
 
+	/** Early external stores cannot resolve a temporary managed value. */
+	public const MANAGED_SETTINGS = true;
+
 	/**
 	 * Other module slugs this module needs at boot. Resolved by
 	 * Module_Registry via topological sort; missing deps fail loudly.
@@ -352,6 +355,29 @@ abstract class Module {
 				array(
 					'status' => 409,
 					'fields' => $locked,
+				)
+			);
+		}
+
+		// A field an add-on holds while one of its own settings is on. Same
+		// reasoning as above: say so rather than return 200 over a write that
+		// changed nothing, and name the setting that holds it.
+		$managed = Settings_Manager::managed_in_input( static::SLUG, is_array( $params ) ? $params : array() );
+		if ( ! empty( $managed ) ) {
+			$pairs = array();
+			foreach ( $managed as $field => $by ) {
+				$pairs[] = $field . ' (' . $by . ')';
+			}
+			return new \WP_Error(
+				'xspeed_setting_managed',
+				sprintf(
+					/* translators: %s: comma-separated list of "field (setting that holds it)" pairs. */
+					__( 'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them.', 'xspeed' ),
+					implode( ', ', $pairs )
+				),
+				array(
+					'status' => 409,
+					'fields' => $managed,
 				)
 			);
 		}

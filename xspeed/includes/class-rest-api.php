@@ -65,6 +65,27 @@ class Rest_Api {
 				'methods'             => 'POST',
 				'callback'            => array( $this, 'purge' ),
 				'permission_callback' => array( $this, 'permissions' ),
+				'args'                => array(
+					'type' => array(
+						'type'              => 'string',
+						'default'           => 'all',
+						'sanitize_callback' => 'sanitize_key',
+					),
+				),
+			)
+		);
+
+		// What the dashboard's purge menu lists. Asked for on open, not baked
+		// into the bootstrap: turning minification or the object cache on
+		// changes which types apply, and a stale list would offer a purge
+		// that clears nothing.
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/cache/purge-types',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'purge_types' ),
+				'permission_callback' => array( $this, 'permissions' ),
 			)
 		);
 
@@ -412,12 +433,12 @@ class Rest_Api {
 		$stats = Cache::get_stats();
 
 		// rewrite_probe + nginx_server_block mirror the admin bootstrap
-		// payload (Admin::bootstrap_data). The dashboard re-fetches /status
+		// payload (Admin::bootstrap_payload). The dashboard re-fetches /status
 		// after every module save to refresh the consolidated nginx
 		// server-block snippet without a full page reload — if these were
 		// omitted here, the snippet would only ever update on reload (the
 		// QA bug: "Server config snippet requires full page reload to
-		// reflect toggle changes"). Keep this in sync with Admin.
+		// reflect toggle changes"). Keep the rest of this in sync with Admin.
 		$server_type     = Server::type();
 		// LiteSpeed deliberately serves hits via the PHP drop-in (its
 		// .htaccess can't add the HIT header or log a static hit), so the
@@ -425,30 +446,8 @@ class Rest_Api {
 		// "PHP fallback" nag for a setup that's working as designed. Only
 		// nginx + Apache use a server-level rewrite worth probing.
 		$rewrite_capable = ( $server_type === Server::NGINX || $server_type === Server::APACHE );
-		$rewrite_probe   = null;
-		if ( $opts['cache_enabled'] && $rewrite_capable ) {
-			$probe         = Cache::probe_static_rewrite();
-			$rewrite_probe = array(
-				'active'       => (bool) ( $probe['active'] ?? false ),
-				// Both flags were previously dropped here, so the dashboard
-				// could not tell "proven inactive" from "no result yet" or
-				// "probe failed" — and rendered the configure-your-server
-				// banner for all three. (FBS-84012)
-				'pending'      => (bool) ( $probe['pending'] ?? false ),
-				'inconclusive' => (bool) ( $probe['inconclusive'] ?? false ),
-				'reason'       => (string) ( $probe['reason'] ?? '' ),
-				'server_type'  => $server_type,
-				'snippet'      => Cache::nginx_snippet(),
-				'topology'     => Server::rewrite_topology(),
-				'behind_proxy' => Server::is_behind_proxy(),
-				// Whether the rules the web server is running are the rules
-				// these settings generate — `current`, `stale`, `unversioned`,
-				// `absent` or `unknown`, with the hashes both sides compared. Nothing
-				// else can answer that: the nginx block lives in a server
-				// config WordPress cannot read. See Cache::rules_state().
-				'rules'        => Cache::rules_state( $probe ),
-			);
-		}
+		// Same builder as the bootstrap, so first paint and a re-fetch agree. (#766)
+		$rewrite_probe   = $opts['cache_enabled'] && $rewrite_capable ? Admin::rewrite_probe_payload( $server_type ) : null;
 
 		return rest_ensure_response(
 			array(
@@ -507,18 +506,111 @@ class Rest_Api {
 		return rest_ensure_response( $updated );
 	}
 
-	public function purge() {
-		// The same core function `wp xspeed purge` runs, so the dashboard
-		// button and the CLI cannot clear different sets of stores — and the
-		// per-store report is available here for the UI to surface a store
-		// that was skipped or refused rather than flashing "cache cleared".
-		$report = Purge_Runner::run( array( 'all' ), __( 'dashboard', 'xspeed' ) );
+	public function purge( \WP_REST_Request $request ) {
+		$type  = (string) $request->get_param( 'type' );
+		$type  = '' === $type ? 'all' : $type;
+		$types = Cache::purge_types();
+		if ( ! array_key_exists( $type, $types ) ) {
+			// Refused, not widened to a full purge: a typo that quietly
+			// clears everything is the wrong way to be wrong.
+			return new \WP_Error(
+				'xspeed_unknown_purge_type',
+				/* translators: %s: the purge type that was asked for. */
+				sprintf( __( 'Unknown purge type: %s', 'xspeed' ), $type ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$cause = __( 'dashboard', 'xspeed' );
+
+		// `all` and `object` run through the same core function `wp xspeed
+		// purge` runs, so the dashboard button and the CLI cannot clear
+		// different sets of stores, and the per-store report lets the UI name
+		// a store that was skipped or refused rather than flash "cache
+		// cleared". The runner's `page` target is the whole local sweep
+		// (HTML, static, REST, assets), which is not what "Page cache" in the
+		// menu promises, so the narrower types go through purge_type(), the
+		// same function the admin-bar menu uses.
+		if ( 'all' === $type || 'object' === $type ) {
+			$report = Purge_Runner::run( array( $type ), $cause );
+		} else {
+			$count  = Cache::purge_type( $type, $cause );
+			$report = array(
+				'ok'        => true,
+				'cause'     => $cause,
+				'requested' => array( $type ),
+				'types'     => array(
+					$type => array(
+						'label'   => self::purge_type_label( $type, $types[ $type ] ),
+						'group'   => $type,
+						'status'  => Purge_Runner::CLEARED,
+						// A handed-off type (Pro's Critical CSS, Unused CSS)
+						// reports 0 because nothing counts for it; a blank
+						// is honest where a zero would read as "was empty".
+						'entries' => in_array( $type, array( 'page', 'assets', 'rest' ), true ) ? $count : null,
+						'bytes'   => null,
+						'reason'  => '',
+					),
+				),
+			);
+		}
+
 		return rest_ensure_response(
 			array(
 				'stats'  => Cache::get_stats(),
 				'report' => $report,
 			)
 		);
+	}
+
+	/**
+	 * The purge menu: every type that applies on this site, `all` first.
+	 *
+	 * Built-in types carry the store's name and a hint; a type an add-on
+	 * registers through `xspeed_purge_types` carries the label it gave.
+	 */
+	public function purge_types() {
+		$hints = array(
+			'all'    => __( 'Pages, CSS and JS files, object cache and REST cache', 'xspeed' ),
+			'page'   => __( 'The saved HTML pages only', 'xspeed' ),
+			'assets' => __( 'Minified and combined files', 'xspeed' ),
+			'object' => __( 'Database results kept in Redis or Memcached', 'xspeed' ),
+			'rest'   => __( 'Cached REST responses', 'xspeed' ),
+		);
+
+		$out = array();
+		foreach ( Cache::purge_types() as $slug => $type ) {
+			if ( empty( $type['visible'] ) ) {
+				continue;
+			}
+			$out[] = array(
+				'type'  => (string) $slug,
+				'label' => self::purge_type_label( (string) $slug, (array) $type ),
+				'hint'  => $hints[ $slug ] ?? '',
+			);
+		}
+
+		return rest_ensure_response( $out );
+	}
+
+	/**
+	 * The store's name for a purge type. The admin-bar labels are verbs
+	 * ("Purge REST Cache"), which read wrong in a menu under a Purge button
+	 * and in the "Cleared: …" toast.
+	 *
+	 * @param string $slug Purge-type slug.
+	 * @param array  $type Its `xspeed_purge_types` entry.
+	 */
+	private static function purge_type_label( string $slug, array $type ): string {
+		$names = array(
+			'all'    => __( 'Everything', 'xspeed' ),
+			'page'   => __( 'Page cache', 'xspeed' ),
+			'assets' => __( 'CSS and JS files', 'xspeed' ),
+			'object' => __( 'Object cache', 'xspeed' ),
+			'rest'   => __( 'REST API cache', 'xspeed' ),
+		);
+
+		return $names[ $slug ] ?? (string) ( $type['label'] ?? $slug );
 	}
 
 	/**

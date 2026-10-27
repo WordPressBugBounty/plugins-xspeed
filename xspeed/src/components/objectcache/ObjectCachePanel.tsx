@@ -1,3 +1,4 @@
+import { useResolvedSettings } from '../useResolvedSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Server, RefreshCw, Trash2, Copy, CheckCircle2, AlertCircle, Power, Plug, Zap } from 'lucide-react';
 import { Toggle } from '../Toggle';
@@ -6,7 +7,7 @@ import { SaveSpinner } from '../SaveIndicator';
 import { api } from '../../api/client';
 import { reconcileSaved } from '../reconcileSaved';
 import { renderField } from '../ModulePanel';
-import { DefinedInConfig } from '../DefinedInConfig';
+import { DefinedInConfig, HeldBySetting } from '../DefinedInConfig';
 import { OverrideConfirm } from '../OverrideConfirm';
 import { InlineConfirm } from '../InlineConfirm';
 import type { SchemaField, SettingOrigin } from '../../types';
@@ -88,6 +89,11 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
   const [origins, setOrigins] = useState<Record<string, SettingOrigin>>(
     module.setting_origins ?? {}
   );
+  const descriptorOrigins = useRef(module.setting_origins);
+  descriptorOrigins.current = module.setting_origins;
+  useEffect(() => {
+    setOrigins(module.setting_origins ?? {});
+  }, [module.setting_origins]);
   const [overrideBusy, setOverrideBusy] = useState<string | null>(null);
   const [detect, setDetect] = useState<DetectResponse | null>(null);
   const [snippet, setSnippet] = useState<string>('');
@@ -110,6 +116,12 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
   // Compared without the credentials, which only saveCredentials() writes.
   const lastApplied = useRef<string>(withoutCredentials(module.settings));
   const appliedCredentials = useRef<Record<string, unknown>>(credentialsOf(module.settings));
+  useResolvedSettings(module, setSettings, lastApplied);
+  // The hook writes held keys back into the baseline; a held credential must
+  // not re-enter it, or autosave sees a change that only saveCredentials() owns.
+  useEffect(() => {
+    if (lastApplied.current) lastApplied.current = withoutCredentials(JSON.parse(lastApplied.current));
+  }, [module.settings, module.setting_origins]);
   // Live mirror so the save response reconciles against current edits, not
   // the snapshot it was sent with (prevents mid-flight keystroke loss).
   const settingsRef = useRef(settings);
@@ -124,6 +136,7 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
   }, []);
 
   const refresh = async () => {
+    const originsAtRequest = descriptorOrigins.current;
     setBusy('detect');
     setError(null);
     try {
@@ -141,7 +154,7 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
       ]);
       setDetect(d);
       setSnippet(s.snippet);
-      if (o) setOrigins(o);
+      if (o && descriptorOrigins.current === originsAtRequest) setOrigins(o);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Detection failed');
     } finally {
@@ -785,6 +798,8 @@ function SettingRow({
   // Pinned by a wp-config.php constant: show the effective value, read-only,
   // and name the constant. DESIGN.md §24.35.
   const pinnedTo = origin?.source === 'constant' ? origin.constant : null;
+  // Held by another setting (DESIGN.md §24.56): read-only like a pin.
+  const heldBy = origin?.source === 'managed' ? origin.managed_by ?? null : null;
   // Taken back deliberately — editable, but still say what it shadows. §24.36.
   const overriding = origin?.overriding ?? null;
   const [confirming, setConfirming] = useState(false);
@@ -805,8 +820,9 @@ function SettingRow({
               onRevert={onSetOverride ? () => onSetOverride(false) : undefined}
             />
           )}
+          {heldBy && <HeldBySetting by={heldBy} />}
         </div>
-        <div className="shrink-0">{renderControl(spec, value, onChange, label, !!pinnedTo)}</div>
+        <div className="shrink-0">{renderControl(spec, value, onChange, label, !!pinnedTo || !!heldBy)}</div>
       </div>
       {/* Full row width, beneath the label/control pair — the label column is
           narrow and the card needs room for its copy and two buttons. */}

@@ -28,6 +28,7 @@ final class ObjectCacheModule extends Module {
 	public const SLUG    = 'object-cache';
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.1.0';
+	public const MANAGED_SETTINGS = false;
 
 	public function ui_metadata(): array {
 		return array(

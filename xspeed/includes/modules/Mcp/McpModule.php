@@ -689,13 +689,16 @@ final class McpModule extends Module {
 	 * issuer, the identifier a client used to derive that URL. (#266)
 	 *
 	 * @param string $matched_query The query the matched rule resolved to.
-	 * @return array{doc:string,issuer:string} Doc name ('' when not ours)
-	 *                                         and the identity to stamp on it.
+	 * @return array{doc:string,issuer:string,root:bool} Doc name ('' when not
+	 *                                                   ours), the identity to
+	 *                                                   stamp on it, and whether
+	 *                                                   it is the shared root URL.
 	 */
 	private function wellknown_claim_from_path( string $matched_query = '' ): array {
 		$none = array(
 			'doc'    => '',
 			'issuer' => '',
+			'root'   => false,
 		);
 
 		$uri = isset( $_SERVER['REQUEST_URI'] )
@@ -723,6 +726,7 @@ final class McpModule extends Module {
 			return array(
 				'doc'    => $m[1],
 				'issuer' => Mcp_OAuth::issuer(),
+				'root'   => false,
 			);
 		}
 
@@ -759,10 +763,58 @@ final class McpModule extends Module {
 			return array(
 				'doc'    => $m[1],
 				'issuer' => Mcp_OAuth::legacy_issuer(),
+				'root'   => true,
 			);
 		}
 
 		return $none;
+	}
+
+	/**
+	 * Answer the shared root discovery URL only if no other plugin does.
+	 *
+	 * root_discovery_contested() sees siblings that claim root with a rewrite
+	 * rule. Plugins that match the request path instead have no rule to see,
+	 * and the ones that answer from a later hook than ours (parse_request at
+	 * its default priority, template_redirect) got xSpeed's metadata on their
+	 * URL, so their OAuth clients signed in to the wrong server. Answering at
+	 * the end of template_redirect lets every earlier handler go first; ours
+	 * is the fallback when nobody else answered.
+	 *
+	 * The canonical redirect is switched off for this request: core runs it
+	 * on template_redirect at 10 and would send the URL to the homepage
+	 * before the fallback runs. (#266 QA)
+	 *
+	 * @param array{doc:string,issuer:string,root:bool} $claim The root claim.
+	 */
+	private function answer_root_discovery_last( array $claim ): void {
+		add_filter( 'redirect_canonical', '__return_false' );
+		add_action(
+			'template_redirect',
+			static function () use ( $claim ): void {
+				self::emit_discovery( $claim );
+			},
+			PHP_INT_MAX
+		);
+	}
+
+	/**
+	 * Send one discovery document and end the request.
+	 *
+	 * @param array{doc:string,issuer:string,root:bool} $claim What to send.
+	 */
+	private static function emit_discovery( array $claim ): void {
+		$data = 'authorization-server' === $claim['doc']
+			? Mcp_OAuth::authorization_server_metadata( $claim['issuer'] )
+			: Mcp_OAuth::protected_resource_metadata( $claim['issuer'] );
+		status_header( 200 );
+		header( 'Content-Type: application/json; charset=utf-8' );
+		// Public and cacheable, but short: this document IS the server's
+		// identity, and a cached copy outliving an issuer change is the
+		// one failure a client cannot recover from on its own. (#266)
+		header( 'Cache-Control: public, max-age=300' );
+		echo wp_json_encode( $data );
+		exit;
 	}
 
 	/**
@@ -793,19 +845,12 @@ final class McpModule extends Module {
 		// owns this URL" from "we own it and nobody else can answer".
 		$matched_query = is_object( $wp ) && isset( $wp->matched_query ) ? (string) $wp->matched_query : '';
 		$claim         = $this->wellknown_claim_from_path( $matched_query );
-		$doc   = $claim['doc'];
-		if ( '' !== $doc ) {
-			$data = 'authorization-server' === $doc
-				? Mcp_OAuth::authorization_server_metadata( $claim['issuer'] )
-				: Mcp_OAuth::protected_resource_metadata( $claim['issuer'] );
-			status_header( 200 );
-			header( 'Content-Type: application/json; charset=utf-8' );
-			// Public and cacheable, but short: this document IS the server's
-			// identity, and a cached copy outliving an issuer change is the
-			// one failure a client cannot recover from on its own. (#266)
-			header( 'Cache-Control: public, max-age=300' );
-			echo wp_json_encode( $data );
-			exit;
+		if ( '' !== $claim['doc'] ) {
+			if ( $claim['root'] ) {
+				$this->answer_root_discovery_last( $claim );
+				return;
+			}
+			self::emit_discovery( $claim );
 		}
 
 		// Pretty Hub connect document: /xspeed/mcp/connect-info (xspeed-hub#307).

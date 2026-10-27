@@ -244,6 +244,14 @@ export interface PurgeStoreResult {
   reason: string;
 }
 
+/** One entry in the purge menu (GET /cache/purge-types). */
+export interface PurgeTypeOption {
+  type: string;
+  label: string;
+  /** Empty for a type an add-on registered without one. */
+  hint: string;
+}
+
 /** What POST /cache/purge did, store by store (Purge_Runner::run). */
 export interface PurgeReport {
   ok: boolean;
@@ -477,7 +485,12 @@ export interface NoticeAction {
  * the schema default. (#398)
  */
 export interface SettingOrigin {
-  source: 'constant' | 'db' | 'default';
+  /**
+   * 'managed': an add-on sets this value while one of its own settings is on
+   * (the `xspeed_setting_managed` filter). Read-only here; the stored value
+   * comes back when the add-on lets go.
+   */
+  source: 'constant' | 'db' | 'default' | 'managed';
   /** The winning constant's name when `source` is 'constant'; null otherwise. */
   constant: string | null;
   /**
@@ -487,6 +500,8 @@ export interface SettingOrigin {
    * panel can offer to hand it back.
    */
   overriding?: string | null;
+  /** What sets the value when `source` is 'managed', in the add-on's words. */
+  managed_by?: string | null;
 }
 
 export interface ModuleDescriptor {

@@ -10,6 +10,7 @@ import { BrandSkeleton } from './components/BrandSkeleton';
 import { Toast } from './components/Toast';
 import { purgeNotice, type PurgeOutcome } from './components/purgeOutcome';
 import { ModulePanel } from './components/ModulePanel';
+import { moduleWithSettingsOverride, refreshSettingsOverrides, type ModuleSettingsOverride } from './components/moduleSettingsOverride';
 import { RewriteAlert } from './components/RewriteAlert';
 import { MobileSeparateAlert } from './components/MobileSeparateAlert';
 import { NginxServerBlock } from './components/NginxServerBlock';
@@ -41,18 +42,23 @@ export function App() {
 
   // Live per-module settings overrides — keeps optimistic saves visible when
   // navigating away and back (see the reset-on-mount panel effect).
-  const [settingsOverrides, setSettingsOverrides] = useState<Record<string, Record<string, unknown>>>({});
+  const [settingsOverrides, setSettingsOverrides] = useState<Record<string, ModuleSettingsOverride>>({});
 
   const [baseModules, setBaseModules] = useState<ModuleDescriptor[]>(
     () => window.XSpeedConfig?.bootstrap?.modules ?? []
   );
+
+  const refreshModules = useCallback((fresh: ModuleDescriptor[]) => {
+    setSettingsOverrides((previous) => refreshSettingsOverrides(fresh, previous));
+    setBaseModules(fresh);
+  }, []);
 
   // Refresh descriptors when Pro fires xspeed:tier-changed (license flip) or
   // xspeed:modules-changed (an add-on license or a module's state changed).
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handler = () => {
-      api.getModules().then(setBaseModules).catch(() => undefined);
+      api.getModules().then(refreshModules).catch(() => undefined);
     };
     window.addEventListener('xspeed:tier-changed', handler);
     window.addEventListener('xspeed:modules-changed', handler);
@@ -60,17 +66,23 @@ export function App() {
       window.removeEventListener('xspeed:tier-changed', handler);
       window.removeEventListener('xspeed:modules-changed', handler);
     };
-  }, []);
+  }, [refreshModules]);
 
   const modules: ModuleDescriptor[] = useMemo(() => {
     const base = mergeProModules(baseModules, tier);
     return base.map((m) =>
-      settingsOverrides[m.slug] ? { ...m, settings: settingsOverrides[m.slug] } : m
+      moduleWithSettingsOverride(m, settingsOverrides[m.slug])
     );
   }, [tier, settingsOverrides, baseModules]);
 
   const onModuleSaved = useCallback((slug: string, saved: Record<string, unknown>) => {
-    setSettingsOverrides((prev) => ({ ...prev, [slug]: saved }));
+    setSettingsOverrides((prev) => ({
+      ...prev,
+      [slug]: {
+        values: saved,
+        origins: baseModules.find((m) => m.slug === slug)?.setting_origins ?? {},
+      },
+    }));
 
     /*
      * Re-read the descriptors so the on/off surfaces update without a
@@ -90,7 +102,7 @@ export function App() {
      * not a regression, and not worth an error toast over a save that
      * actually landed.
      */
-    api.getModules().then(setBaseModules).catch(() => undefined);
+    api.getModules().then(refreshModules).catch(() => undefined);
     if (slug === 'white-label') {
       api.getBranding()
         .then((branding) => {
@@ -99,7 +111,7 @@ export function App() {
         })
         .catch(() => undefined);
     }
-  }, []);
+  }, [baseModules, refreshModules]);
 
   /**
    * Honour the focus/suggest half of a deep link (the notice-CTA contract,
@@ -379,14 +391,14 @@ export function App() {
     [settings, showToast, cacheBusy]
   );
 
-  const purge = useCallback(async () => {
+  const purge = useCallback(async (type: string) => {
     if (purging) return;
     if (purgeOutcomeTimer.current) window.clearTimeout(purgeOutcomeTimer.current);
     setPurgeOutcome(null);
     setPurging(true);
     let outcome: PurgeOutcome = 'failed';
     try {
-      const res = await api.purge();
+      const res = await api.purge(type);
       setStats(res.stats);
       const notice = purgeNotice(res.report);
       outcome = notice.outcome;
@@ -406,6 +418,9 @@ export function App() {
       }
     }
   }, [purging, showToast]);
+
+  // CacheHero hands this to onClick, so it must not take the event as a type.
+  const purgeAll = useCallback(() => purge('all'), [purge]);
 
   const preload = useCallback(async () => {
     if (preloading) return;
@@ -595,7 +610,7 @@ export function App() {
                       <MobileSeparateAlert mobile={mobileSeparate} onOpenCacheSettings={() => navigateModule('cache')} />
                       <ImpactHero stats={stats} />
                       <NextBestAction />
-                      <CacheHero settings={settings} stats={stats} onToggle={toggleCache} onPurge={purge} dropin={cacheDropin} />
+                      <CacheHero settings={settings} stats={stats} onToggle={toggleCache} onPurge={purgeAll} dropin={cacheDropin} />
                       <NginxServerBlock
                         snippet={nginxServerBlock}
                         topology={rewriteProbe?.topology}
@@ -633,7 +648,7 @@ export function App() {
         onClose={() => setPaletteOpen(false)}
         modules={modules}
         onSelectResult={goToResult}
-        onPurge={purge}
+        onPurge={purgeAll}
         onPreload={preload}
       />
     </SearchQueryProvider>

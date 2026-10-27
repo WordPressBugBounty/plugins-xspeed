@@ -131,12 +131,57 @@ class Cache {
 	private static $deferred_key = null;
 
 	/**
-	 * Translated page HTML captured by the outer buffer, for the deferred
-	 * write. Only populated when a translation plugin is active.
+	 * Page HTML collected by the outer capture buffer, for the deferred
+	 * write. It holds the bytes as they left every buffer above ours, which
+	 * is what the visitor received.
 	 *
 	 * @var string
 	 */
 	private static $translated_output = '';
+
+	/**
+	 * Nesting level of the outer capture buffer, or null when this request
+	 * did not open one.
+	 *
+	 * @var int|null
+	 */
+	private static $outer_capture_level = null;
+
+	/**
+	 * Set once the request is known not to need the captured copy, so the
+	 * capture buffer passes bytes through without keeping a second copy of
+	 * the page. (#768)
+	 *
+	 * @var bool
+	 */
+	private static $capture_stopped = false;
+
+	/**
+	 * Set when something cleaned or discarded the capture buffer. What we
+	 * collected is then not what the visitor received, so the deferred
+	 * write declines.
+	 *
+	 * @var bool
+	 */
+	private static $capture_cleaned = false;
+
+	/**
+	 * Did maybe_start_cache() find another plugin's buffer between the
+	 * capture buffer and ours? Its callback rewrites the page after
+	 * finalize_buffer() has run, so the write has to wait. (#768)
+	 *
+	 * @var bool
+	 */
+	private static $defer_write = false;
+
+	/**
+	 * Were the deferred bytes already filtered, minified and signed on the
+	 * way out? True when finalize_buffer() had the whole page in one chunk.
+	 * The deferred writer then must not sign them again.
+	 *
+	 * @var bool
+	 */
+	private static $deferred_sent_finished = false;
 
 	/**
 	 * Did finalize_buffer() run to completion on this request?
@@ -215,40 +260,14 @@ class Cache {
 		$priority = (int) apply_filters( 'xspeed_cache_buffer_priority', 0 );
 		add_action( $hook, array( $this, 'maybe_start_cache' ), $priority );
 
-		// When a render-time translation plugin is present, open one extra
-		// buffer OUTSIDE its own so we can capture post-translation HTML.
-		// TranslatePress opens on `init` priority 0, so we take a negative
-		// priority to land outside it. This buffer only collects bytes for
-		// the deferred cache write — it never modifies the response.
+		// Open one buffer OUTSIDE every buffer another plugin opens on
+		// `init` or later, so the deferred write can store the page as the
+		// visitor received it. TranslatePress opens on `init` priority 0,
+		// ShortPixel's WebP "Global" delivery on `init` too, so we take a
+		// negative priority. See open_outer_capture(). (#768)
 		add_action(
 			'init',
-			static function () {
-				if ( ! self::translation_plugin_active() ) {
-					return;
-				}
-				// `init` fires on EVERY request type, and
-				// translation_plugin_active() is a class_exists() check that
-				// is true site-wide — so without this guard the buffer opened
-				// on REST, admin-ajax, cron and WP-CLI too. None of those
-				// reach template_redirect, so $deferred_key stays null and
-				// the collected bytes are never released: a long-running
-				// WP-CLI command copied every byte of its output into a
-				// string that grew for the life of the process.
-				if ( is_admin()
-					|| wp_doing_ajax()
-					|| wp_doing_cron()
-					|| ( defined( 'REST_REQUEST' ) && REST_REQUEST )
-					|| ( defined( 'WP_CLI' ) && WP_CLI )
-					|| ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST ) ) {
-					return;
-				}
-				ob_start(
-					static function ( $chunk ) {
-						self::$translated_output .= $chunk;
-						return $chunk;
-					}
-				);
-			},
+			array( __CLASS__, 'open_outer_capture' ),
 			(int) apply_filters( 'xspeed_translation_outer_buffer_priority', -100 )
 		);
 
@@ -381,6 +400,15 @@ class Cache {
 		// the save_post gate rightly ignores. Without this, cached pages kept
 		// the old header, colours and custom CSS for the whole TTL.
 		add_action( 'customize_save_after', array( __CLASS__, 'on_customize_save' ), 10, 0 );
+		// A theme's own options screen writes one option and fires none of
+		// the hooks above. Divi's Theme Options save also deletes all of its
+		// static CSS under et-cache/, so cached pages kept linking files that
+		// were gone and lost their layout. Additional CSS saved outside the
+		// Customizer (Divi's Custom CSS field, or any other call to
+		// wp_update_custom_css_post()) is a `custom_css` post, which the
+		// save_post gate skips as non-viewable. (#764)
+		add_action( 'updated_option', array( __CLASS__, 'on_presentation_option_change' ), 10, 1 );
+		add_action( 'save_post_custom_css', array( __CLASS__, 'on_custom_css_save' ), 10, 2 );
 		// Adding, removing or editing a widget on the Widgets screen (classic
 		// or block) only writes options: `sidebars_widgets` for which widget
 		// sits where, `widget_<type>` for its settings. No hook above fires,
@@ -629,12 +657,17 @@ class Cache {
 		// Resolved before the headers_sent() guard so the decision is
 		// recorded (and observable in tests) even on a request that can no
 		// longer send headers; only the emission below is conditional.
-		self::$edge_headers = self::edge_headers_for( self::edge_status( $value ), 'request', $reason );
+		Edge_Hold_Health::begin_mark();
+		try {
+			self::$edge_headers = self::edge_headers_for( self::edge_status( $value ), 'request', $reason );
 
-		// The same countdown the drop-in applies to this entry, so the two
-		// PHP serve paths tell the edge the same thing about one page.
-		if ( null !== $lifetime_left && 'HIT' === self::edge_status( $value ) ) {
-			self::$edge_headers = self::cap_edge_lifetime( self::$edge_headers, $lifetime_left );
+			// The same countdown the drop-in applies to this entry, so the two
+			// PHP serve paths tell the edge the same thing about one page.
+			if ( null !== $lifetime_left && 'HIT' === self::edge_status( $value ) ) {
+				self::$edge_headers = self::cap_edge_lifetime( self::$edge_headers, $lifetime_left );
+			}
+		} finally {
+			Edge_Hold_Health::end_mark( self::$edge_headers, self::edge_status( $value ) );
 		}
 
 		if ( headers_sent() ) {
@@ -1531,171 +1564,179 @@ class Cache {
 	 * @return array<string,string>
 	 */
 	public static function edge_headers_for( string $status, string $context = 'request', string $bypass_reason = '' ): array {
-		// `rules` is a bake in every respect but one: the cache-headers
-		// filter is told it is answering for a pasted server rule. Such a
-		// rule serves every static HIT for as long as it stays pasted, and
-		// nothing regenerates it when the site's expiry or a page's own
-		// lifetime (a nonce cap) changes, so a lifetime given there cannot
-		// follow the page. The drop-in is rewritten by auto_heal(); a paste
-		// is not.
-		$filter_context = $context;
-		if ( 'rules' === $context ) {
-			$context = 'bake';
-		}
+		Edge_Hold_Health::begin_policy();
+		try {
+			// `rules` is a bake in every respect but one: the cache-headers
+			// filter is told it is answering for a pasted server rule. Such a
+			// rule serves every static HIT for as long as it stays pasted, and
+			// nothing regenerates it when the site's expiry or a page's own
+			// lifetime (a nonce cap) changes, so a lifetime given there cannot
+			// follow the page. The drop-in is rewritten by auto_heal(); a paste
+			// is not.
+			$filter_context = $context;
+			if ( 'rules' === $context ) {
+				$context = 'bake';
+			}
 
-		$base = array();
-		if ( 'HIT' === $status ) {
+			$base = array();
+			if ( 'HIT' === $status ) {
+				/**
+				 * Filter: xspeed_edge_cache_headers
+				 *
+				 * Response headers to add to a cached HTML response. The lifetime
+				 * is HIT-only: it is a promise that this copy is worth keeping,
+				 * and neither a first render nor a page we refused to cache is
+				 * one. The filter is also asked with `MISS` when a first render
+				 * is held, and only the `Cache-Tag` from that answer is sent, so
+				 * a purge can name a copy an edge stored despite the hold.
+				 *
+				 * The same filter feeds four regimes and `$context` says which.
+				 * On the PHP serve path it runs per request (`request`); at store
+				 * time it runs for one entry (`store`); when the drop-in is
+				 * generated it runs once (`bake`) and the result answers for
+				 * every drop-in HIT on the site; when the nginx or Apache static
+				 * block is generated it runs once (`rules`). Anything per-page — a
+				 * post id in a cache tag, say — must be skipped under `bake` and
+				 * `rules`. A server rule serves every static HIT for as long as it
+				 * stays pasted, so a lifetime here can't follow the page: send
+				 * none under `rules`.
+				 *
+				 * @param array<string,string> $headers Header name => value.
+				 * @param string               $status  `HIT`, or `MISS` when only the tag of a held first render is wanted.
+				 * @param string               $context `request`, `store`, `bake` or `rules`.
+				 */
+				$base = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'HIT', $filter_context ) );
+			}
+
+			$reason = self::edge_hold_reason( $status, $context, $bypass_reason );
+			if ( '' === $reason ) {
+				return $base;
+			}
+			$detected = Edge_Provider::detect( $context );
+			if ( Edge_Provider::is_off( $detected ) ) {
+				return $base;
+			}
+			if ( Edge_Provider::NONE === $detected['confidence']
+				&& ! in_array( $reason, self::HOLD_WITHOUT_EVIDENCE, true ) ) {
+				return $base;
+			}
+
+			$hold = Edge_Provider::hold_headers( $detected['provider'] );
+
 			/**
-			 * Filter: xspeed_edge_cache_headers
+			 * Filter: xspeed_edge_hold_headers
 			 *
-			 * Response headers to add to a cached HTML response. The lifetime
-			 * is HIT-only: it is a promise that this copy is worth keeping,
-			 * and neither a first render nor a page we refused to cache is
-			 * one. The filter is also asked with `MISS` when a first render
-			 * is held, and only the `Cache-Tag` from that answer is sent, so
-			 * a purge can name a copy an edge stored despite the hold.
+			 * The last word on what a hold INSTRUCTS. Runs before sanitising, so
+			 * a value that cannot be sent as a header is still dropped, and
+			 * before `X-XSpeed-Edge-Hold` is added, so it cannot rewrite the
+			 * reason xSpeed held the page for — that is a diagnosis, not an
+			 * instruction, and a forged one sends a reader after the wrong
+			 * module.
 			 *
-			 * The same filter feeds four regimes and `$context` says which.
-			 * On the PHP serve path it runs per request (`request`); at store
-			 * time it runs for one entry (`store`); when the drop-in is
-			 * generated it runs once (`bake`) and the result answers for
-			 * every drop-in HIT on the site; when the nginx or Apache static
-			 * block is generated it runs once (`rules`). Anything per-page — a
-			 * post id in a cache tag, say — must be skipped under `bake` and
-			 * `rules`. A server rule serves every static HIT for as long as it
-			 * stays pasted, so a lifetime here can't follow the page: send
-			 * none under `rules`.
-			 *
-			 * @param array<string,string> $headers Header name => value.
-			 * @param string               $status  `HIT`, or `MISS` when only the tag of a held first render is wanted.
-			 * @param string               $context `request`, `store`, `bake` or `rules`.
+			 * @param array<string,string> $hold     Header name => value.
+			 * @param array<string,string> $detected Provider, confidence, source.
+			 * @param string               $reason   Why the hold fired.
+			 * @param string               $context  `request`, `store` or `bake`.
 			 */
-			$base = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'HIT', $filter_context ) );
-		}
+			$hold = (array) apply_filters( 'xspeed_edge_hold_headers', $hold, $detected, $reason, $context );
 
-		$reason = self::edge_hold_reason( $status, $context, $bypass_reason );
-		if ( '' === $reason ) {
-			return $base;
-		}
-		$detected = Edge_Provider::detect( $context );
-		if ( Edge_Provider::is_off( $detected ) ) {
-			return $base;
-		}
-		if ( Edge_Provider::NONE === $detected['confidence']
-			&& ! in_array( $reason, self::HOLD_WITHOUT_EVIDENCE, true ) ) {
-			return $base;
-		}
+			// A hold replaces the lifetime rather than sitting beside it: the two
+			// describe the same response and would contradict each other. The
+			// cache tag survives, because a later purge still has to be able to
+			// name whatever the edge picked up on its own terms.
+			//
+			// On a HIT the tag came with `$base`. A MISS has no `$base`, and that
+			// is the case that mattered most: the first render after any purge.
+			// An edge whose rule overrides the origin's lifetime stores it
+			// despite the hold, and with no tag on it the next tag purge cannot
+			// reach it, so an edit stayed stale for the edge's whole lifetime
+			// (QA, 2026-09-23). So a held MISS asks the same filter for its tag
+			// and keeps the tag alone; the lifetime in the answer is dropped,
+			// because the hold is the instruction for this response.
+			$tag = $base['Cache-Tag'] ?? '';
+			if ( '' === $tag && 'MISS' === $status ) {
+				$tagged = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'MISS', $filter_context ) );
+				$tag    = $tagged['Cache-Tag'] ?? '';
+			}
+			if ( '' !== $tag ) {
+				$hold['Cache-Tag'] = $tag;
+			}
 
-		$hold = Edge_Provider::hold_headers( $detected['provider'] );
+			// Never argue with a stronger answer WordPress already gave. It sends
+			// `no-store, private` of its own accord on a logged-in, 404 or
+			// password-protected response, from WP::send_headers() — which runs
+			// before template_redirect, so it is already on the wire by the time
+			// we get here. Ours is the weaker statement of the two; replacing it
+			// would be a downgrade dressed as a fix. Only meaningful per request:
+			// a bake has no response to inspect.
+			if ( 'request' === $context && isset( $hold['Cache-Control'] ) && self::cache_control_already_stronger() ) {
+				unset( $hold['Cache-Control'] );
+			}
 
-		/**
-		 * Filter: xspeed_edge_hold_headers
-		 *
-		 * The last word on what a hold INSTRUCTS. Runs before sanitising, so
-		 * a value that cannot be sent as a header is still dropped, and
-		 * before `X-XSpeed-Edge-Hold` is added, so it cannot rewrite the
-		 * reason xSpeed held the page for — that is a diagnosis, not an
-		 * instruction, and a forged one sends a reader after the wrong
-		 * module.
-		 *
-		 * @param array<string,string> $hold     Header name => value.
-		 * @param array<string,string> $detected Provider, confidence, source.
-		 * @param string               $reason   Why the hold fired.
-		 * @param string               $context  `request`, `store` or `bake`.
-		 */
-		$hold = (array) apply_filters( 'xspeed_edge_hold_headers', $hold, $detected, $reason, $context );
+			// A page we refused to cache must not carry a validator either. A
+			// `Last-Modified` left on it invites a conditional request, and a
+			// shared cache that gets a 304 back serves the copy it should not
+			// have stored. Only on a bypass, and only per request: a MISS is
+			// about to be stored by us, so its validator is ours to keep.
+			if ( 'request' === $context && 'bypass' === $reason && ! headers_sent() ) {
+				header_remove( 'Last-Modified' );
+			}
 
-		// A hold replaces the lifetime rather than sitting beside it: the two
-		// describe the same response and would contradict each other. The
-		// cache tag survives, because a later purge still has to be able to
-		// name whatever the edge picked up on its own terms.
-		//
-		// On a HIT the tag came with `$base`. A MISS has no `$base`, and that
-		// is the case that mattered most: the first render after any purge.
-		// An edge whose rule overrides the origin's lifetime stores it
-		// despite the hold, and with no tag on it the next tag purge cannot
-		// reach it, so an edit stayed stale for the edge's whole lifetime
-		// (QA, 2026-09-23). So a held MISS asks the same filter for its tag
-		// and keeps the tag alone; the lifetime in the answer is dropped,
-		// because the hold is the instruction for this response.
-		$tag = $base['Cache-Tag'] ?? '';
-		if ( '' === $tag && 'MISS' === $status ) {
-			$tagged = self::sanitize_edge_headers( (array) apply_filters( 'xspeed_edge_cache_headers', array(), 'MISS', $filter_context ) );
-			$tag    = $tagged['Cache-Tag'] ?? '';
+			$hold = self::sanitize_edge_headers( $hold );
+
+			// Name the reason in the hold set itself, rather than sending it
+			// separately from mark().
+			//
+			// "Why is my page not being cached at the edge?" is the question this
+			// answers, and mark() could only answer it on the PHP serve path. The
+			// other emitters send whatever this function returns and never ran
+			// mark() at all — so the responses hardest to explain went out
+			// carrying `no-store` with nothing beside it to say why. Chiefly the
+			// drop-in, which serves from the `.meta` sidecar written under
+			// `store` and from the literal baked under `bake`, before plugins
+			// load and with no way to re-ask (the symptom
+			// edge_optimization_pending() describes above).
+			//
+			// The nginx and Apache blocks are a third path in principle and
+			// almost never in practice: they are only installed when
+			// static_rewrite_allowed() is true, and the one reason a stock site
+			// can hold in their bake is `mobile-split`, which is exactly what
+			// makes that false. `query-variant` is baked for the drop-in alone,
+			// since both blocks refuse a query string. They will carry a hold
+			// where a site forces one through `xspeed_edge_hold_reason`, and
+			// otherwise have none to carry.
+			//
+			// Added AFTER sanitising and banned in NEVER_AN_EDGE_HEADER, so
+			// neither of the two filters above can forge a reason or suppress the
+			// real one.
+			//
+			// Reduced to the slug CHARACTER CLASS, not checked against the six
+			// slugs: `xspeed_edge_hold_reason` is documented as able to force a
+			// reason, and a site that forces its own deserves to see it. What is
+			// not negotiable is the shape, because this value reaches an
+			// .htaccess and an nginx conf as well as a response header — so no
+			// CR/LF, no `$`, no `%`, no `\`, and a length a config file can hold.
+			$slug = preg_replace( '/[^a-z0-9-]/', '', strtolower( $reason ) );
+			if ( is_string( $slug ) && '' !== $slug ) {
+				$hold['X-XSpeed-Edge-Hold'] = substr( $slug, 0, 32 );
+			}
+
+			Edge_Hold_Health::resolved_hold( $detected, $reason, $context );
+			return $hold;
+		} finally {
+			Edge_Hold_Health::end_policy();
 		}
-		if ( '' !== $tag ) {
-			$hold['Cache-Tag'] = $tag;
-		}
-
-		// Never argue with a stronger answer WordPress already gave. It sends
-		// `no-store, private` of its own accord on a logged-in, 404 or
-		// password-protected response, from WP::send_headers() — which runs
-		// before template_redirect, so it is already on the wire by the time
-		// we get here. Ours is the weaker statement of the two; replacing it
-		// would be a downgrade dressed as a fix. Only meaningful per request:
-		// a bake has no response to inspect.
-		if ( 'request' === $context && isset( $hold['Cache-Control'] ) && self::cache_control_already_stronger() ) {
-			unset( $hold['Cache-Control'] );
-		}
-
-		// A page we refused to cache must not carry a validator either. A
-		// `Last-Modified` left on it invites a conditional request, and a
-		// shared cache that gets a 304 back serves the copy it should not
-		// have stored. Only on a bypass, and only per request: a MISS is
-		// about to be stored by us, so its validator is ours to keep.
-		if ( 'request' === $context && 'bypass' === $reason && ! headers_sent() ) {
-			header_remove( 'Last-Modified' );
-		}
-
-		$hold = self::sanitize_edge_headers( $hold );
-
-		// Name the reason in the hold set itself, rather than sending it
-		// separately from mark().
-		//
-		// "Why is my page not being cached at the edge?" is the question this
-		// answers, and mark() could only answer it on the PHP serve path. The
-		// other emitters send whatever this function returns and never ran
-		// mark() at all — so the responses hardest to explain went out
-		// carrying `no-store` with nothing beside it to say why. Chiefly the
-		// drop-in, which serves from the `.meta` sidecar written under
-		// `store` and from the literal baked under `bake`, before plugins
-		// load and with no way to re-ask (the symptom
-		// edge_optimization_pending() describes above).
-		//
-		// The nginx and Apache blocks are a third path in principle and
-		// almost never in practice: they are only installed when
-		// static_rewrite_allowed() is true, and the one reason a stock site
-		// can hold in their bake is `mobile-split`, which is exactly what
-		// makes that false. `query-variant` is baked for the drop-in alone,
-		// since both blocks refuse a query string. They will carry a hold
-		// where a site forces one through `xspeed_edge_hold_reason`, and
-		// otherwise have none to carry.
-		//
-		// Added AFTER sanitising and banned in NEVER_AN_EDGE_HEADER, so
-		// neither of the two filters above can forge a reason or suppress the
-		// real one.
-		//
-		// Reduced to the slug CHARACTER CLASS, not checked against the six
-		// slugs: `xspeed_edge_hold_reason` is documented as able to force a
-		// reason, and a site that forces its own deserves to see it. What is
-		// not negotiable is the shape, because this value reaches an
-		// .htaccess and an nginx conf as well as a response header — so no
-		// CR/LF, no `$`, no `%`, no `\`, and a length a config file can hold.
-		$slug = preg_replace( '/[^a-z0-9-]/', '', strtolower( $reason ) );
-		if ( is_string( $slug ) && '' !== $slug ) {
-			$hold['X-XSpeed-Edge-Hold'] = substr( $slug, 0, 32 );
-		}
-
-		return $hold;
 	}
 
 	/** Has something already sent a Cache-Control at least as strict as ours? */
 	private static function cache_control_already_stronger(): bool {
-		foreach ( headers_list() as $line ) {
+		$lines = headers_list();
+		foreach ( $lines as $line ) {
 			if ( 0 !== stripos( $line, 'cache-control:' ) ) {
 				continue;
 			}
 			if ( preg_match( '/\b(?:no-store|private)\b/i', $line ) ) {
+				Edge_Hold_Health::preserve_cache_control( $lines );
 				return true;
 			}
 		}
@@ -2138,6 +2179,7 @@ class Cache {
 			if ( self::bypass_is_visitor_scoped( self::bypass_reason() ) ) {
 				self::sync_bypass_cookie( true );
 			}
+			self::stop_capture();
 			return;
 		}
 
@@ -2248,6 +2290,8 @@ class Cache {
 		// request-end flush. We record our nesting level so close_buffer()
 		// flushes ONLY the buffer we opened.
 		self::$asset_stamp_at_open = class_exists( '\\XSpeed\\Minifier' ) ? Minifier::purge_stamp() : null;
+
+		self::decide_deferred_write();
 		ob_start( array( __CLASS__, 'finalize_buffer' ) );
 		self::$buffer_level = ob_get_level();
 
@@ -2325,8 +2369,151 @@ class Cache {
 	}
 
 	/**
+	 * Open the outer capture buffer, on `init` priority -100.
+	 *
+	 * TranslatePress is not the only plugin that rewrites the page from a
+	 * buffer opened before ours. ShortPixel's WebP "Global" delivery opens
+	 * one on `init` too, and a CDN or image plugin can do the same. Each of
+	 * them wraps the cache buffer, so the MISS visitor got their changes and
+	 * the stored copy did not. This buffer sits outside them and only copies
+	 * bytes. maybe_start_cache() decides whether the copy is needed and
+	 * stops it otherwise, so an ordinary request keeps the immediate write.
+	 *
+	 * A buffer opened before `init` priority -100 (an mu-plugin, `php.ini`
+	 * output_buffering) is still outside this one. (#768)
+	 */
+	public static function open_outer_capture(): void {
+		if ( null !== self::$outer_capture_level ) {
+			return;
+		}
+		if ( ! self::translation_plugin_active() && ! self::outer_capture_enabled() ) {
+			return;
+		}
+		// `init` fires on EVERY request type, and translation_plugin_active()
+		// is a class_exists() check that is true site-wide. Without this
+		// guard the buffer opened on REST, admin-ajax, cron and WP-CLI too.
+		// None of those reach template_redirect, so the collected bytes were
+		// never released: a long-running WP-CLI command copied every byte of
+		// its output into a string that grew for the life of the process.
+		if ( is_admin()
+			|| wp_doing_ajax()
+			|| wp_doing_cron()
+			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST )
+			|| ( defined( 'WP_CLI' ) && WP_CLI )
+			|| ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST ) ) {
+			return;
+		}
+		// should_cache() refuses all of these, so a copy would never be used.
+		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : '';
+		if ( 'GET' !== $method || is_user_logged_in() ) {
+			return;
+		}
+		$opts = Settings::get();
+		if ( empty( $opts['cache_enabled'] ) ) {
+			return;
+		}
+
+		self::$translated_output = '';
+		self::$capture_stopped   = false;
+		self::$capture_cleaned   = false;
+		ob_start( array( __CLASS__, 'capture_outer_buffer' ) );
+		self::$outer_capture_level = ob_get_level();
+	}
+
+	/**
+	 * Output-buffer callback of the capture buffer. It never changes the
+	 * response.
+	 *
+	 * @param string $chunk Bytes since the last flush.
+	 * @param int    $phase PHP_OUTPUT_HANDLER_* flags.
+	 * @return string The same bytes.
+	 */
+	public static function capture_outer_buffer( $chunk, $phase = PHP_OUTPUT_HANDLER_FINAL ) {
+		// ob_clean() or ob_end_clean() threw these bytes away, so the
+		// visitor never got them and our copy no longer matches the page.
+		if ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) {
+			self::$capture_cleaned   = true;
+			self::$translated_output = '';
+			return $chunk;
+		}
+		if ( ! self::$capture_stopped && ! self::$capture_cleaned ) {
+			self::$translated_output .= (string) $chunk;
+		}
+		return $chunk;
+	}
+
+	/**
+	 * Decide, just before the cache buffer opens, whether its write has to
+	 * wait for the buffers around it.
+	 *
+	 * Every buffer opened since the capture buffer wraps the cache buffer,
+	 * and its callback runs after finalize_buffer(). (#768)
+	 */
+	private static function decide_deferred_write(): void {
+		self::$defer_write = null !== self::$outer_capture_level
+			&& self::foreign_buffer_between( ob_list_handlers(), self::$outer_capture_level );
+		if ( ! self::$defer_write && ! self::translation_plugin_active() ) {
+			self::stop_capture();
+		}
+	}
+
+	/** Stop keeping a copy of the page, and release what was kept. */
+	private static function stop_capture(): void {
+		self::$capture_stopped   = true;
+		self::$translated_output = '';
+	}
+
+	/**
+	 * May the outer capture buffer open on frontend requests?
+	 */
+	public static function outer_capture_enabled(): bool {
+		/**
+		 * Whether to open the outer capture buffer, so the cache stores the
+		 * page after other plugins' output buffers have changed it.
+		 *
+		 * Return false to keep the cache buffer as the only one, as before
+		 * #768. A translation plugin detected by
+		 * `xspeed_translation_plugin_active` still opens it.
+		 *
+		 * @param bool $enabled Default true.
+		 */
+		return (bool) apply_filters( 'xspeed_outer_buffer_capture', true );
+	}
+
+	/**
+	 * Is another plugin's buffer open between the capture buffer and the
+	 * cache buffer about to open?
+	 *
+	 * Pure, so the decision is testable without a real buffer stack.
+	 * A buffer without a callback passes bytes through unchanged. A
+	 * compression handler changes the encoding, not the HTML, and the copy
+	 * it would hand us is gzip, not a page; the immediate write is right
+	 * for both.
+	 *
+	 * @param string[] $handlers      ob_list_handlers(), outermost first.
+	 * @param int      $capture_level Level the capture buffer opened at.
+	 */
+	public static function foreign_buffer_between( array $handlers, int $capture_level ): bool {
+		if ( $capture_level < 1 || count( $handlers ) <= $capture_level ) {
+			return false;
+		}
+		// Something closed the capture buffer and another took its level.
+		if ( __CLASS__ . '::capture_outer_buffer' !== ( $handlers[ $capture_level - 1 ] ?? '' ) ) {
+			return false;
+		}
+		$passthrough = array( 'default output handler', 'ob_gzhandler', 'zlib output compression' );
+		foreach ( array_slice( $handlers, $capture_level ) as $handler ) {
+			if ( ! in_array( $handler, $passthrough, true ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Write the cache file for a request whose output was wrapped by a
-	 * render-time translation plugin.
+	 * render-time translation plugin, or by another plugin's buffer opened
+	 * between the capture buffer and ours (#768).
 	 *
 	 * Registered as a PHP shutdown function (not a WP `shutdown` action) so
 	 * it runs after PHP has unwound the output-buffer stack — by which point
@@ -2334,10 +2521,11 @@ class Cache {
 	 * internal markers are gone.
 	 *
 	 * finalize_buffer() has already applied the status gate, the
-	 * xspeed_cache_final_html filter and HTML minification to the
-	 * untranslated copy and then declined to write it. Here we re-run only
-	 * what's needed on the translated bytes: minify, write, and fire the
-	 * same downstream hooks so Brotli / static-tree listeners behave
+	 * xspeed_cache_final_html filter and HTML minification to its own copy
+	 * and then declined to write it. Here we re-run only what's needed on
+	 * the bytes the outer buffers produced: minify and sign (and the filter
+	 * when a mid-render flush kept it off the sent bytes), write, and fire
+	 * the same downstream hooks so Brotli / static-tree listeners behave
 	 * identically to the ordinary path.
 	 */
 	public static function write_deferred_translated_cache(): void {
@@ -2355,7 +2543,20 @@ class Cache {
 		$asset_stamp                = self::$deferred_asset_stamp;
 		self::$deferred_asset_stamp = null;
 
+		$finished                     = self::$deferred_sent_finished;
+		self::$deferred_sent_finished = false;
+
+		$cleaned               = self::$capture_cleaned;
+		self::$capture_cleaned = false;
+		self::$capture_stopped = false;
+
 		if ( null === $key ) {
+			return;
+		}
+
+		// ob_clean() or ob_end_clean() discarded part of what we collected,
+		// so it is not the page the visitor got.
+		if ( $cleaned ) {
 			return;
 		}
 
@@ -2389,11 +2590,36 @@ class Cache {
 			return;
 		}
 
+		// A compression handler between the buffers hands us gzip, not a
+		// page. Stored as .html it would be served as garbage on every HIT.
+		if ( "\x1f\x8b" === substr( $full, 0, 2 ) ) {
+			return;
+		}
+
+		// After a mid-render flush, finalize_buffer() could only change the
+		// stored copy, not the bytes sent, so the final-HTML transforms never
+		// reached what we collected. Run them here. (#768)
+		if ( ! $finished ) {
+			$collected = $full;
+			/** This filter is documented in includes/class-cache.php */
+			$full = apply_filters( 'xspeed_cache_final_html', $full );
+			if ( ! is_string( $full ) || strlen( trim( $full ) ) < 255 ) {
+				$full = $collected;
+			}
+		}
+
+		// Bytes sent in one chunk were already minified and signed. Minify
+		// strips the signature comment, so sign again only after minifying
+		// or when the bytes were never signed; otherwise the stored page
+		// carried two signatures.
 		$minify_opts = Settings_Manager::get( 'minify' );
-		if ( ! empty( $minify_opts['minify_html'] ) ) {
+		$minify      = ! empty( $minify_opts['minify_html'] );
+		if ( $minify ) {
 			$full = Minifier::minify_html( $full );
 		}
-		$full = self::signed( $full );
+		if ( $minify || ! $finished ) {
+			$full = self::signed( $full );
+		}
 
 		// Per-site directory: on multisite every blog shares this tree, so
 		// entries are bucketed by host to keep one site's purge from
@@ -4402,6 +4628,8 @@ class Cache {
 		// compare against this request's snapshot.
 		$asset_stamp               = self::$asset_stamp_at_open;
 		self::$asset_stamp_at_open = null;
+		$defer_write               = self::$defer_write;
+		self::$defer_write         = false;
 
 		if ( strlen( $full ) < 255 ) {
 			return $buffer;
@@ -4548,9 +4776,14 @@ class Cache {
 		// and bake in its internal #TRPLINKPROCESSED markers. Hand off to
 		// shutdown, where the outer buffer has already translated, and let
 		// the pass-through below deliver this request untouched.
-		if ( self::translation_plugin_active() ) {
-			self::$deferred_key         = $key;
-			self::$deferred_asset_stamp = $asset_stamp;
+		//
+		// Any other plugin's buffer between the capture buffer and ours is
+		// the same case: ShortPixel's WebP <picture> tags reached the MISS
+		// visitor and never the stored copy. (#768)
+		if ( $defer_write || self::translation_plugin_active() ) {
+			self::$deferred_key           = $key;
+			self::$deferred_asset_stamp   = $asset_stamp;
+			self::$deferred_sent_finished = $single_chunk;
 			// Reaching here means finalize_buffer() ran to completion: the
 			// status gate passed, should_cache() said yes, and PHP handed us
 			// the whole buffer. A wp_die() or exit() mid-render unwinds the
@@ -5408,6 +5641,16 @@ class Cache {
 			'thrive_section',
 			'thrive_layout',
 			'thrive_typography',
+			// Divi Theme Builder: the container, its templates and their
+			// header, body and footer layouts. None is publicly queryable, so
+			// a save cleared nothing, while Divi deleted the static CSS of
+			// every page using the layout and the cached pages kept linking
+			// it. (#764)
+			'et_theme_builder',
+			'et_template',
+			'et_header_layout',
+			'et_body_layout',
+			'et_footer_layout',
 		);
 
 		/**
@@ -7373,16 +7616,37 @@ class Cache {
 	 * @return bool Whether a flush was actually performed.
 	 */
 	public static function flush_object_cache( bool $network_wide = false ): bool {
-		if ( ! $network_wide && is_multisite() && function_exists( 'wp_cache_flush_group' ) && function_exists( 'wp_cache_supports' ) && wp_cache_supports( 'flush_group' ) ) {
-			// Blog-scoped groups only; a shared/global group (site options,
-			// user meta) is intentionally left alone.
-			foreach ( array( 'options', 'posts', 'terms', 'post_meta', 'comment' ) as $group ) {
-				wp_cache_flush_group( $group );
+		try {
+			if ( ! $network_wide && is_multisite() && function_exists( 'wp_cache_flush_group' ) && function_exists( 'wp_cache_supports' ) && wp_cache_supports( 'flush_group' ) ) {
+				// Blog-scoped groups only; a shared/global group (site options,
+				// user meta) is intentionally left alone.
+				foreach ( array( 'options', 'posts', 'terms', 'post_meta', 'comment' ) as $group ) {
+					wp_cache_flush_group( $group );
+				}
+				return true;
 			}
-			return true;
-		}
-		if ( function_exists( 'wp_cache_flush' ) ) {
-			return (bool) wp_cache_flush();
+			if ( function_exists( 'wp_cache_flush' ) ) {
+				return (bool) wp_cache_flush();
+			}
+		} catch ( \Throwable $e ) {
+			// A drop-in failure must not abort an update or the rest of a purge. (#774)
+			try {
+				Activity_Log::record(
+					'object_cache_flush_failed',
+					sprintf(
+						/* translators: %s: object cache exception message. */
+						__( 'Object cache flush failed: %s', 'xspeed' ),
+						$e->getMessage()
+					),
+					Activity_Log::ERROR
+				);
+			} catch ( \Throwable $log_error ) {
+				// The log is an option, so it can fail on the same broken drop-in.
+				if ( function_exists( 'error_log' ) ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- the activity log is unavailable.
+					error_log( '[xspeed] object cache flush failed: ' . $e->getMessage() );
+				}
+			}
 		}
 		return false;
 	}
@@ -8298,8 +8562,8 @@ class Cache {
 				return self::purge_assets( $cause );
 
 			case 'object':
-				if ( function_exists( 'wp_cache_flush' ) ) {
-					wp_cache_flush();
+				if ( ! self::flush_object_cache( true ) ) {
+					return 0;
 				}
 				self::record_partial_purge( 'object cache', $cause, null );
 				return 0;
@@ -8348,6 +8612,101 @@ class Cache {
 		self::$widgets_purged = true;
 		self::purge_all(
 			'widgets',
+			null,
+			array(
+				'scope'  => 'site',
+				'intent' => 'presentation',
+				'urls'   => array(),
+			)
+		);
+	}
+
+	/**
+	 * Whether a theme-options or Additional CSS change already purged in
+	 * this request.
+	 *
+	 * @var bool
+	 */
+	private static $presentation_purged = false;
+
+	/**
+	 * Options whose change alters how every page renders.
+	 *
+	 * @return string[]
+	 */
+	public static function presentation_options(): array {
+		$options = array(
+			'et_divi',  // Divi Theme Options, and its Customizer settings.
+			'et_extra', // Extra, the other Elegant Themes theme on the same panel.
+		);
+
+		/**
+		 * Filter the options whose change clears the whole site because they
+		 * change how every page renders, such as a theme's own options panel.
+		 *
+		 * @param string[] $options Option names.
+		 */
+		return (array) apply_filters( 'xspeed_presentation_options', $options );
+	}
+
+	/**
+	 * A presentation option changed: purge the site, once per request.
+	 *
+	 * `updated_option` fires only when the value really changed, so saving
+	 * the panel without a change costs nothing.
+	 *
+	 * @param string $option Option name.
+	 */
+	public static function on_presentation_option_change( $option ): void {
+		if ( ! is_string( $option ) || ! in_array( $option, self::presentation_options(), true ) ) {
+			return;
+		}
+		// A theme may write its options while rendering a page (a migration
+		// flag, a timestamp). Visitor traffic must never be able to empty
+		// the cache, which is what orders did before #243. Every real
+		// settings save runs in wp-admin, admin-ajax, REST, cron or WP-CLI.
+		if ( ! is_admin()
+			&& ! wp_doing_ajax()
+			&& ! wp_doing_cron()
+			&& ! ( defined( 'REST_REQUEST' ) && REST_REQUEST )
+			&& ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return;
+		}
+		self::purge_presentation( 'option:' . $option );
+	}
+
+	/**
+	 * The active theme's Additional CSS was saved outside the Customizer.
+	 *
+	 * @param int      $post_id Saved post ID.
+	 * @param \WP_Post $post    Saved post.
+	 */
+	public static function on_custom_css_save( $post_id, $post = null ): void {
+		unset( $post_id );
+		// Every theme keeps its own custom_css post, named after its
+		// stylesheet. Another theme's CSS is on no page.
+		if ( ! is_object( $post ) || ! isset( $post->post_name ) || get_stylesheet() !== (string) $post->post_name ) {
+			return;
+		}
+		self::purge_presentation( 'post:custom_css' );
+	}
+
+	/**
+	 * Purge the site for a presentation change, once per request.
+	 *
+	 * A Customizer publish writes the same option and post and purges on
+	 * its own (on_customize_save()), so it is left to that. One Divi Theme
+	 * Options save writes both et_divi and the Custom CSS post.
+	 *
+	 * @param string $cause Cause for the purge log.
+	 */
+	private static function purge_presentation( string $cause ): void {
+		if ( self::$presentation_purged || did_action( 'customize_save' ) ) {
+			return;
+		}
+		self::$presentation_purged = true;
+		self::purge_all(
+			$cause,
 			null,
 			array(
 				'scope'  => 'site',
@@ -9932,11 +10291,16 @@ class Cache {
 	 * is equivalent. It applies NO defaults or coercion: read each key with a
 	 * fallback matching the schema's own default.
 	 *
+	 * The device split is the exception: an add-on can hold it on
+	 * (`xspeed_setting_managed`), and the serve path, the drop-in flags and
+	 * the reconcile must split exactly when get() says the site does.
+	 *
 	 * @return array<string,mixed>
 	 */
 	private static function stored_cache_opts(): array {
 		$stored = get_option( Settings_Manager::OPTION_PREFIX . 'cache', array() );
-		return is_array( $stored ) ? $stored : array();
+		$stored = is_array( $stored ) ? $stored : array();
+		return Settings_Manager::with_managed( 'cache', $stored, array( 'mobile_separate', 'tablet_separate' ) );
 	}
 
 	/**

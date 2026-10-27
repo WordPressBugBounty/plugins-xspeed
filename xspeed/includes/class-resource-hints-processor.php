@@ -1657,25 +1657,30 @@ final class Resource_Hints_Processor {
 	}
 
 	/**
-	 * Inject the assembled hint markup into <head>. Prefers to land right
-	 * before the first stylesheet so the preloads are discovered before the
-	 * render-blocking CSS. Falls back to after <head>, then prepend.
+	 * Inject the assembled hint markup into <head>, before the first
+	 * stylesheet so the preloads are discovered before the render-blocking
+	 * CSS. An inline <style> counts as a stylesheet: Critical CSS inlines its
+	 * fold blob ahead of every <link>, and a preload placed after a 79 KB
+	 * blob reached the browser late enough that on some PageSpeed runs the
+	 * hero image only started after the head's blocking scripts, which
+	 * doubled mobile LCP. Falls back to after <head>, then prepend.
 	 */
 	private static function inject_into_head( string $html, string $hints ): string {
-		// Only a supplied candidate's preload carries `media`. Every other
-		// page keeps exactly the placement it had before the seam existed.
-		if ( false !== strpos( $hints, ' media="' ) ) {
-			$pos = self::after_viewport_offset( $html );
-			if ( null !== $pos ) {
-				return substr( $html, 0, $pos ) . "\n" . $hints . substr( $html, $pos );
-			}
+		// Only a supplied candidate's preload carries `media`, and that one
+		// must also wait for <meta name="viewport">.
+		$media = false !== strpos( $hints, ' media="' );
+		$pos   = self::head_insert_offset( $html, $media );
+		if ( null !== $pos ) {
+			// Byte-for-byte what earlier versions wrote: no newline ahead of
+			// an unscoped hint that lands right before a stylesheet.
+			$sep = ( ! $media && preg_match( '#\G<(?:link|style)\b#i', $html, $unused, 0, $pos ) ) ? '' : "\n";
+			return substr( $html, 0, $pos ) . $sep . $hints . substr( $html, $pos );
 		}
-		// Before the first <link rel="stylesheet"> if there is one.
+		// The head could not be read: the placement this had before.
 		if ( preg_match( '#<link\b[^>]*rel=["\']stylesheet["\'][^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
 			$pos = $m[0][1];
 			return substr( $html, 0, $pos ) . $hints . substr( $html, $pos );
 		}
-		// Otherwise right after the opening <head ...>.
 		if ( preg_match( '#<head\b[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE ) ) {
 			$pos = $m[0][1] + strlen( $m[0][0] );
 			return substr( $html, 0, $pos ) . "\n" . $hints . substr( $html, $pos );
@@ -1685,9 +1690,10 @@ final class Resource_Hints_Processor {
 	}
 
 	/**
-	 * Where a media-scoped preload goes: before the first stylesheet, as
-	 * usual, but never ahead of <meta name="viewport">. Null when the head
-	 * could not be read, and the usual placement is used instead.
+	 * Where the hints go: before the first stylesheet in the head, a
+	 * <link rel="stylesheet"> or an inline <style>, or right after <head>
+	 * when there is none. A media-scoped preload also never goes ahead of
+	 * <meta name="viewport">. Null when the head could not be read.
 	 *
 	 * A preload's `media` is evaluated when the parser reaches the link, and
 	 * until the viewport meta is parsed a phone lays out at its default
@@ -1701,9 +1707,10 @@ final class Resource_Hints_Processor {
 	 * job but could give up on a large inline block, and then searched the
 	 * raw markup.
 	 *
+	 * @param bool $after_viewport Whether the hints must follow the viewport meta.
 	 * @return int|null Byte offset in $html.
 	 */
-	private static function after_viewport_offset( string $html ) {
+	private static function head_insert_offset( string $html, bool $after_viewport ) {
 		$len        = strlen( $html );
 		$i          = 0;
 		$head_start = null;
@@ -1754,6 +1761,13 @@ final class Resource_Hints_Processor {
 					return null;
 				}
 				$i = $close;
+				if ( 'style' !== $name || null === $head_start || null !== $stylesheet ) {
+					continue;
+				}
+				if ( ! $after_viewport || null !== $viewport ) {
+					return $lt;
+				}
+				$stylesheet = $lt;
 				continue;
 			}
 			if ( null === $head_start ) {
@@ -1764,13 +1778,13 @@ final class Resource_Hints_Processor {
 			}
 			$attrs = self::tag_attrs( $tag );
 			if ( null === $stylesheet && 'link' === $name && 'stylesheet' === strtolower( $attrs['rel'] ?? '' ) ) {
-				if ( null !== $viewport ) {
+				if ( ! $after_viewport || null !== $viewport ) {
 					return $lt;
 				}
 				$stylesheet = $lt;
 				continue;
 			}
-			if ( null === $viewport && 'meta' === $name && 'viewport' === strtolower( $attrs['name'] ?? '' ) ) {
+			if ( $after_viewport && null === $viewport && 'meta' === $name && 'viewport' === strtolower( $attrs['name'] ?? '' ) ) {
 				if ( null !== $stylesheet ) {
 					return $i;
 				}

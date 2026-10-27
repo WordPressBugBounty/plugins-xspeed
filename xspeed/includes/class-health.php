@@ -734,15 +734,37 @@ final class Health {
 			);
 		}
 
-		$caveat = 'cloudflare' === $edge['provider']
-			? ' A Cloudflare Cache Rule whose Edge TTL is "Ignore cache-control header and use this TTL" overrides this; use "Respect origin TTL" on that rule.'
+		$saved = Edge_Hold_Health::read_record();
+		$provider = null !== $saved ? $saved['record']['provider'] : $edge['provider'];
+		$caveat = 'cloudflare' === $provider
+			? __( ' A Cloudflare Cache Rule whose Edge TTL is "Ignore cache-control header and use this TTL" can override origin headers; use "Respect origin TTL" on that rule.', 'xspeed' )
 			: '';
-
+		if ( null !== $saved ) {
+			$reasons = array(
+				'bypass' => __( 'bypassed page', 'xspeed' ),
+				'bypass-shape' => __( 'excluded request', 'xspeed' ),
+				'miss' => __( 'first render', 'xspeed' ),
+				'mobile-split' => __( 'separate mobile cache', 'xspeed' ),
+				'markdown' => __( 'Markdown response', 'xspeed' ),
+				'pending' => __( 'pending optimization', 'xspeed' ),
+				'query-variant' => __( 'query variant', 'xspeed' ),
+				'other' => __( 'custom hold', 'xspeed' ),
+			);
+			$timezone = wp_timezone();
+			$when = wp_date( (string) get_option( 'date_format' ) . ' ' . (string) get_option( 'time_format' ), $saved['record']['observed_at'], $timezone );
+			return array(
+				'id' => 'edge_hold',
+				'tone' => self::WARN,
+				'label' => __( 'PHP cache headers conflicted with an edge hold', 'xspeed' ),
+				/* translators: 1: fixed hold reason, 2: observation date and time, 3: site timezone. */
+				'detail' => sprintf( __( 'A PHP header conflict was observed on %2$s (%3$s) for a held response (hold reason: %1$s). This does not show whether the CDN stored the response.', 'xspeed' ), $reasons[ $saved['reason'] ], $when, $timezone->getName() ) . $caveat,
+			);
+		}
 		return array(
-			'id'     => 'edge_hold',
-			'tone'   => self::OK,
-			'label'  => 'Edge cache being told what not to store',
-			'detail' => sprintf( 'First renders, bypassed pages and mobile-split pages are marked do-not-store for %s.%s', $named, $caveat ),
+			'id' => 'edge_hold',
+			'tone' => self::INFO,
+			'label' => __( 'Edge cache behavior is unverified', 'xspeed' ),
+			'detail' => __( 'No current PHP header conflict is recorded. This check does not verify what the CDN stores or serves.', 'xspeed' ) . $caveat,
 		);
 	}
 
