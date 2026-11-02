@@ -59,6 +59,7 @@ class ComposerStaticInit658ed90fed7749ed814442769ec5d073
         'XSpeed\\Modules\\Health\\HealthModule' => __DIR__ . '/../..' . '/includes/modules/Health/HealthModule.php',
         'XSpeed\\Modules\\Heartbeat\\HeartbeatModule' => __DIR__ . '/../..' . '/includes/modules/Heartbeat/HeartbeatModule.php',
         'XSpeed\\Modules\\Lazy\\LazyModule' => __DIR__ . '/../..' . '/includes/modules/Lazy/LazyModule.php',
+        'XSpeed\\Modules\\LocalAnalytics\\LocalAnalyticsModule' => __DIR__ . '/../..' . '/includes/modules/LocalAnalytics/LocalAnalyticsModule.php',
         'XSpeed\\Modules\\Mcp\\Cli_Bridge' => __DIR__ . '/../..' . '/includes/modules/Mcp/Cli_Bridge.php',
         'XSpeed\\Modules\\Mcp\\Cli_Error_Signal' => __DIR__ . '/../..' . '/includes/modules/Mcp/Cli_Error_Signal.php',
         'XSpeed\\Modules\\Mcp\\Cli_Output_Buffer' => __DIR__ . '/../..' . '/includes/modules/Mcp/Cli_Output_Buffer.php',
@@ -83,6 +84,7 @@ class ComposerStaticInit658ed90fed7749ed814442769ec5d073
         'XSpeed\\Modules\\Score\\ScoreModule' => __DIR__ . '/../..' . '/includes/modules/Score/ScoreModule.php',
         'XSpeed\\Modules\\Settings\\SettingsModule' => __DIR__ . '/../..' . '/includes/modules/Settings/SettingsModule.php',
         'XSpeed\\Modules\\Support\\SupportModule' => __DIR__ . '/../..' . '/includes/modules/Support/SupportModule.php',
+        'XSpeed\\Modules\\ThirdPartyAssets\\ThirdPartyAssetsModule' => __DIR__ . '/../..' . '/includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php',
         'XSpeed\\Modules\\TurboRender\\TurboRenderModule' => __DIR__ . '/../..' . '/includes/modules/TurboRender/TurboRenderModule.php',
     );
 

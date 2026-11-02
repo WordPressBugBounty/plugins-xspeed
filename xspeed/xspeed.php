@@ -2,7 +2,7 @@
 /**
  * Plugin Name: xSpeed Cache
  * Description: Minimal, ultra-fast caching plugin for WordPress.
- * Version: 1.4.5
+ * Version: 1.4.6
  * Requires at least: 6.0
  * Tested up to: 7.1
  * Requires PHP: 7.4
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'XSPEED_VERSION', '1.4.5' );
+define( 'XSPEED_VERSION', '1.4.6' );
 define( 'XSPEED_FILE', __FILE__ );
 define( 'XSPEED_DIR', plugin_dir_path( __FILE__ ) );
 define( 'XSPEED_URL', plugin_dir_url( __FILE__ ) );
@@ -226,6 +226,12 @@ if ( ! file_exists( XSPEED_DIR . 'vendor/autoload.php' ) ) {
 
 require_once XSPEED_DIR . 'vendor/autoload.php';
 require_once XSPEED_DIR . 'includes/wp-cache-constant.php';
+
+// The request URI before any later plugin can rewrite it, for when the
+// drop-in did not run and record it first. See Cache::request_uri() (#832).
+if ( ! defined( 'XSPEED_REQUEST_URI' ) && isset( $_SERVER['REQUEST_URI'] ) ) {
+	define( 'XSPEED_REQUEST_URI', (string) $_SERVER['REQUEST_URI'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- stored raw; Cache::request_path() normalizes it before use. Read before wp_magic_quotes(), so there are no slashes to remove.
+}
 
 register_activation_hook( __FILE__, array( 'XSpeed\\Plugin', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'XSpeed\\Plugin', 'deactivate' ) );

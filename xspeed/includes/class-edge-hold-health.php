@@ -335,7 +335,7 @@ final class Edge_Hold_Health {
 			$previous_suppression = $wpdb->suppress_errors();
 			$location = self::generation_location( $network );
 			if ( null === $location ) { return null; }
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- fresh named scalar bypasses option filters and persistent caches.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- fresh named scalar bypasses option filters and persistent caches; the table is the options table get_blog_prefix() names, checked against /\A[a-zA-Z0-9_]+\z/ in generation_location(); %i needs WordPress 6.2 and the plugin supports 6.0.
 			$value = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM ' . $location[0] . ' WHERE option_name = %s LIMIT 1', self::GENERATION_OPTION ) );
 			return is_string( $value ) && preg_match( '/\A[a-f0-9]{32}\z/D', $value ) ? $value : null;
 		} catch ( \Throwable $error ) { return null; }
@@ -351,7 +351,7 @@ final class Edge_Hold_Health {
 			$previous_suppression = $wpdb->suppress_errors();
 			$location = self::generation_location();
 			if ( null === $location ) { return false; }
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- distinguish missing from malformed without unserializing.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- distinguish missing from malformed without unserializing; the table is the options table get_blog_prefix() names, checked against /\A[a-zA-Z0-9_]+\z/ in generation_location(); %i needs WordPress 6.2 and the plugin supports 6.0.
 			$raw = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM ' . $location[0] . ' WHERE option_name = %s LIMIT 1', self::GENERATION_OPTION ) );
 			return self::publish_generation( null, null !== $raw ) && null !== self::read_generation();
 		} catch ( \Throwable $error ) { return false; }
@@ -376,7 +376,7 @@ final class Edge_Hold_Health {
 			$token = bin2hex( $bytes );
 			$sql = 'INSERT ' . ( $replace ? '' : 'IGNORE ' ) . 'INTO ' . $location[0] . " (option_name,option_value,autoload) VALUES (%s,%s,'no')";
 			if ( $replace ) { $sql .= " ON DUPLICATE KEY UPDATE option_value=VALUES(option_value),autoload='no'"; }
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- atomic scalar publication under the existing unique option_name key.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- atomic scalar publication under the existing unique option_name key; the table is the options table get_blog_prefix() names, checked against /\A[a-zA-Z0-9_]+\z/ in generation_location(); %i needs WordPress 6.2 and the plugin supports 6.0.
 			if ( false === $wpdb->query( $wpdb->prepare( $sql, self::GENERATION_OPTION, $token ) ) ) { return false; }
 			$current = (int) get_current_blog_id();
 			$switch = is_multisite() && $current !== $location[1];

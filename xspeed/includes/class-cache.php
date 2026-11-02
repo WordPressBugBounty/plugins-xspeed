@@ -1547,7 +1547,7 @@ class Cache {
 			)
 		);
 
-		return array() !== $personal && self::path_matches_exclusions( $personal, $path );
+		return array() !== $personal && self::exclusions_match_request( $personal );
 	}
 
 	/**
@@ -2803,10 +2803,8 @@ class Cache {
 			}
 		}
 
-		$path = self::request_path();
-
 		$excluded_urls = is_array( $cache_opts['excluded_urls'] ?? null ) ? $cache_opts['excluded_urls'] : array();
-		if ( ! $cache_feed && self::path_matches_exclusions( $excluded_urls, $path ) ) {
+		if ( ! $cache_feed && self::exclusions_match_request( $excluded_urls ) ) {
 			return self::bypass( 'excluded-url' );
 		}
 
@@ -3396,17 +3394,80 @@ class Cache {
 	}
 
 	/**
+	 * The request URI the visitor asked for, raw, or null when there is none.
+	 *
+	 * A plugin may rewrite REQUEST_URI to route the request: TranslatePress
+	 * maps a translated slug back to the original one. The drop-in and
+	 * purge_url() only ever see the URL as asked, so a key built from the
+	 * rewritten value can never be found again (#832). XSPEED_REQUEST_URI
+	 * holds the value from before any plugin ran: the drop-in defines it,
+	 * and xspeed.php does when the drop-in did not run. Where nothing
+	 * rewrites REQUEST_URI the two are the same string, so the key does not
+	 * change.
+	 *
+	 * Not unslashed: both capture points run before wp_magic_quotes() adds
+	 * the slashes that the live read below takes off again.
+	 */
+	public static function request_uri(): ?string {
+		if ( defined( 'XSPEED_REQUEST_URI' ) ) {
+			return (string) XSPEED_REQUEST_URI;
+		}
+		if ( ! isset( $_SERVER['REQUEST_URI'] ) ) {
+			return null;
+		}
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- raw by design; every caller normalizes or filters it before use (see request_path()).
+		return (string) wp_unslash( $_SERVER['REQUEST_URI'] );
+	}
+
+	/**
 	 * The current request's path, normalized, without the query string.
+	 *
+	 * Built from request_uri(), so it names the URL the visitor asked for
+	 * even after a plugin rewrote REQUEST_URI.
 	 *
 	 * @param string $fallback Returned when the server sent no REQUEST_URI.
 	 */
 	private static function request_path( string $fallback = '' ): string {
-		if ( ! isset( $_SERVER['REQUEST_URI'] ) ) {
+		$uri = self::request_uri();
+		if ( null === $uri ) {
 			return $fallback;
 		}
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- normalize_path() is the sanitizer. sanitize_text_field() deletes percent-encoded octets and broke every non-ASCII slug (see normalize_path()). The value is hashed, matched, or checked by static_path() before it touches the disk.
-		$uri = (string) wp_unslash( $_SERVER['REQUEST_URI'] );
+		// normalize_path() is the sanitizer. sanitize_text_field() deletes percent-encoded octets and broke every non-ASCII slug (see normalize_path()). The value is hashed, matched, or checked by static_path() before it touches the disk.
 		return self::normalize_path( (string) strtok( $uri, '?' ) );
+	}
+
+	/**
+	 * The paths an exclusion is matched against: the path as asked and, when
+	 * a plugin rewrote REQUEST_URI, the rewritten one too. An entry written
+	 * for either slug keeps excluding the page, so capturing the URI never
+	 * caches a page that was excluded before (#832).
+	 *
+	 * @return string[]
+	 */
+	private static function exclusion_paths(): array {
+		$paths = array( self::request_path() );
+		if ( defined( 'XSPEED_REQUEST_URI' ) && isset( $_SERVER['REQUEST_URI'] ) ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- normalize_path() is the sanitizer; the path is only matched.
+			$live = self::normalize_path( (string) strtok( (string) wp_unslash( $_SERVER['REQUEST_URI'] ), '?' ) );
+			if ( $live !== $paths[0] ) {
+				$paths[] = $live;
+			}
+		}
+		return $paths;
+	}
+
+	/**
+	 * Does an exclusion list match this request under any of its paths?
+	 *
+	 * @param string[] $patterns Exclusion entries.
+	 */
+	private static function exclusions_match_request( array $patterns ): bool {
+		foreach ( self::exclusion_paths() as $path ) {
+			if ( self::path_matches_exclusions( $patterns, $path ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -3462,7 +3523,7 @@ class Cache {
 	 * @param string[] $patterns Exclusion entries.
 	 */
 	public static function request_matches_exclusions( array $patterns ): bool {
-		return self::path_matches_exclusions( $patterns, self::request_path() );
+		return self::exclusions_match_request( $patterns );
 	}
 
 	public static function cache_key() {

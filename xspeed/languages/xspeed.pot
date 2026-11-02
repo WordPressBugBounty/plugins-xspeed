@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.5\n"
+"Project-Id-Version: xSpeed Cache 1.4.6\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-10-27T07:35:38+00:00\n"
+"POT-Creation-Date: 2026-11-02T13:16:25+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:13095
+#: includes/class-cache.php:13156
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:160
 #: includes/class-admin.php:258
-#: includes/class-cache.php:13109
+#: includes/class-cache.php:13170
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -183,26 +183,26 @@ msgid "You are not allowed to do that."
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:7048
-#: includes/class-cache.php:7258
+#: includes/class-cache.php:7109
+#: includes/class-cache.php:7319
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to.
-#: includes/class-cache.php:7265
+#: includes/class-cache.php:7326
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to.
-#: includes/class-cache.php:7277
+#: includes/class-cache.php:7338
 #, php-format
 msgid "Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s"
 msgstr ""
 
 #. translators: 1: number of pages, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:7355
+#: includes/class-cache.php:7416
 #, php-format
 msgid "Purged %1$d page (%2$s), %3$d file(s) removed"
 msgid_plural "Purged %1$d pages (%2$s), %3$d file(s) removed"
@@ -210,197 +210,197 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %s: object cache exception message.
-#: includes/class-cache.php:7638
+#: includes/class-cache.php:7699
 #, php-format
 msgid "Object cache flush failed: %s"
 msgstr ""
 
-#: includes/class-cache.php:8497
+#: includes/class-cache.php:8558
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:8501
+#: includes/class-cache.php:8562
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:8505
+#: includes/class-cache.php:8566
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:8509
+#: includes/class-cache.php:8570
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:8513
+#: includes/class-cache.php:8574
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:8984
+#: includes/class-cache.php:9045
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:8990
+#: includes/class-cache.php:9051
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:9337
+#: includes/class-cache.php:9398
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9344
+#: includes/class-cache.php:9405
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9347
+#: includes/class-cache.php:9408
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9422
+#: includes/class-cache.php:9483
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:9429
+#: includes/class-cache.php:9490
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9572
+#: includes/class-cache.php:9633
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9575
+#: includes/class-cache.php:9636
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9605
+#: includes/class-cache.php:9666
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:9662
+#: includes/class-cache.php:9723
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:9663
+#: includes/class-cache.php:9724
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9665
+#: includes/class-cache.php:9726
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9681
+#: includes/class-cache.php:9742
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9773
+#: includes/class-cache.php:9834
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9788
+#: includes/class-cache.php:9849
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9789
+#: includes/class-cache.php:9850
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:9806
+#: includes/class-cache.php:9867
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:9824
+#: includes/class-cache.php:9885
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9825
+#: includes/class-cache.php:9886
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:9837
+#: includes/class-cache.php:9898
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:9841
+#: includes/class-cache.php:9902
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: running drop-in version, 2: bundled drop-in version.
-#: includes/class-cache.php:12111
+#: includes/class-cache.php:12172
 #, php-format
 msgid "The page cache is serving with an older copy of its drop-in (v%1$d; this version of xSpeed ships v%2$d). Loading any wp-admin page replaces it."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:12465
+#: includes/class-cache.php:12526
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:12472
+#: includes/class-cache.php:12533
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:12527
+#: includes/class-cache.php:12588
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache.
-#: includes/class-cache.php:12538
+#: includes/class-cache.php:12599
 #, php-format
 msgid "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active."
 msgstr ""
 
-#: includes/class-cache.php:12543
+#: includes/class-cache.php:12604
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:12546
+#: includes/class-cache.php:12607
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:12547
+#: includes/class-cache.php:12608
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12548
+#: includes/class-cache.php:12609
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:12549
+#: includes/class-cache.php:12610
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12550
+#: includes/class-cache.php:12611
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:12551
+#: includes/class-cache.php:12612
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:12552
+#: includes/class-cache.php:12613
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:12554
+#: includes/class-cache.php:12615
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:13178
-#: includes/class-purge-ui.php:278
-#: includes/class-purge-ui.php:680
+#: includes/class-cache.php:13239
+#: includes/class-purge-ui.php:280
+#: includes/class-purge-ui.php:682
 msgid "Unauthorized."
 msgstr ""
 
@@ -567,6 +567,28 @@ msgstr ""
 #: includes/class-host.php:139
 #, php-format
 msgid "xSpeed installed its page cache, but wp-config.php is not writable. Add this line to it to start serving: %s"
+msgstr ""
+
+#: includes/class-local-analytics-store.php:261
+msgid "The uploads folder is not available."
+msgstr ""
+
+#. translators: %d: HTTP status code.
+#: includes/class-local-analytics-store.php:280
+#, php-format
+msgid "Google answered with HTTP %d."
+msgstr ""
+
+#: includes/class-local-analytics-store.php:283
+msgid "Google did not send the analytics script."
+msgstr ""
+
+#: includes/class-local-analytics-store.php:286
+msgid "Could not create the analytics folder in uploads."
+msgstr ""
+
+#: includes/class-local-analytics-store.php:292
+msgid "Could not write the analytics script. The web server user needs write access to the uploads folder."
 msgstr ""
 
 #: includes/class-managed-edge-purge.php:86
@@ -1276,22 +1298,22 @@ msgstr ""
 msgid "no CDN with a purge API is configured — xSpeed's CDN module rewrites asset URLs and holds no cache of its own"
 msgstr ""
 
-#: includes/class-purge-ui.php:263
+#: includes/class-purge-ui.php:265
 msgid "Purge cache"
 msgstr ""
 
-#: includes/class-purge-ui.php:289
+#: includes/class-purge-ui.php:291
 msgid "That URL is not on this site."
 msgstr ""
 
-#: includes/class-purge-ui.php:292
-#: includes/class-purge-ui.php:649
-#: includes/class-purge-ui.php:665
+#: includes/class-purge-ui.php:294
+#: includes/class-purge-ui.php:651
+#: includes/class-purge-ui.php:667
 msgid "admin"
 msgstr ""
 
 #. translators: 1: URL path of the post, 2: number of pages that list it, 3: number of files removed.
-#: includes/class-purge-ui.php:416
+#: includes/class-purge-ui.php:418
 #, php-format
 msgid "xSpeed: %1$s is listed on %2$d pages, too many to clear one by one, so the whole site cache was cleared (%3$d file)."
 msgid_plural "xSpeed: %1$s is listed on %2$d pages, too many to clear one by one, so the whole site cache was cleared (%3$d files)."
@@ -1299,7 +1321,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: 1: URL path of the post, 2: number of OTHER pages also cleared.
-#: includes/class-purge-ui.php:434
+#: includes/class-purge-ui.php:436
 #, php-format
 msgid "%1$s and %2$d page that lists it"
 msgid_plural "%1$s and %2$d pages that list it"
@@ -1307,42 +1329,42 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: 1: what was purged, 2: caches in front of the site, comma-separated.
-#: includes/class-purge-ui.php:449
+#: includes/class-purge-ui.php:451
 #, php-format
 msgid "xSpeed: sent the purge for %1$s to %2$s. xSpeed's own cache held no copy."
 msgstr ""
 
 #. translators: %s: what was purged.
-#: includes/class-purge-ui.php:458
+#: includes/class-purge-ui.php:460
 #, php-format
 msgid "xSpeed: %s was not cached, so there was nothing to clear."
 msgstr ""
 
 #. translators: 1: what was purged, 2: number of files removed.
-#: includes/class-purge-ui.php:465
+#: includes/class-purge-ui.php:467
 #, php-format
 msgid "xSpeed: cleared the cache for %1$s (%2$d file)."
 msgid_plural "xSpeed: cleared the cache for %1$s (%2$d files)."
 msgstr[0] ""
 msgstr[1] ""
 
-#: includes/class-purge-ui.php:547
+#: includes/class-purge-ui.php:549
 msgid "cleared"
 msgstr ""
 
-#: includes/class-purge-ui.php:548
+#: includes/class-purge-ui.php:550
 msgid "was not cached"
 msgstr ""
 
-#: includes/class-purge-ui.php:583
+#: includes/class-purge-ui.php:585
 msgid "Purge this post"
 msgstr ""
 
-#: includes/class-purge-ui.php:593
+#: includes/class-purge-ui.php:595
 msgid "Purge this URL"
 msgstr ""
 
-#: includes/class-purge-ui.php:689
+#: includes/class-purge-ui.php:691
 msgid "That post does not exist."
 msgstr ""
 
@@ -2490,7 +2512,7 @@ msgid "Lazy-load your own videos"
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:79
-msgid "Videos uploaded to your site download only when played. An autoplaying video still plays by itself, but its file waits until the video is near the screen. Add data-skip-lazy to a video to leave it alone."
+msgid "Videos uploaded to your site download only when played. An autoplaying video still plays by itself, but its file waits until the video is near the screen. Audio players with no Preload setting also wait until played. Add data-skip-lazy to a video or audio player to leave it alone."
 msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:84
@@ -2531,6 +2553,64 @@ msgstr ""
 
 #: includes/modules/Lazy/LazyModule.php:122
 msgid "Images, videos and embeds whose tag contains a line here, such as a class or file name, are never lazy-loaded. Useful for logos and hero images."
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:53
+msgid "Local Analytics"
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:55
+msgid "Serves the Google Analytics script from your own site, with your own cache headers."
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:83
+msgid "Serve Google Analytics from this site"
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:84
+msgid "Downloads the Google Analytics 4 script (gtag.js) your pages load into the uploads folder, serves it from there and downloads it again every day. Tracking data still goes to Google. The first visits after turning this on still load the script from Google."
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:103
+msgid "Waiting for a page with Google Analytics"
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:104
+msgid "No Google Analytics 4 tag has been seen yet. The script downloads after the next visit to a page that loads one."
+msgstr ""
+
+#. translators: %s: Google Analytics measurement ID.
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:114
+#, php-format
+msgid "%s loads from this site"
+msgstr ""
+
+#. translators: %s: time since the download, such as "3 hours".
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:117
+#, php-format
+msgid "Downloaded %s ago."
+msgstr ""
+
+#. translators: %s: error message.
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:119
+#, php-format
+msgid "The last download failed, so the earlier copy keeps serving: %s"
+msgstr ""
+
+#. translators: %s: Google Analytics measurement ID.
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:126
+#, php-format
+msgid "%s still loads from Google"
+msgstr ""
+
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:128
+msgid "The script downloads in the background shortly."
+msgstr ""
+
+#. translators: %s: error message.
+#: includes/modules/LocalAnalytics/LocalAnalyticsModule.php:130
+#, php-format
+msgid "The download failed: %s"
 msgstr ""
 
 #. translators: %s: command name.
@@ -3671,6 +3751,75 @@ msgstr ""
 msgid "The page the \"Open ticket\" button opens. Leave the default to reach xSpeed support."
 msgstr ""
 
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:40
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:41
+msgid "Third-party files"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:43
+msgid "Copies CSS and JavaScript from other hosts onto your site."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:53
+msgid "Copy third-party files to this site"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:54
+msgid "Fetches the CSS and JavaScript files listed below from their hosts, keeps a copy on this site and loads the copy. Visitors stop connecting to those hosts, and the copies get this site's long cache lifetime. A file is copied a minute or so after a page that uses it is first built, so the first visit still loads the original. The host list starts with common library hosts, so copying starts as soon as this is on."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:60
+msgid "Hosts to copy from"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:61
+msgid "One host per line, such as cdn.example.com. Only files from these hosts are copied. The list starts with common library hosts such as cdnjs and jsDelivr. Remove any you don't want copied. An empty list copies nothing."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:67
+msgid "Copy stylesheets"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:68
+msgid "Stylesheets block the first paint, so copying them gives the largest gain. Font and image paths inside a copied stylesheet keep pointing at the original host. Turning this off also stops queued and scheduled downloads of stylesheets."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:74
+msgid "Copy scripts"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:75
+msgid "Copies plain scripts. A script that finds other files next to itself, such as a code-split bundle, is left on its host, because those files are never in the page and cannot be copied."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:84
+msgid "Check for new versions every (days)"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:85
+msgid "How often each copy is compared with the original. A copy that failed to refresh keeps serving until the next check succeeds."
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:94
+msgid "Largest file to copy (KB)"
+msgstr ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:95
+msgid "A file larger than this is left on its host."
+msgstr ""
+
+#. translators: %d: number of third-party files that could not be copied or refreshed.
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:238
+#, php-format
+msgid "%d third-party file could not be copied or refreshed"
+msgid_plural "%d third-party files could not be copied or refreshed"
+msgstr[0] ""
+msgstr[1] ""
+
+#: includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php:241
+msgid "Pages keep loading these files from their original host, or from the last good copy. Run \"wp xspeed third-party-assets status\" for the reason on each."
+msgstr ""
+
 #: includes/modules/TurboRender/TurboRenderModule.php:114
 msgid "Turbo Render"
 msgstr ""
@@ -3715,11 +3864,11 @@ msgstr ""
 msgid "is missing files and could not start, so no new pages are being cached. Pages already in the cache are still being served, and while the plugin is in this state nothing clears them automatically. Deactivating xSpeed empties the cache; reinstalling the plugin restores it. Deactivating alone will not repair the installation."
 msgstr ""
 
-#: xspeed.php:300
+#: xspeed.php:306
 msgid "xSpeed Cache could not start."
 msgstr ""
 
-#: xspeed.php:301
+#: xspeed.php:307
 msgid "Some of its files are missing, so it stopped rather than take the site down with it. No new pages are being cached, but pages already in the cache are still being served and nothing clears them while the plugin is in this state. Re-install or re-upload the plugin to restore it, then purge the cache."
 msgstr ""
 

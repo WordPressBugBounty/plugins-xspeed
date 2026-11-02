@@ -76,7 +76,7 @@ final class LazyModule extends Module {
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Lazy-load your own videos', 'xspeed' ),
-				'description' => __( 'Videos uploaded to your site download only when played. An autoplaying video still plays by itself, but its file waits until the video is near the screen. Add data-skip-lazy to a video to leave it alone.', 'xspeed' ),
+				'description' => __( 'Videos uploaded to your site download only when played. An autoplaying video still plays by itself, but its file waits until the video is near the screen. Audio players with no Preload setting also wait until played. Add data-skip-lazy to a video or audio player to leave it alone.', 'xspeed' ),
 			),
 			'video_after_load'       => array(
 				'type'        => 'bool',

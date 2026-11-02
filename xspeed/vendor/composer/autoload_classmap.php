@@ -31,6 +31,7 @@ return array(
     'XSpeed\\Modules\\Health\\HealthModule' => $baseDir . '/includes/modules/Health/HealthModule.php',
     'XSpeed\\Modules\\Heartbeat\\HeartbeatModule' => $baseDir . '/includes/modules/Heartbeat/HeartbeatModule.php',
     'XSpeed\\Modules\\Lazy\\LazyModule' => $baseDir . '/includes/modules/Lazy/LazyModule.php',
+    'XSpeed\\Modules\\LocalAnalytics\\LocalAnalyticsModule' => $baseDir . '/includes/modules/LocalAnalytics/LocalAnalyticsModule.php',
     'XSpeed\\Modules\\Mcp\\Cli_Bridge' => $baseDir . '/includes/modules/Mcp/Cli_Bridge.php',
     'XSpeed\\Modules\\Mcp\\Cli_Error_Signal' => $baseDir . '/includes/modules/Mcp/Cli_Error_Signal.php',
     'XSpeed\\Modules\\Mcp\\Cli_Output_Buffer' => $baseDir . '/includes/modules/Mcp/Cli_Output_Buffer.php',
@@ -55,5 +56,6 @@ return array(
     'XSpeed\\Modules\\Score\\ScoreModule' => $baseDir . '/includes/modules/Score/ScoreModule.php',
     'XSpeed\\Modules\\Settings\\SettingsModule' => $baseDir . '/includes/modules/Settings/SettingsModule.php',
     'XSpeed\\Modules\\Support\\SupportModule' => $baseDir . '/includes/modules/Support/SupportModule.php',
+    'XSpeed\\Modules\\ThirdPartyAssets\\ThirdPartyAssetsModule' => $baseDir . '/includes/modules/ThirdPartyAssets/ThirdPartyAssetsModule.php',
     'XSpeed\\Modules\\TurboRender\\TurboRenderModule' => $baseDir . '/includes/modules/TurboRender/TurboRenderModule.php',
 );

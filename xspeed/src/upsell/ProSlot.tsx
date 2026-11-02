@@ -3,6 +3,7 @@ import { SchemaModulePanel } from '../components/ModulePanel';
 import { MissingPanel } from '../components/MissingPanel';
 import { useTier } from './useTier';
 import { LockedSection } from './LockedSection';
+import { LockedPanel } from './LockedPanel';
 import { PRO_MODULE_MANIFEST } from './proModuleManifest';
 import type { ModuleDescriptor } from '../types';
 
@@ -71,6 +72,10 @@ export function ProSlot({
 
   const descriptor = getModule?.(slug);
   if (!descriptor) return locked;
+  // Tier is 'pro' whenever Pro is installed, licensed or not. Pro marks an
+  // unlicensed module `locked: 'license'`, and its settings route answers 403,
+  // so drawing the form here let a switch flip on and then fail to save.
+  if (descriptor.locked) return <LockedPanel module={descriptor} />;
 
   // Registered custom panel wins; otherwise fall back to the schema
   // renderer for schema-only Pro modules (e.g. Brotli, which ships no

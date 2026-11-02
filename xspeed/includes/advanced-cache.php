@@ -113,6 +113,15 @@ if ( ! defined( 'XSPEED_DROPIN_RUNNING' ) ) {
 	define( 'XSPEED_DROPIN_RUNNING', 21 );
 }
 
+// The URI as this file sees it, for Cache::request_uri(). A plugin can
+// rewrite REQUEST_URI later in the request (TranslatePress maps a translated
+// slug back to the original), and the entry must be keyed on the URL this
+// file looks up, not the rewritten one (#832). Before every early return, so
+// a request that falls through to WordPress always carries it.
+if ( ! defined( 'XSPEED_REQUEST_URI' ) && isset( $_SERVER['REQUEST_URI'] ) ) {
+	define( 'XSPEED_REQUEST_URI', (string) $_SERVER['REQUEST_URI'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- stored raw, exactly as read below; Cache::request_path() normalizes it before use.
+}
+
 // Serve only while xSpeed runs on this site, at this path (#597).
 //
 // This file, WP_CACHE and the cache folder all stay on disk when a database

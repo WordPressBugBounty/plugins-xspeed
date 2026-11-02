@@ -487,7 +487,14 @@ final class CacheModule extends Module {
 		// upgrades into this version never runs the activation hook again.
 		add_action( \XSpeed\Cache_GC::CRON_HOOK, array( \XSpeed\Cache_GC::class, 'run' ) );
 		add_action( \XSpeed\Cache_GC::STATIC_CRON_HOOK, array( \XSpeed\Cache_GC::class, 'run_static' ) );
-		\XSpeed\Cache_GC::ensure_scheduled();
+		// Not before init: wp_schedule_event() runs the cron_schedules filter,
+		// where WooCommerce translates its labels, which logs a "translation
+		// loading triggered too early" notice.
+		if ( did_action( 'init' ) ) {
+			\XSpeed\Cache_GC::ensure_scheduled();
+		} else {
+			add_action( 'init', array( \XSpeed\Cache_GC::class, 'ensure_scheduled' ) );
+		}
 	}
 
 	public function activate(): void {

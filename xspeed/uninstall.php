@@ -117,6 +117,32 @@ function xspeed_uninstall_cleanup() {
 	wp_clear_scheduled_hook( 'xspeed_gc' );
 	wp_clear_scheduled_hook( 'xspeed_gc_static' );
 	delete_option( 'xspeed_cache_off_notice_dismissed' );
+	// Third_Party_Assets keeps its index, cron events and copied files for each
+	// site, so a network uninstall visits every site.
+	$xspeed_each_site = static function ( callable $fn ): void {
+		if ( ! is_multisite() ) {
+			$fn();
+			return;
+		}
+		$offset = 0;
+		do {
+			$ids = get_sites( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
+			foreach ( $ids as $id ) {
+				switch_to_blog( (int) $id );
+				$fn();
+				restore_current_blog();
+			}
+			$offset += 100;
+		} while ( count( $ids ) === 100 );
+	};
+	$xspeed_each_site(
+		static function (): void {
+			delete_option( 'xspeed_tpa_index' );
+			wp_clear_scheduled_hook( 'xspeed_tpa_fetch' );
+			wp_clear_scheduled_hook( 'xspeed_tpa_refresh' );
+			wp_clear_scheduled_hook( 'xspeed_tpa_refresh', array( 'followup' ) );
+		}
+	);
 	// Device_Check's notes of pages that ask for the device, and their check.
 	delete_option( 'xspeed_device_pages' );
 	wp_clear_scheduled_hook( 'xspeed_device_check_pages' );
@@ -134,6 +160,8 @@ function xspeed_uninstall_cleanup() {
 	// A finished scan's id waiting to be sent to the Hub, and its event.
 	delete_option( 'xspeed_hub_scan_notice' );
 	wp_clear_scheduled_hook( 'xspeed_hub_scan_notice' );
+	wp_clear_scheduled_hook( 'xspeed_local_analytics_fetch' );
+	delete_option( 'xspeed_local_analytics' );
 
 	// Usage-tracking state, which lives in the shared WP Insights rows rather
 	// than under our own prefix. Left behind, the consent key survives an
@@ -212,6 +240,23 @@ function xspeed_uninstall_cleanup() {
 		$wp_filesystem->delete( $cache_dir, true );
 	}
 
+	// Copied third-party files. Unlike the hit log, nothing outside the plugin
+	// points at this directory, so it is removed whole, on every site.
+	$xspeed_each_site(
+		static function () use ( $wp_filesystem ): void {
+			if ( ! function_exists( 'wp_upload_dir' ) ) {
+				return;
+			}
+			$tpa_uploads = wp_upload_dir( null, false );
+			if ( is_array( $tpa_uploads ) && empty( $tpa_uploads['error'] ) && ! empty( $tpa_uploads['basedir'] ) ) {
+				$tpa_dir = rtrim( (string) $tpa_uploads['basedir'], '/' ) . '/xspeed/proxied';
+				if ( $wp_filesystem->is_dir( $tpa_dir ) ) {
+					$wp_filesystem->delete( $tpa_dir, true );
+				}
+			}
+		}
+	);
+
 	// nginx hit log (FBS-82478). It lives under uploads/xspeed/, NOT the
 	// cache dir, precisely so that a pasted nginx `access_log` directive
 	// pointing at it does NOT get its parent directory deleted here — if it
@@ -232,6 +277,19 @@ function xspeed_uninstall_cleanup() {
 	if ( $wp_filesystem->exists( $hits_log ) ) {
 		// Truncate, don't delete the dir — keep the access_log target openable.
 		$wp_filesystem->put_contents( $hits_log, '', FS_CHMOD_FILE );
+	}
+
+	// Local Analytics' copies of gtag.js. Pages cached with them are gone
+	// with the cache dir above, so nothing points at these files any more.
+	$analytics_dir = WP_CONTENT_DIR . '/uploads/xspeed-analytics';
+	if ( function_exists( 'wp_upload_dir' ) ) {
+		$uploads = wp_upload_dir( null, false );
+		if ( is_array( $uploads ) && empty( $uploads['error'] ) && ! empty( $uploads['basedir'] ) ) {
+			$analytics_dir = rtrim( (string) $uploads['basedir'], '/' ) . '/xspeed-analytics';
+		}
+	}
+	if ( $wp_filesystem->is_dir( $analytics_dir ) ) {
+		$wp_filesystem->delete( $analytics_dir, true );
 	}
 
 	// Static-cache tree — separate from the flat-hash cache dir, holds

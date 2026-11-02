@@ -1487,9 +1487,11 @@ final class Listing_Pages {
 			return '';
 		}
 
-		// The raw path, as the visitor and a cache in front see it. Printable
-		// ASCII only: a browser percent-encodes everything else.
-		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- filtered to printable ASCII below; stored as JSON and only ever handed back to purge_url().
+		// The raw path, as the visitor and a cache in front see it, from
+		// before any plugin rewrote REQUEST_URI: the entry is keyed on it
+		// (#832). Printable ASCII only: a browser percent-encodes everything
+		// else.
+		$uri  = (string) Cache::request_uri(); // Filtered to printable ASCII below; stored as JSON and only ever handed back to purge_url().
 		$path = (string) strtok( $uri, '?#' );
 		$path = (string) preg_replace( '/[^\x21-\x7E]/', '', $path );
 		if ( '' === $path || '/' !== $path[0] || strlen( $path ) > self::MAX_PATH ) {

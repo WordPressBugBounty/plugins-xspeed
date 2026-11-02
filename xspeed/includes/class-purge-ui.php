@@ -81,7 +81,9 @@ final class Purge_Ui {
 			if ( ! self::request_is_path_addressable() ) {
 				return '';
 			}
-			$uri = isset( $_SERVER['REQUEST_URI'] ) ? esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- esc_url_raw sanitizes.
+			// As asked, not as a plugin rewrote it: the entry is keyed on it (#832).
+			$raw = Cache::request_uri();
+			$uri = null === $raw ? '' : esc_url_raw( $raw );
 			if ( '' === $uri ) {
 				return '';
 			}
@@ -712,7 +714,7 @@ final class Purge_Ui {
 	 * @param array{url:string,count:int,urls:int,whole_site:bool,forwarded?:string[]} $result
 	 */
 	private static function result_is_about_this_request( array $result ): bool {
-		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- compared, never output or stored.
+		$uri = (string) Cache::request_uri(); // Compared, never output or stored; the same spelling current_target() recorded.
 		if ( '' === $uri ) {
 			return false;
 		}

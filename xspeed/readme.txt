@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.5
+Stable tag: 1.4.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -235,6 +235,14 @@ Usage analytics is off by default. The setup wizard shows it as an unticked swit
 * **When it runs:** When the dashboard loads server status, at most once an hour.
 * **Where the request goes:** Your own site. Nothing is sent anywhere else.
 
+= Third-party files (hosts you list) =
+
+* **What it does:** Downloads CSS and JavaScript files from other hosts and keeps a copy on your site, so visitors load the copy.
+* **When it runs:** Only after an administrator turns on xSpeed Cache → Optimization → Third-party files. It is off by default. After that, a file is downloaded a minute or so after a page that uses it is first built, and checked again every 7 days (you can change this).
+* **Where the requests go:** Only to the hosts on the list in that screen, which starts with cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com, code.jquery.com, ajax.googleapis.com, use.fontawesome.com, maxcdn.bootstrapcdn.com, stackpath.bootstrapcdn.com and cdn.datatables.net. A host you remove from the list is never contacted. An empty list contacts nobody.
+* **What is sent:** A plain `GET` for the file, with no cookies, no site address and no visitor data.
+* **Limits:** HTTPS only, files up to 1 MB by default, and CSS or JavaScript only.
+
 = xSpeed Hub (app.xspeedcache.com) =
 
 * **What it does:** Lets you manage this site, with other sites, from one xSpeed Hub account and one AI connection.
@@ -282,6 +290,13 @@ Usage analytics is off by default. The setup wizard shows it as an unticked swit
 * **What is sent:** The browser requests the video's poster image, so YouTube receives the visitor's IP address, browser details and the video ID. The full YouTube player, which sends more, loads only when the visitor clicks play.
 * **Where the request goes:** i.ytimg.com, operated by Google. [Terms](https://www.youtube.com/t/terms), [Privacy](https://policies.google.com/privacy).
 
+= Local Analytics (www.googletagmanager.com) =
+
+* **What it does:** "Serve Google Analytics from this site" (off by default) downloads the Google Analytics 4 script, gtag.js, that your pages already load, and serves it from your uploads folder with your own cache headers.
+* **When it runs:** Only after an administrator turns the option on. The script for each measurement ID found on your pages is downloaded in the background, then again once a day. Never during a visitor's request.
+* **What is sent:** A `GET` request for `https://www.googletagmanager.com/gtag/js?id=<your measurement ID>`. No data about your site's visitors is sent. Your pages keep sending analytics data to Google exactly as they did before.
+* **Where the request goes:** www.googletagmanager.com, operated by Google. [Terms](https://marketingplatform.google.com/about/analytics/terms/us/), [Privacy](https://policies.google.com/privacy).
+
 = Image size lookup for images on other sites =
 
 * **What it does:** "Add missing image sizes" (on by default) adds width and height to images that lack them, so the page does not jump as they load. Images in your media library are measured locally. For an image hosted on another site, xSpeed Cache reads the start of the file to get its size.
@@ -326,6 +341,18 @@ Used for admin interface icons.
 * License: ISC
 
 == Changelog ==
+
+= [1.4.6] – 2026-11-01 =
+
+**xSpeed can serve Google Analytics and other allow-listed third-party files from your own site, and audio players below the fold wait until played.**
+
+Optimization:
+- New: Third-party files copies CSS and JavaScript from hosts you allow onto your site and points the page at the copy, so Combine CSS, Delay JavaScript and the CDN can work on them. It is off by default. Once it is on, it copies from nine common library hosts, such as cdnjs and jsDelivr, and you can edit that list.
+- New: Local Analytics serves the Google Analytics script from your site, so PageSpeed no longer flags its short cache lifetime. It is off by default, and turning it off puts Google's address back.
+- Fixed: With Lazy-load your own videos on, audio players with no preload setting no longer download their file on page load. A preload you set yourself, and autoplay players, are left alone.
+
+Dashboard & Admin UX:
+- Fixed: An add-on's settings on an unlicensed site now show the licence card, instead of switches that Pro refuses to save.
 
 = [1.4.5] – 2026-10-27 =
 

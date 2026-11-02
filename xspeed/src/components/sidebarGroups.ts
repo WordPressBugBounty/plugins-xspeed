@@ -89,7 +89,7 @@ export const SIDEBAR_GROUPS: SidebarGroup[] = [
     label: __('Optimization'),
     icon: 'Gauge',
     description: __('Minify, compress, lazy-load, fonts and hints.'),
-    slugs: ['minify', 'gzip', 'lazy', 'resource-hints', 'fonts', 'self-host-fonts', 'turbo-render', 'bloat', 'heartbeat', 'script-manager'],
+    slugs: ['minify', 'gzip', 'lazy', 'resource-hints', 'third-party-assets', 'fonts', 'self-host-fonts', 'local-analytics', 'turbo-render', 'bloat', 'heartbeat', 'script-manager'],
   },
   {
     id: 'network',

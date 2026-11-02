@@ -167,6 +167,7 @@ final class Lazy_Loader {
 		}
 		if ( ! empty( $opts['lazy_videos'] ) ) {
 			$work = self::apply_pass( $work, $tag_re( 'video' ), array( __CLASS__, 'rewrite_video' ) );
+			$work = self::apply_pass( $work, $tag_re( 'audio' ), array( __CLASS__, 'rewrite_audio' ) );
 			// A page builder's video block renders no <video> server-side, so
 			// the pass above sees nothing to rewrite. Note that such markup is
 			// here anyway, so the restorer ships and can defer the element the
@@ -755,6 +756,34 @@ JS;
 		// mattered. (#309 — a 924KB MP4 transferred in full on every run
 		// with this setting on.)
 		return self::set_attr( $tag, 'preload', 'none' );
+	}
+
+	/**
+	 * Self-hosted <audio>: no download until the visitor presses play.
+	 *
+	 * The Audio block prints no preload attribute unless the author picks
+	 * one, and browsers then fetch on page load. On a customer's article five
+	 * below-the-fold players pulled ~94 KB of MP3 ahead of the LCP image, and
+	 * preload="none" alone took simulated mobile LCP from 4.3 s to 3.7 s.
+	 * (support #183664)
+	 *
+	 * Only a MISSING preload is filled in, unlike rewrite_video() above. A
+	 * video player's preload="auto" is the player's default; on <audio> it is
+	 * almost always the author's own choice in the block's Preload setting.
+	 * Autoplay is skipped because browsers fetch it regardless of preload.
+	 */
+	private static function rewrite_audio( array $m ): string {
+		$tag = $m[0];
+		if ( false !== stripos( $tag, 'data-skip-lazy' ) || false !== stripos( $tag, 'data-no-lazy' ) ) {
+			return $tag;
+		}
+		if ( self::is_excluded( $tag, self::opts() ) ) {
+			return $tag;
+		}
+		if ( preg_match( '#\sautoplay(?=[\s/>=])#i', $tag ) ) {
+			return $tag;
+		}
+		return self::set_attr( $tag, 'preload', 'none', true );
 	}
 
 	/**
