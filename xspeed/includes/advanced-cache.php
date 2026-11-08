@@ -1,7 +1,7 @@
 <?php
 /**
  * XSPEED_DROPIN
- * XSPEED_DROPIN_VERSION: 21
+ * XSPEED_DROPIN_VERSION: 22
  * Drop-in cache loader. Serves cached HTML before WordPress fully boots.
  *
  * Bump XSPEED_DROPIN_VERSION whenever this file's serve logic changes, and
@@ -93,6 +93,10 @@
  *      drop-in has no hold to put back once the bake lifts it.
  * v21: define XSPEED_DROPIN_RUNNING, so WordPress can tell which copy of
  *      this file served the request and flag an old one (#396).
+ * v22: with `woo_cart_vary` on, WooCommerce's cart cookies no longer send a
+ *      shopper past the cache. The cart hash picks the shopper's own copy,
+ *      `<key>.c<hash>.html` (#649). Without the bump an existing drop-in
+ *      keeps bypassing every shopper with a cart.
  *
  * IMPORTANT: This file is included by wp-settings.php BEFORE
  * wp-includes/formatting.php and wp-includes/load.php are loaded, so NO
@@ -110,7 +114,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // MISS, a POST and a HEAD all define it. Must equal XSPEED_DROPIN_VERSION in
 // the header; a unit test holds them together.
 if ( ! defined( 'XSPEED_DROPIN_RUNNING' ) ) {
-	define( 'XSPEED_DROPIN_RUNNING', 21 );
+	define( 'XSPEED_DROPIN_RUNNING', 22 );
 }
 
 // The URI as this file sees it, for Cache::request_uri(). A plugin can
@@ -345,9 +349,26 @@ if ( ! empty( $_COOKIE ) ) {
 // An un-substituted token means the drop-in was copied straight from a
 // source checkout — fall back to serving nothing from the fast path
 // rather than treating the literal token as a pattern.
+//
+// With "Cache pages for shoppers with a cart" on (baked from `woo_cart_vary`),
+// WooCommerce's three cart cookies don't exclude the visitor: the cart hash
+// picks their copy further down. MUST mirror XSpeed\Cart_Vary, or the drop-in
+// and Cache::cache_key() disagree about which file a shopper gets. (#649)
+$xspeed_cart_vary = '1' === '@@XSPEED_CART_VARY@@';
+// Cart_Vary::is_cart_cookie(): exactly these names, and nothing else that
+// WooCommerce sets (`woocommerce_recently_viewed` is personal and still
+// excludes).
+$xspeed_is_cart_cookie = static function ( string $name ): bool {
+	return 'woocommerce_cart_hash' === $name
+		|| 'woocommerce_items_in_cart' === $name
+		|| 1 === preg_match( '/^wp_woocommerce_session_[A-Za-z0-9]+$/D', $name );
+};
 $xspeed_cookie_re = '@@XSPEED_COOKIE_RE@@';
 if ( '@@' !== substr( $xspeed_cookie_re, 0, 2 ) && '' !== $xspeed_cookie_re && ! empty( $_COOKIE ) ) {
 	foreach ( array_keys( $_COOKIE ) as $xspeed_cookie_name ) {
+		if ( $xspeed_cart_vary && $xspeed_is_cart_cookie( (string) $xspeed_cookie_name ) ) {
+			continue;
+		}
 		// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a malformed baked pattern must degrade to "don't serve from cache", never warn on every request.
 		if ( 1 === @preg_match( '#(' . $xspeed_cookie_re . ')#i', (string) $xspeed_cookie_name ) ) {
 			return;
@@ -493,7 +514,30 @@ if ( file_exists( WP_CONTENT_DIR . '/cache/xspeed/.mobile-separate' ) ) {
 	$xspeed_edge_trusted = false;
 }
 
-$xspeed_cache_key = md5( $xspeed_host . $xspeed_path_only . $xspeed_device . $xspeed_variant );
+// The shopper's copy, Cart_Vary::suffix_for() in raw PHP: '' without a cart
+// cookie, `.c<hash>` for a 32-hex cart hash, and bypass for anything else
+// (no hash, a malformed one, or a session with no cart). The hash becomes
+// part of a file name, so nothing else gets through.
+$xspeed_cart = '';
+if ( $xspeed_cart_vary && ! empty( $_COOKIE ) ) {
+	$xspeed_has_cart = false;
+	foreach ( array_keys( $_COOKIE ) as $xspeed_cookie_name ) {
+		if ( $xspeed_is_cart_cookie( (string) $xspeed_cookie_name ) ) {
+			$xspeed_has_cart = true;
+			break;
+		}
+	}
+	if ( $xspeed_has_cart ) {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Drop-in runs pre-WP. Only a value matching /^[a-f0-9]{32}$/ is used, as part of a file name.
+		$xspeed_cart_hash = isset( $_COOKIE['woocommerce_cart_hash'] ) ? $_COOKIE['woocommerce_cart_hash'] : null;
+		if ( ! is_string( $xspeed_cart_hash ) || 1 !== preg_match( '/^[a-f0-9]{32}$/D', $xspeed_cart_hash ) ) {
+			return;
+		}
+		$xspeed_cart = '.c' . $xspeed_cart_hash;
+	}
+}
+
+$xspeed_cache_key = md5( $xspeed_host . $xspeed_path_only . $xspeed_device . $xspeed_variant ) . $xspeed_cart;
 
 // Per-site bucket. MUST mirror XSpeed\Cache::current_host_dir() exactly —
 // same charset, same trimmed dots, same 'default' fallback, same multisite
@@ -794,7 +838,9 @@ if ( file_exists( $xspeed_cache_file ) ) {
 			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- as above.
 			$xspeed_ims = isset( $_SERVER['HTTP_IF_MODIFIED_SINCE'] ) ? trim( (string) $_SERVER['HTTP_IF_MODIFIED_SINCE'] ) : '';
 			if ( ( '' !== $xspeed_inm && false !== strpos( $xspeed_inm, $xspeed_etag ) )
-				|| ( '' !== $xspeed_ims && false !== ( $xspeed_ims_ts = strtotime( $xspeed_ims ) ) && $xspeed_ims_ts >= $xspeed_mtime ) ) {
+				// RFC 9110 §13.1.3: with cart copies on, the date counts only
+				// without If-None-Match, as in Cache::serve_not_modified(). (#649)
+				|| ( ( '' === $xspeed_inm || ! $xspeed_cart_vary ) && '' !== $xspeed_ims && false !== ( $xspeed_ims_ts = strtotime( $xspeed_ims ) ) && $xspeed_ims_ts >= $xspeed_mtime ) ) {
 				if ( function_exists( 'http_response_code' ) ) {
 					http_response_code( 304 );
 				}

@@ -1197,7 +1197,7 @@ class Cache {
 	 * keeps a separate copy for every query string, and a purge of the plain
 	 * URL never reaches them. With no edge in front there are no copies.
 	 */
-	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split', 'markdown' );
+	private const HOLD_WITHOUT_EVIDENCE = array( 'bypass', 'mobile-split', 'markdown', 'cart-vary' );
 
 	/**
 	 * True only while query_variant_edge_headers() bakes the drop-in's
@@ -1421,7 +1421,7 @@ class Cache {
 	 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 	 * @param string $context       `request`, `store` or `bake`.
 	 * @param string $bypass_reason The gate slug, for BYPASS only.
-	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|markdown|pending|query-variant.
+	 * @return string '' or one of bypass|bypass-shape|miss|mobile-split|markdown|cart-vary|pending|query-variant.
 	 */
 	private static function edge_hold_reason( string $status, string $context, string $bypass_reason ): string {
 		$reason = '';
@@ -1462,6 +1462,13 @@ class Cache {
 			// and handing it to browsers. Request and store only: a bake
 			// answers for the HTML pages, which this does not touch.
 			$reason = 'markdown';
+		} elseif ( 'bake' !== $context && 'BYPASS' !== $status && '' !== (string) Cart_Vary::request_suffix() ) {
+			// One shopper's copy, with their mini-cart in it. No CDN varies on
+			// our cart cookie, so an edge holding it would hand that cart to
+			// everyone. Never in `bake`: the drop-in's baked headers serve
+			// every visitor, and the copy carries this hold in its .meta.
+			// (#649)
+			$reason = 'cart-vary';
 		} elseif ( 'BYPASS' === $status ) {
 			$shaped = in_array( $bypass_reason, array( 'excluded-url', 'query-param' ), true )
 				? ! self::path_is_a_personal_exclusion( $bypass_reason )
@@ -1483,7 +1490,7 @@ class Cache {
 		 *
 		 * Return '' to veto a hold, or a reason string to force one.
 		 *
-		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|markdown|pending|query-variant.
+		 * @param string $reason        '' or bypass|bypass-shape|miss|mobile-split|markdown|cart-vary|pending|query-variant.
 		 * @param string $status        `HIT`, `MISS` or `BYPASS`.
 		 * @param string $context       `request`, `store` or `bake`.
 		 * @param string $bypass_reason The gate slug, for BYPASS only.
@@ -2226,8 +2233,8 @@ class Cache {
 			// status (a cached 404 must serve 404, not 200). No-op for
 			// ordinary pages, which write no .meta.
 			if ( ! headers_sent() ) {
-				if ( ! empty( $meta['status'] ) && function_exists( 'http_response_code' ) ) {
-					http_response_code( (int) $meta['status'] );
+				if ( ! empty( $meta['status'] ) ) {
+					self::send_status( (int) $meta['status'] );
 				}
 				if ( ! empty( $meta['content_type'] ) && is_string( $meta['content_type'] ) ) {
 					header( 'Content-Type: ' . $meta['content_type'] );
@@ -2645,6 +2652,11 @@ class Cache {
 			return;
 		}
 
+		// Same guard as finalize_buffer(), on the translated bytes. (#649)
+		if ( ! Cart_Vary::may_store( $key, $full ) ) {
+			return;
+		}
+
 		$file = self::cache_file_for( $key );
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_put_contents_file_put_contents -- WP_Filesystem requires admin context for credentials; this runs on a frontend shutdown where it's unavailable.
 		file_put_contents( $file, $full, LOCK_EX );
@@ -2653,6 +2665,7 @@ class Cache {
 		do_action( 'xspeed_flat_file_written', $file, $full );
 
 		self::write_meta( $key, $full );
+		self::prune_cart_copies( $key );
 
 		// Static tree too, under the same gates finalize_buffer() applies —
 		// otherwise deferring the write would silently cost translated pages
@@ -2812,6 +2825,7 @@ class Cache {
 		// values would leak content-sensitive logic into the cache key
 		// rules); presence of any matching cookie name skips cache.
 		$excluded_cookies = is_array( $cache_opts['excluded_cookies'] ?? null ) ? $cache_opts['excluded_cookies'] : array();
+		$cart_vary        = Cart_Vary::enabled();
 		if ( ! empty( $excluded_cookies ) && ! empty( $_COOKIE ) ) {
 			foreach ( array_keys( $_COOKIE ) as $cookie_name ) {
 				// Our own bypass cookie is a RECORD of a previous verdict, not
@@ -2825,10 +2839,20 @@ class Cache {
 				if ( Server_Rules::BYPASS_COOKIE === $cookie_name ) {
 					continue;
 				}
+				// With cart vary on, the cart's own cookies pick the copy in
+				// cache_key() instead of excluding the visitor. (#649)
+				if ( $cart_vary && Cart_Vary::is_cart_cookie( (string) $cookie_name ) ) {
+					continue;
+				}
 				if ( Glob_Matcher::any_match( $excluded_cookies, (string) $cookie_name ) ) {
 					return self::bypass( 'excluded-cookie' );
 				}
 			}
+		}
+		// A cart cookie we cannot key safely (no hash, a malformed one, or a
+		// session with no cart) keeps the visitor out, as before.
+		if ( $cart_vary && null === Cart_Vary::request_suffix() ) {
+			return self::bypass( 'excluded-cookie' );
 		}
 
 		// User-agent bypass list. Substring match (not glob) since UA
@@ -3538,8 +3562,13 @@ class Cache {
 		// Markdown answer under this key.
 		$variant = self::markdown_variant_request() ? '|md' : '';
 
+		// A shopper's copy, when cart vary is on: '' for everyone else. It
+		// goes after the md5 so purge_url() can find every cart's copy of a
+		// page with one glob. (#649)
+		$cart = (string) Cart_Vary::request_suffix();
+
 		if ( '' === $variant && self::should_cache_404() ) {
-			return md5( $host . '|404' );
+			return md5( $host . '|404' ) . $cart;
 		}
 
 		// Strip the query string from the key so /post and /post?utm_*=…
@@ -3572,7 +3601,7 @@ class Cache {
 			}
 		}
 
-		return md5( $host . $uri . $device . $search . $feed . $variant );
+		return md5( $host . $uri . $device . $search . $feed . $variant ) . $cart;
 	}
 
 	/**
@@ -4584,15 +4613,52 @@ class Cache {
 		$inm = isset( $_SERVER['HTTP_IF_NONE_MATCH'] ) ? trim( sanitize_text_field( wp_unslash( $_SERVER['HTTP_IF_NONE_MATCH'] ) ) ) : '';
 
 		$etag_match = '' !== $inm && false !== strpos( $inm, $etag );
-		$time_match = '' !== $ims && ( strtotime( $ims ) >= $mtime );
+		// RFC 9110 §13.1.3: with If-None-Match sent, the date is ignored.
+		// Every cart copy of a page has its own ETag, and a browser
+		// revalidating the plain copy it kept must not get a 304 for a
+		// shopper's copy because that copy is older. Only while cart copies
+		// exist, so a site without them answers exactly as before. (#649)
+		$date_counts = '' === $inm || ! Cart_Vary::enabled();
+		$time_match  = $date_counts && '' !== $ims && ( strtotime( $ims ) >= $mtime );
 
 		if ( $etag_match || $time_match ) {
-			if ( function_exists( 'http_response_code' ) ) {
-				http_response_code( 304 );
-			}
-			return true;
+			// The caller exits without a body on true. If the 304 could not
+			// be sent, that would leave an empty 200, which a CDN stores as
+			// the page. Serving the full body instead costs bandwidth only.
+			return self::send_status( 304 );
 		}
 		return false;
+	}
+
+	/**
+	 * Set the response status on the PHP serve path, and report whether it
+	 * was sent.
+	 *
+	 * By template_redirect WordPress has already sent its own status line:
+	 * WP::handle_404() calls status_header(), which uses
+	 * `header( 'HTTP/1.1 200 OK', true, 200 )`. On PHP-FPM and CGI a bare
+	 * http_response_code() cannot replace that line. The client still gets
+	 * 200, PHP 8.5 logs "Calling http_response_code() after header('HTTP/...')
+	 * has no effect", and the getter reports the new code anyway, so nothing
+	 * downstream notices. A 304 sent that way went out as a 200 with an empty
+	 * body, and Cloudflare cached it. (#350, #286)
+	 *
+	 * A full status line with the code replaces WordPress's line, the same
+	 * way status_header() does. It is built here rather than through
+	 * status_header() because that function returns without sending anything
+	 * for a code it has no reason phrase for.
+	 *
+	 * @param int $code HTTP status code.
+	 * @return bool False when nothing was sent: headers already out, or not a status code.
+	 */
+	public static function send_status( int $code ): bool {
+		if ( $code < 100 || $code > 599 || headers_sent() ) {
+			return false;
+		}
+		$protocol = function_exists( 'wp_get_server_protocol' ) ? wp_get_server_protocol() : 'HTTP/1.1';
+		$reason   = function_exists( 'get_status_header_desc' ) ? (string) get_status_header_desc( $code ) : '';
+		header( rtrim( $protocol . ' ' . $code . ' ' . $reason ), true, $code );
+		return true;
 	}
 
 	public static function is_expired( $file ) {
@@ -4785,8 +4851,8 @@ class Cache {
 
 		// Path safety: cache_file_for() builds
 		// `XSPEED_CACHE_DIR . '/' . <host> . '/' . $key . '.html'` where $key
-		// comes from md5() — guaranteed to be exactly 32 lowercase hex chars —
-		// and <host> is filtered by host_dir() to [A-Za-z0-9.-] with leading
+		// is an md5() — 32 lowercase hex chars — optionally followed by
+		// `.c<cart hash>`, which Cart_Vary only accepts as 32 more — and <host> is filtered by host_dir() to [A-Za-z0-9.-] with leading
 		// dots trimmed, so no traversal sequence ('..', '/', null byte, etc.)
 		// can appear in either segment. The write is therefore always inside
 		// XSPEED_CACHE_DIR.
@@ -4829,6 +4895,27 @@ class Cache {
 		if ( self::assets_purged_since( $asset_stamp ) ) {
 			return $buffer;
 		}
+
+		// A shopper's cart copy is stored only when the cart WooCommerce
+		// loaded has the hash in the cookie, so a copied hash cannot put
+		// another cart's page in front of real shoppers. (#649)
+		if ( ! Cart_Vary::may_store( $key, $full ) ) {
+			return $buffer;
+		}
+
+		// The optimized version of this URL is seconds away (#856), so storing
+		// this render would serve it to every visitor until the build purges
+		// it. Asked last, after every other gate, so a held render is one that
+		// would really have been written. A shared 404 entry has no URL to
+		// build for.
+		if ( 200 === $status ) {
+			$hold_host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : 'default';
+			if ( Cache_Write_Hold::should_hold( $hold_host, self::request_path( '/' ) ) ) {
+				Cache_Write_Hold::send_headers();
+				return $buffer;
+			}
+		}
+
 		$file = self::cache_file_for( $key );
 
 		// A render-time translation plugin (TranslatePress) wraps our buffer,
@@ -4904,6 +4991,7 @@ class Cache {
 		// Only written when the response set a content-type other than
 		// the HTML default — pages don't pay for an extra file.
 		self::write_meta( $key, $full );
+		self::prune_cart_copies( $key );
 
 		// Static-cache tree (xspeed-static/{host}{path}/index.html). The
 		// .htaccess rewrite block serves this file directly via the web
@@ -5066,6 +5154,14 @@ class Cache {
 		// is repeated here because this tree is the most dangerous of the
 		// three write sites and must not depend on its callers.
 		if ( self::request_has_query_string() ) {
+			return;
+		}
+
+		// A shopper's cart copy. The web server serves this tree by path to
+		// every visitor, so one cart's mini-cart written here would be
+		// everybody's. Cart copies stay on the drop-in, which picks the copy
+		// by cookie. (#649)
+		if ( '' !== (string) Cart_Vary::request_suffix() ) {
 			return;
 		}
 
@@ -5484,6 +5580,43 @@ class Cache {
 		self::write_meta( $key, $full );
 
 		return $buffer;
+	}
+
+	/**
+	 * Keep at most Cart_Vary::MAX_COPIES cart copies of the page $key belongs
+	 * to, dropping the oldest. A bot that changes its cart on every request
+	 * would otherwise add a copy of every page it opens per cart state. The
+	 * plain copy is never touched. (#649)
+	 *
+	 * @param string $key A key from cache_key(); a plain key prunes nothing.
+	 * @return int Copies removed.
+	 */
+	public static function prune_cart_copies( string $key ): int {
+		$dot = strpos( $key, '.c' );
+		if ( false === $dot ) {
+			return 0;
+		}
+		$dir    = dirname( self::cache_file_for( $key ) );
+		$copies = glob( $dir . '/' . substr( $key, 0, $dot ) . '.c*.html' ) ?: array();
+		$excess = count( $copies ) - Cart_Vary::MAX_COPIES;
+		if ( $excess <= 0 ) {
+			return 0;
+		}
+		$mtimes = array();
+		foreach ( $copies as $file ) {
+			$mtimes[ $file ] = (int) @filemtime( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- a copy removed by a concurrent purge just sorts first.
+		}
+		asort( $mtimes );
+		$removed = 0;
+		foreach ( array_slice( array_keys( $mtimes ), 0, $excess ) as $file ) {
+			foreach ( array( $file, substr( $file, 0, -5 ) . '.meta', $file . '.br', self::brotli_size_sidecar( $file . '.br' ) ) as $path ) {
+				if ( is_file( $path ) ) {
+					wp_delete_file( $path );
+				}
+			}
+			++$removed;
+		}
+		return $removed;
 	}
 
 	private static function write_meta( string $key, string $html = '' ): void {
@@ -6438,6 +6571,12 @@ class Cache {
 				$targets[] = (string) $url;
 			}
 		}
+		// The product's price or stock can change the total in any shopper's
+		// mini-cart, on any page, not just the URLs above. (#649)
+		if ( Cart_Vary::enabled() ) {
+			self::purge_cart_copies();
+		}
+
 		if ( array() === $targets ) {
 			return;
 		}
@@ -6539,6 +6678,29 @@ class Cache {
 	/** Test seam: forget the post saves in progress. */
 	public static function reset_saves_under_way(): void {
 		self::$saves_under_way = array();
+	}
+
+	/**
+	 * Delete every shopper's cart copy in this site's bucket, leaving the
+	 * shared copies. (#649)
+	 *
+	 * @return int Cart copies removed.
+	 */
+	public static function purge_cart_copies(): int {
+		$home  = function_exists( 'wp_parse_url' ) ? wp_parse_url( home_url( '/' ) ) : parse_url( home_url( '/' ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- fallback for early-boot contexts only.
+		$host  = is_array( $home ) ? self::host_port_of( $home ) : '';
+		$path  = is_array( $home ) && isset( $home['path'] ) ? (string) $home['path'] : '/';
+		$base  = XSPEED_CACHE_DIR . '/' . self::bucket_for_url( '' !== $host ? $host : 'default', $path );
+		$count = 0;
+		foreach ( glob( $base . '/*.c*.html' ) ?: array() as $file ) {
+			foreach ( array( $file, substr( $file, 0, -5 ) . '.meta', $file . '.br', self::brotli_size_sidecar( $file . '.br' ) ) as $path_to_delete ) {
+				if ( is_file( $path_to_delete ) ) {
+					wp_delete_file( $path_to_delete );
+				}
+			}
+			++$count;
+		}
+		return $count;
 	}
 
 	/**
@@ -7029,7 +7191,12 @@ class Cache {
 		 */
 		$base = XSPEED_CACHE_DIR . '/' . self::bucket_for_url( $host, $path );
 
-		$count = 0;
+		// A purge starts a new cycle for the URL, so a write hold gets a fresh
+		// window rather than one used up before the purge.
+		Cache_Write_Hold::clear( $host, $key_path );
+
+		$count     = 0;
+		$cart_vary = Cart_Vary::enabled();
 		foreach ( $forms as $uri ) {
 			// '' = mobile_separate off; then every device copy. Entries from
 			// before a settings change are still on disk, so walk them all. A
@@ -7040,15 +7207,25 @@ class Cache {
 				$suffixes[] = $suffix . '|md';
 			}
 			foreach ( $suffixes as $device ) {
-				$key  = md5( $host . $uri . $device );
-				$file = $base . '/' . $key . '.html';
-				if ( is_file( $file ) ) {
-					wp_delete_file( $file );
-					++$count;
+				$key = md5( $host . $uri . $device );
+				// The plain entry, then every shopper's cart copy of it
+				// (`<key>.c<hash>`), which a price or stock change must clear
+				// without knowing any hash. (#649)
+				$files = array( $base . '/' . $key . '.html' );
+				// Only while the setting is on: the glob reads the whole
+				// bucket, and turning the setting off purges everything.
+				if ( $cart_vary ) {
+					$files = array_merge( $files, glob( $base . '/' . $key . '.c*.html' ) ?: array() );
 				}
-				foreach ( array( $base . '/' . $key . '.meta', $file . '.br', self::brotli_size_sidecar( $file . '.br' ) ) as $sidecar ) {
-					if ( is_file( $sidecar ) ) {
-						wp_delete_file( $sidecar );
+				foreach ( $files as $file ) {
+					if ( is_file( $file ) ) {
+						wp_delete_file( $file );
+						++$count;
+					}
+					foreach ( array( substr( $file, 0, -5 ) . '.meta', $file . '.br', self::brotli_size_sidecar( $file . '.br' ) ) as $sidecar ) {
+						if ( is_file( $sidecar ) ) {
+							wp_delete_file( $sidecar );
+						}
 					}
 				}
 			}
@@ -12082,7 +12259,7 @@ class Cache {
 	 * would cost every cache MISS. DropinRuntimeStampTest holds it equal to
 	 * the header in includes/advanced-cache.php.
 	 */
-	public const BUNDLED_DROPIN_VERSION = 21;
+	public const BUNDLED_DROPIN_VERSION = 22;
 
 	/** See BUNDLED_DROPIN_VERSION. */
 	public static function bundled_dropin_version(): int {
@@ -12748,6 +12925,9 @@ class Cache {
 			is_array( $cache_opts['bypass_user_agents'] ?? null ) ? $cache_opts['bypass_user_agents'] : array()
 		);
 
+		// Read the way the PHP path reads it (Cart_Vary::enabled()), so the
+		// drop-in and Cache::cache_key() never disagree about a shopper's copy.
+		$source_contents = str_replace( '@@XSPEED_CART_VARY@@', Cart_Vary::enabled() ? '1' : '0', $source_contents );
 		$source_contents = str_replace(
 			'@@XSPEED_COOKIE_RE@@',
 			str_replace( "'", "\\'", $cookie_rule['regex'] ),

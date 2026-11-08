@@ -30,9 +30,12 @@ final class Self_Traffic {
 	/**
 	 * User-agent fragments xSpeed's own requests carry. `xSpeed-Preloader` is
 	 * the warmer's name before 1.3.5; it can still arrive from a warm queued
-	 * before an update.
+	 * before an update. `xSpeed-UCSS` is the Hub's CSS renderer and
+	 * `xSpeedScan` the Speed Scan. Both send a Chrome user agent with the
+	 * token appended (#853), so no analytics plugin takes them for a bot on
+	 * its own.
 	 */
-	public const AGENTS = array( 'xSpeed-Warmer', 'xSpeed-Preloader', 'xSpeed Benchmark', 'xSpeed-Verifier', 'xSpeed Health Probe' );
+	public const AGENTS = array( 'xSpeed-Warmer', 'xSpeed-Preloader', 'xSpeed Benchmark', 'xSpeed-Verifier', 'xSpeed Health Probe', 'xSpeed-UCSS', 'xSpeedScan' );
 
 	/**
 	 * Request header every xSpeed loopback sends, so a request is recognised

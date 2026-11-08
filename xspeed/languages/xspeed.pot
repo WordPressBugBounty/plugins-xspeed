@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.6\n"
+"Project-Id-Version: xSpeed Cache 1.4.7\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-11-02T13:16:25+00:00\n"
+"POT-Creation-Date: 2026-11-08T12:01:31+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:13156
+#: includes/class-cache.php:13336
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:160
 #: includes/class-admin.php:258
-#: includes/class-cache.php:13170
+#: includes/class-cache.php:13350
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -182,27 +182,51 @@ msgstr ""
 msgid "You are not allowed to do that."
 msgstr ""
 
+#. translators: 1: URL host and path, 2: number of seconds, 3: number of renders that were not cached.
+#: includes/class-cache-write-hold.php:249
+#, php-format
+msgid "Cached %1$s before its optimized version was ready: after %2$d seconds its build had not started yet. %3$d render(s) were sent uncached in that time. The page is purged again when the build lands."
+msgstr ""
+
+#. translators: 1: URL host and path, 2: number of seconds, 3: number of renders that were not cached.
+#: includes/class-cache-write-hold.php:253
+#, php-format
+msgid "Cached %1$s before its optimized version was ready: after %2$d seconds its build was still running. %3$d render(s) were sent uncached in that time. The page is purged again when the build lands."
+msgstr ""
+
+#. translators: 1: URL host and path, 2: number of seconds, 3: number of renders that were not cached.
+#: includes/class-cache-write-hold.php:257
+#, php-format
+msgid "Cached %1$s without its optimized version: its build failed within %2$d seconds. %3$d render(s) were sent uncached in that time."
+msgstr ""
+
+#. translators: 1: URL host and path, 2: number of seconds, 3: number of renders that were not cached.
+#: includes/class-cache-write-hold.php:261
+#, php-format
+msgid "Cached %1$s before its optimized version was ready: it was not ready after %2$d seconds. %3$d render(s) were sent uncached in that time. The page is purged again when the build lands."
+msgstr ""
+
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:7109
-#: includes/class-cache.php:7319
+#: includes/class-cache.php:7286
+#: includes/class-cache.php:7496
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to.
-#: includes/class-cache.php:7326
+#: includes/class-cache.php:7503
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to.
-#: includes/class-cache.php:7338
+#: includes/class-cache.php:7515
 #, php-format
 msgid "Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s"
 msgstr ""
 
 #. translators: 1: number of pages, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:7416
+#: includes/class-cache.php:7593
 #, php-format
 msgid "Purged %1$d page (%2$s), %3$d file(s) removed"
 msgid_plural "Purged %1$d pages (%2$s), %3$d file(s) removed"
@@ -210,195 +234,195 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %s: object cache exception message.
-#: includes/class-cache.php:7699
+#: includes/class-cache.php:7876
 #, php-format
 msgid "Object cache flush failed: %s"
 msgstr ""
 
-#: includes/class-cache.php:8558
+#: includes/class-cache.php:8735
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:8562
+#: includes/class-cache.php:8739
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:8566
+#: includes/class-cache.php:8743
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:8570
+#: includes/class-cache.php:8747
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:8574
+#: includes/class-cache.php:8751
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:9045
+#: includes/class-cache.php:9222
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:9051
+#: includes/class-cache.php:9228
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:9398
+#: includes/class-cache.php:9575
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9405
+#: includes/class-cache.php:9582
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9408
+#: includes/class-cache.php:9585
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9483
+#: includes/class-cache.php:9660
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:9490
+#: includes/class-cache.php:9667
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9633
+#: includes/class-cache.php:9810
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9636
+#: includes/class-cache.php:9813
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9666
+#: includes/class-cache.php:9843
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:9723
+#: includes/class-cache.php:9900
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:9724
+#: includes/class-cache.php:9901
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9726
+#: includes/class-cache.php:9903
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9742
+#: includes/class-cache.php:9919
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:9834
+#: includes/class-cache.php:10011
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9849
+#: includes/class-cache.php:10026
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9850
+#: includes/class-cache.php:10027
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:9867
+#: includes/class-cache.php:10044
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:9885
+#: includes/class-cache.php:10062
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:9886
+#: includes/class-cache.php:10063
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:9898
+#: includes/class-cache.php:10075
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:9902
+#: includes/class-cache.php:10079
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: running drop-in version, 2: bundled drop-in version.
-#: includes/class-cache.php:12172
+#: includes/class-cache.php:12349
 #, php-format
 msgid "The page cache is serving with an older copy of its drop-in (v%1$d; this version of xSpeed ships v%2$d). Loading any wp-admin page replaces it."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:12526
+#: includes/class-cache.php:12703
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:12533
+#: includes/class-cache.php:12710
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:12588
+#: includes/class-cache.php:12765
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache.
-#: includes/class-cache.php:12599
+#: includes/class-cache.php:12776
 #, php-format
 msgid "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active."
 msgstr ""
 
-#: includes/class-cache.php:12604
+#: includes/class-cache.php:12781
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:12607
+#: includes/class-cache.php:12784
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:12608
+#: includes/class-cache.php:12785
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12609
+#: includes/class-cache.php:12786
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:12610
+#: includes/class-cache.php:12787
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12611
+#: includes/class-cache.php:12788
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:12612
+#: includes/class-cache.php:12789
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:12613
+#: includes/class-cache.php:12790
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:12615
+#: includes/class-cache.php:12792
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:13239
+#: includes/class-cache.php:13419
 #: includes/class-purge-ui.php:280
 #: includes/class-purge-ui.php:682
 msgid "Unauthorized."
@@ -1986,6 +2010,26 @@ msgstr ""
 
 #: includes/modules/Cache/CacheModule.php:373
 msgid "LiteSpeed serves cached pages without running PHP, which is faster on slow hosts. These visits are not counted in the dashboard hit ratio."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:387
+msgid "Cache pages for shoppers with a cart"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:388
+msgid "Keep serving cached pages after a visitor adds a product, with one copy per cart so the mini-cart stays right. Leave this off if your pages show anything else personal, such as prices by location."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:389
+msgid "Cached pages for shoppers"
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:390
+msgid "Two shoppers with the same cart get the same copy. Cart, checkout and account pages, logged-in customers and any other excluded cookie still get a fresh page. A page keeps at most 50 cart copies, and changing a product clears every cart copy. While this is on, the three WooCommerce cart cookies are not read from Excluded cookies."
+msgstr ""
+
+#: includes/modules/Cache/CacheModule.php:394
+msgid "WooCommerce is set to Geolocate (with page caching support). Prices then follow the shopper's location, which a cart copy cannot tell apart, so this setting has no effect until you pick another Default customer location."
 msgstr ""
 
 #: includes/modules/CacheCoverage/CacheCoverageModule.php:36
@@ -3588,71 +3632,126 @@ msgstr ""
 msgid "When you turn this on, WPDeveloper receives your email address and display name. After that, once a day: the site URL and name, your WordPress and PHP versions, theme, plugins, server type and xSpeed settings. Never page content. Turn it off to stop all sending."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:60
+#: includes/modules/ResourceHints/Lcp_Choice.php:333
+msgid "xSpeed · Main (LCP) image"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:352
+#: public/editor-lcp.js:100
+msgid "Auto (recommended)"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:353
+#: public/editor-lcp.js:101
+msgid "Featured image"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:354
+#: public/editor-lcp.js:102
+msgid "Choose an image…"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:355
+#: public/editor-lcp.js:103
+msgid "None"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:359
+#: public/editor-lcp.js:97
+msgid "Main image to load first"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:369
+#: public/editor-lcp.js:123
+msgid "Image on this page"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:371
+msgid "Use the URL below"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:379
+#: public/editor-lcp.js:145
+msgid "Or an image URL"
+msgstr ""
+
+#: includes/modules/ResourceHints/Lcp_Choice.php:384
+msgid "The image picked here is fetched first and gets high priority. Use a URL for a hero set as a CSS background. None turns off the main-image preload on this page."
+msgstr ""
+
+#: includes/modules/ResourceHints/ResourceHintsModule.php:68
 msgid "Resource Hints"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:61
+#: includes/modules/ResourceHints/ResourceHintsModule.php:69
 msgid "Hints"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:63
+#: includes/modules/ResourceHints/ResourceHintsModule.php:71
 msgid "Tells the browser to fetch the main image and fonts early."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:78
+#: includes/modules/ResourceHints/ResourceHintsModule.php:86
 msgid "Enable resource hints"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:79
+#: includes/modules/ResourceHints/ResourceHintsModule.php:87
 msgid "Turns on all the hints below. They are safe on every theme, so this is on by default."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:84
+#: includes/modules/ResourceHints/ResourceHintsModule.php:92
 msgid "Preload the main image"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:85
+#: includes/modules/ResourceHints/ResourceHintsModule.php:93
 msgid "Finds the largest image at the top of the page and tells the browser to fetch it first. This usually gives the biggest LCP gain."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:93
+#: includes/modules/ResourceHints/ResourceHintsModule.php:101
 msgid "Images to preload"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:94
+#: includes/modules/ResourceHints/ResourceHintsModule.php:102
 msgid "How many images at the top of the page to preload. 1 suits most sites; raise it only if the top shows a small gallery."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:102
+#: includes/modules/ResourceHints/ResourceHintsModule.php:110
 msgid "Excluded from preload"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:103
+#: includes/modules/ResourceHints/ResourceHintsModule.php:111
 msgid "Images whose tag contains a line here, such as a file name or class, are never picked as the main image. Useful for tracking pixels and spacers."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:110
+#: includes/modules/ResourceHints/ResourceHintsModule.php:118
+msgid "Main image rules"
+msgstr ""
+
+#: includes/modules/ResourceHints/ResourceHintsModule.php:119
+msgid "Pick the main image on pages the editor does not cover, one rule per line: where | image. Where is a page type (front_page, blog, archive, category, tag, author, search, 404, shop, singular, page, post, post_type:product) or a path such as /shop/*. Image is an image URL, featured, none, or a file name or class the image tag contains. The first matching rule wins; a choice made on the page itself beats every rule."
+msgstr ""
+
+#: includes/modules/ResourceHints/ResourceHintsModule.php:127
 msgid "Always preload these images"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:111
+#: includes/modules/ResourceHints/ResourceHintsModule.php:128
 msgid "Image URLs to fetch first on every page, such as a hero background set in CSS. Keep it to one or two; only the first three are used."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:117
+#: includes/modules/ResourceHints/ResourceHintsModule.php:134
 msgid "Connect early to Google Fonts"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:118
+#: includes/modules/ResourceHints/ResourceHintsModule.php:135
 msgid "When the page uses Google Fonts, the browser connects to Google's servers early, so fonts arrive sooner."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:125
+#: includes/modules/ResourceHints/ResourceHintsModule.php:142
 msgid "Other domains to connect early"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:126
+#: includes/modules/ResourceHints/ResourceHintsModule.php:143
 msgid "One address per line, such as https://cdn.example.com. Use for a CDN or other domain that serves files at the top of the page."
 msgstr ""
 
@@ -3870,6 +3969,22 @@ msgstr ""
 
 #: xspeed.php:307
 msgid "Some of its files are missing, so it stopped rather than take the site down with it. No new pages are being cached, but pages already in the cache are still being served and nothing clears them while the plugin is in this state. Re-install or re-upload the plugin to restore it, then purge the cache."
+msgstr ""
+
+#: public/editor-lcp.js:125
+msgid "Pick an image"
+msgstr ""
+
+#: public/editor-lcp.js:146
+msgid "For a hero set as a CSS background."
+msgstr ""
+
+#: public/editor-lcp.js:165
+msgid "The image picked here is fetched first and gets high priority. None turns off the main-image preload on this page."
+msgstr ""
+
+#: public/editor-lcp.js:171
+msgid "Main (LCP) image"
 msgstr ""
 
 #. Source: src/onboarding/steps/Connect.tsx:178

@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'wpdeveloper/xspeed',
-        'pretty_version' => 'v1.4.6',
-        'version' => '1.4.6.0',
-        'reference' => '04d355d3537e50aee06b344c5e118300063d7b6a',
+        'pretty_version' => 'v1.4.7',
+        'version' => '1.4.7.0',
+        'reference' => '5d109675a5926ebcab35d8a34bd1fdbd3e9b0d8b',
         'type' => 'wordpress-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -11,9 +11,9 @@
     ),
     'versions' => array(
         'matthiasmullie/minify' => array(
-            'pretty_version' => '1.3.75',
-            'version' => '1.3.75.0',
-            'reference' => '76ba4a5f555fd7bf4aa408af608e991569076671',
+            'pretty_version' => '1.3.76',
+            'version' => '1.3.76.0',
+            'reference' => 'bbd1844c257a49488d914f4c7c7ba74cc8861fdc',
             'type' => 'library',
             'install_path' => __DIR__ . '/../matthiasmullie/minify',
             'aliases' => array(),
@@ -29,9 +29,9 @@
             'dev_requirement' => false,
         ),
         'wpdeveloper/xspeed' => array(
-            'pretty_version' => 'v1.4.6',
-            'version' => '1.4.6.0',
-            'reference' => '04d355d3537e50aee06b344c5e118300063d7b6a',
+            'pretty_version' => 'v1.4.7',
+            'version' => '1.4.7.0',
+            'reference' => '5d109675a5926ebcab35d8a34bd1fdbd3e9b0d8b',
             'type' => 'wordpress-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

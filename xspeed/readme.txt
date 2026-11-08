@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.6
+Stable tag: 1.4.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -342,6 +342,23 @@ Used for admin interface icons.
 
 == Changelog ==
 
+= [1.4.7] – 2026-11-08 =
+
+**WooCommerce shoppers with a cart can get cached pages, you can choose each page's main (LCP) image, and Slider Revolution works with Delay JS.**
+
+Caching:
+- New: Cache pages for shoppers with a cart keeps one cached copy per cart, so a shopper with items in the cart no longer skips the page cache. It is off by default and shows only while WooCommerce is active. Cart, checkout and account pages, add-to-cart requests and logged-in users are still not cached, and a product, price or stock change clears every cart copy.
+- New: An add-on can hold the cache write for up to 5 minutes while a page's optimized version is about to land, so the unoptimized page is not cached first (`xspeed_cache_write_hold`).
+- Fixed: A browser that reloads a cached page with a conditional request now gets a real 304 on the PHP serve path. Before, it got a 200 with an empty body, which showed a blank page and could be stored by a CDN.
+- Fixed: Requests from the Hub renderer and Speed Scan no longer count as visits in WP Statistics, Slimstat or the hit ratio when they send a browser user agent.
+
+Optimization:
+- New: Main (LCP) image. In the block editor sidebar or the classic editor, choose which image a page preloads: automatic, the featured image, an image you pick, or none. Resource Hints has site-wide rules by page type or path. The chosen image gets `fetchpriority="high"` and is not lazy-loaded.
+- Fixed: With Delay JS on, Slider Revolution no longer shows its "jquery.js library include" error in place of the slider, the hero keeps its height until the delayed scripts run, and the Bridge theme's logo shows. This also holds on pages the cache does not store, such as for logged-in users.
+
+Dashboard & Admin UX:
+- Fixed: A link to a module that lives in another page's tab opens that tab.
+
 = [1.4.6] – 2026-11-01 =
 
 **xSpeed can serve Google Analytics and other allow-listed third-party files from your own site, and audio players below the fold wait until played.**
@@ -382,128 +399,5 @@ AI / MCP:
 
 Reliability:
 - Fixed: A site no longer shows a fatal error when another plugin asks Composer which package versions are installed.
-
-= [1.4.4] – 2026-10-19 =
-
-**The preloader can skip post types and picks a stalled crawl back up, a cookie consent banner can be deferred, and an import from another caching plugin says when it was only partly done.**
-
-Caching:
-- Improved: Static cached pages are checked for expiry every hour, and just before the preloader requests them, so an expired copy is no longer served.
-- Fixed: Purging the cache while it is being switched on now reaches Cloudflare and the other caches xSpeed clears.
-- Fixed: Saving a page clears cached pages that show it in a widget from another plugin or in a Thrive layout.
-- Fixed: On nginx, a server block pasted without xSpeed's version line is reported as one to paste again, instead of as missing.
-- Fixed: On Apache, when static cache hits cannot be counted, the dashboard says so instead of reporting a low hit ratio.
-- Fixed: The page cache drop-in says which copy is running, and an outdated copy is flagged once and replaced on the next wp-admin load.
-- Fixed: A request that asks for JSON is no longer cached or served as the page, so a page rendered without its styles for such a request no longer reaches visitors. On nginx, the dashboard asks you to paste the server block again.
-- Fixed: An excluded URL with a `[` that is never closed, such as `/shop/[abc`, no longer logs a PHP warning on every page. The bracket is read as a plain character.
-
-Preloader:
-- New: Skip these post types leaves chosen post types out of the crawl, and the panel shows how many URLs were skipped. `wp xspeed preloader set` changes the settings from the command line.
-- Fixed: Saving the Preloader panel no longer clears the page cache or moves the next scheduled crawl.
-- Fixed: A crawl that stops moving is restarted by the next scheduled crawl, or resumed when the Preloader panel or `wp xspeed preloader status` is opened.
-- Fixed: Sitemaps on sites with plain permalinks are read correctly, so the crawl queues every page instead of one.
-
-Optimization:
-- New: Defer the cookie consent banner (opt-in) lets Defer JS defer a consent banner, including one pasted into the theme.
-- Improved: Delay JS never postpones the banners of 14 more consent tools, including Termageddon, CookieAdmin, WPConsent, TermsFeed and GetTerms.
-- Fixed: Minify HTML keeps conditional comments that show content to other browsers, and an empty comment no longer removes the markup after it.
-- Fixed: Only one image gets high fetch priority, and each image is preloaded once.
-- Fixed: A restored script's preload hint points at the right file, on cached and uncached pages.
-- Fixed: The video autoplay script is added only to pages that have a video.
-
-Object Cache:
-- Fixed: Browser autofill can no longer save a Redis username and password, and Enable and Switch test a changed host and port before saving them.
-
-Dashboard & Admin UX:
-- Improved: Share usage data is off until you turn it on, in the setup wizard and in Settings, and both say what is sent: your email address and display name when you turn it on, then site details once a day.
-- Fixed: An import from another caching plugin that brought some settings across shows as partly done, with the reason for each skipped group.
-- Fixed: With Import & switch to xSpeed, the old plugin's page cache file is saved first under a name that cannot be guessed, and xSpeed then takes over the page cache and checks that it serves pages.
-
-= [1.4.3] – 2026-10-16 =
-
-**Tablets can get a cached copy of their own, Markdown versions of a page can be cached beside the HTML, and an AI agent now needs the site owner's approval before an action that cannot be undone.**
-
-Security:
-- Fixed: A video that plays by itself could carry markup from its address into the page when "Lazy-load your own videos" moved the address aside. A Contributor could use this to run script in the browser of anyone viewing the post. The address is now kept as plain text, and local pages cached before the update are cleared once across the network. A warning remains until a full purge of the configured Cloudflare zone is confirmed. Reported by Wordfence PRISM (CVE-2026-109985).
-
-Caching:
-- New: Separate tablet cache (opt-in) keeps a third copy for tablets, and you choose whether tablets get the desktop or the phone page.
-- New: Cache Markdown versions (opt-in) stores the Markdown some SEO plugins send AI agents, separately from the HTML page.
-- Improved: With Separate mobile cache on, a CDN that keeps one copy per device type can now cache pages too.
-- Fixed: A response that is not HTML, such as Markdown or JSON on a page address, is no longer stored and served as the page.
-- Fixed: After a database restore that left xSpeed inactive, the cache no longer serves the old site's pages, and it is emptied when xSpeed comes back.
-- Fixed: The Separate mobile cache check compares fresh renders and asks each page whether it looked at the device, so one cached copy no longer reads as a difference.
-- Fixed: The site status the speed scan reads now says whether the page cache is on and why the home page was not cached.
-- Fixed: Purging one page also removes the expiry note kept beside a page that carries a nonce, so the next copy of that page is not cleared early.
-- Fixed: The 404 cache stores and serves only real 404s. A file a plugin serves at an address WordPress has no page for, such as llms.txt, is no longer cached as the site's 404 page or answered with one.
-
-Optimization:
-- New: Self-hosted Google Fonts has a card on the Optimization page.
-- Improved: Delay JS waits for a real visitor before it runs the delayed scripts, and runs them after the page's own DOMContentLoaded handlers. New installs get no fallback timer, so a speed test no longer runs them inside its trace.
-- Improved: Delay JS waits for stylesheets that are still being applied before the replay.
-- Fixed: Delay JS keeps the scripts a never-delayed script needs, with or without Smart Delay.
-- Fixed: Images in footer popups that already have a size now load lazily, so a popup nobody opens no longer downloads its images with the page.
-
-Cloudflare:
-- Fixed: Purging a URL clears every device copy of it at Cloudflare.
-
-AI / MCP:
-- New: Actions that cannot be undone, such as Database Clean and applying a migration, wait for the site owner's approval before an AI agent can run them.
-- New: Each tool says whether it reads, writes or cannot be undone, so AI clients can show it.
-- Fixed: Connecting, rotating or disconnecting MCP and turning on usage sharing are refused over MCP. Usage sharing can still be turned off.
-- New: When an xSpeed Scan finishes on a site connected to xSpeed Hub, the site sends the Hub the scan's id, so the Hub can compare it with the site's earlier scans.
-- Fixed: Running mcp status as a tool no longer shows the connection link.
-
-Dashboard & Admin UX:
-- Fixed: A settings save with a value the setting does not accept now names the value and what it accepts, instead of reporting success while changing nothing.
-- Fixed: Importing from another caching plugin shows as successful when most settings came across, and lists each skipped setting with the reason.
-- Fixed: A local site is not offered a connection to xSpeed Hub, and an unverified Hub answer no longer records the site as attached.
-
-= [1.4.2] – 2026-10-12 =
-
-**Combine CSS now works on Flywheel and Bedrock installs, Elementor Pro sticky headers stick under Delay JS, and a failed pass on the finished page can no longer cache an empty page.**
-
-Caching:
-- New: Every wp-admin page says when the page cache is off, and names the cache it would replace when another one already serves pages.
-- Improved: Purge All also clears Nginx Helper's Redis page cache, as used on GridPane, EasyEngine and WordOps.
-- Improved: `wp xspeed cache purge <url>` purges only that page, and the purge says which server cache it reached.
-- Fixed: When a filter on the finished page returns nothing, the rendered page is kept. An empty page is no longer sent or cached.
-- Fixed: Adding, moving or editing a widget clears the cached pages.
-- Fixed: With LiteSpeed Cache installed, the conflict check follows its page-cache setting, including its 24-hour pause.
-- Fixed: An Nginx Helper that is installed but not set up is no longer taken for a server cache.
-- Fixed: Purging no longer leaves an expiry marker beside pages that carry a nonce, which flooded response headers with errors when Query Monitor was active.
-
-Optimization:
-- New: The Asset Manager has a card on the Optimization page.
-- Fixed: Combine CSS works when wp-content is outside the WordPress folder, as on Flywheel and Bedrock.
-- Fixed: Under Delay JS, jQuery ready callbacks wait for the replay, so Elementor Pro sticky headers attach and Elementor entrance animations show.
-- Fixed: Async CSS holds transitions until the stylesheets apply, keeps them when JavaScript is off, and skips entrance animations already on screen.
-- Fixed: Turbo Render works with the page cache off, and skips sections that break under containment.
-
-Object Cache:
-- Fixed: Redis connects over a unix socket, reading the same constants as Redis Object Cache.
-
-Dashboard & Admin UX:
-- Improved: The expert-setup offer links to the booking page on xspeedcache.com.
-- Fixed: Database Clean deletes posts and comments through WordPress, so trashed media files go too, and a clean that runs out of time says how much is left.
-- Fixed: Deleting a post detaches its child posts of another type.
-- Fixed: The scan report is stored as JSON, so a latin1 database table no longer loses it.
-- Fixed: The PageSpeed tab shows only with a licensed Pro, appears as soon as the licence is activated, and stays out of settings search while hidden.
-- Fixed: The xSpeed Cache menu is hidden from users who can't manage options.
-
-= [1.4.1] – 2026-10-08 =
-
-**Cloudflare Enterprise setup now runs in four short steps, and the add-on's offer opens its page in the dashboard, shows with any version of Pro, and goes away once the add-on is bought.**
-
-Cloudflare:
-- New: The Cloudflare Enterprise add-on can show its setup as four steps (Setup, Verify, Connect, Done), with a card for each DNS record and a Copy button beside every value.
-- Improved: "Get it" on the sidebar's Cloudflare Enterprise card opens the add-on's page in the dashboard, in the same tab, instead of the store. That page explains what you need and has the buy button.
-- Improved: The sidebar card and the add-on's page show the price the service reports.
-- Improved: The Cloudflare Enterprise card on the Network page has a glowing border until the add-on is on. With reduced motion turned on, the border stays but does not move.
-- Improved: The add-on's page links to its setup guide.
-- Improved: The header shows the add-on's state as soon as its licence or domain changes, without a reload.
-- Fixed: The sidebar shows one Cloudflare Enterprise card, with any version of Pro.
-- Fixed: With a Pro older than 1.3.0, the Network page keeps the Cloudflare Enterprise card and page, and a licensed Pro is asked to update.
-- Fixed: The offer is hidden once the add-on key is entered, and on sites whose host already provides Cloudflare Enterprise.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

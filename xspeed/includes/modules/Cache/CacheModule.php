@@ -377,6 +377,28 @@ final class CacheModule extends Module {
 			$schema = array_slice( $schema, 0, $pos, true ) + $litespeed + array_slice( $schema, $pos, null, true );
 		}
 
+		// WooCommerce only (#649): nothing sets the cart cookies without it.
+		// Elsewhere the stored value survives via preserved_keys().
+		if ( class_exists( 'WooCommerce', false ) ) {
+			$woocommerce = array(
+				'woo_cart_vary' => array(
+					'type'        => 'bool',
+					'default'     => false,
+					'label'       => __( 'Cache pages for shoppers with a cart', 'xspeed' ),
+					'description' => __( 'Keep serving cached pages after a visitor adds a product, with one copy per cart so the mini-cart stays right. Leave this off if your pages show anything else personal, such as prices by location.', 'xspeed' ),
+					'info_title'  => __( 'Cached pages for shoppers', 'xspeed' ),
+					'info'        => __( 'Two shoppers with the same cart get the same copy. Cart, checkout and account pages, logged-in customers and any other excluded cookie still get a fresh page. A page keeps at most 50 cart copies, and changing a product clears every cart copy. While this is on, the three WooCommerce cart cookies are not read from Excluded cookies.', 'xspeed' ),
+				),
+			);
+			if ( \XSpeed\Cart_Vary::geolocation_ajax() ) {
+				$woocommerce['woo_cart_vary']['info'] .= ' ' . __( 'WooCommerce is set to Geolocate (with page caching support). Prices then follow the shopper\'s location, which a cart copy cannot tell apart, so this setting has no effect until you pick another Default customer location.', 'xspeed' );
+			}
+			// After the device settings, so the tablet fields that depend on
+			// Separate mobile cache stay next to it.
+			$pos    = (int) array_search( 'tablet_renders_as', array_keys( $schema ), true ) + 1;
+			$schema = array_slice( $schema, 0, $pos, true ) + $woocommerce + array_slice( $schema, $pos, null, true );
+		}
+
 		return $schema;
 	}
 
@@ -400,6 +422,10 @@ final class CacheModule extends Module {
 		// user's choice. On LiteSpeed itself the schema owns the key.
 		if ( \XSpeed\Server::LITESPEED !== \XSpeed\Server::type() ) {
 			$keys[] = 'litespeed_static_rewrite';
+		}
+		// Same for woo_cart_vary while WooCommerce is inactive (#649).
+		if ( ! class_exists( 'WooCommerce', false ) ) {
+			$keys[] = 'woo_cart_vary';
 		}
 		return $keys;
 	}
@@ -433,6 +459,12 @@ final class CacheModule extends Module {
 		// the copy that edge keys it under. Hooks nothing for a request
 		// without the edge's device signal.
 		\XSpeed\Cache::register_edge_device_render();
+		// With cart copies on, notice when WooCommerce prints a notice, so a
+		// page carrying one is never stored as a shared cart copy. (#649)
+		if ( \XSpeed\Cart_Vary::enabled() ) {
+			add_action( 'woocommerce_before_template_part', array( \XSpeed\Cart_Vary::class, 'note_template' ), 10, 4 );
+		}
+		add_action( 'update_option_woocommerce_default_customer_address', array( \XSpeed\Cart_Vary::class, 'on_customer_location_change' ), 10, 2 );
 		// Both write paths matter. On a fresh install `xspeed_module_cache`
 		// does not exist yet, so core's update_option() delegates to
 		// add_option() and fires `add_option_…` INSTEAD of

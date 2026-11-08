@@ -16,6 +16,7 @@
 
 import { GROUP_IDS, groupIdForSlug } from './sidebarGroups';
 import { parseDeepLink } from './deepLink';
+import { hostTargetFor } from './hostMap';
 
 export interface Route {
   view: 'overview' | 'group' | 'module' | 'pro';
@@ -73,6 +74,12 @@ function retarget(r: Route): Route {
   if (r.module === 'lazy' && r.subtab === 'fonts') {
     return { ...r, group: groupIdForSlug('fonts') ?? r.group, module: 'fonts', subtab: '' };
   }
+  // A link by module name (`#/performance/media-library`) opens the host page
+  // that renders it, on the tab it lives in.
+  const host = r.module ? hostTargetFor(r.module) : null;
+  if (host && r.module !== host.host) {
+    return { ...r, group: groupIdForSlug(host.host) ?? r.group, module: host.host, subtab: r.subtab || host.subtab || '' };
+  }
   return r;
 }
 
@@ -123,6 +130,19 @@ export function parseRoute(rawHash: string): Route {
     legacyTarget.subtab = alias.subtab;
   }
   const group = groupIdForSlug(slug);
+  // A module that is only a tab of a host page has no sidebar row of its own.
+  const host = group ? null : hostTargetFor(slug);
+  if (host && groupIdForSlug(host.host)) {
+    return retarget({
+      view: 'module',
+      group: groupIdForSlug(host.host)!,
+      module: slug,
+      subtab: legacyTarget.subtab ?? '',
+      focus: legacyTarget.focus,
+      suggest: legacyTarget.suggest,
+      legacy: true,
+    });
+  }
   if (group) {
     return retarget({
       view: 'module',

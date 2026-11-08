@@ -57,7 +57,18 @@ final class Resource_Hints_Processor {
 			$hints .= self::build_preconnect( $html, (array) ( $opts['preconnect_hosts'] ?? array() ), ! empty( $opts['preconnect'] ) );
 		}
 
-		if ( ! empty( $opts['lcp_preload'] ) ) {
+		// A main image chosen for this page, or by a site-wide rule, replaces
+		// the automatic pick (#703). Null when nothing was chosen, or when the
+		// chosen image is not on the page: the automatic pick then runs as
+		// before. An empty list means "None": no image preload, no `high`.
+		$chosen = ! empty( $opts['lcp_preload'] ) && isset( $opts['lcp_choice'] )
+			? self::chosen_candidates( $html, $opts['lcp_choice'] )
+			: null;
+
+		if ( null !== $chosen ) {
+			[ $html, $preload ] = self::build_chosen_preload( $html, $chosen );
+			$hints .= $preload;
+		} elseif ( ! empty( $opts['lcp_preload'] ) ) {
 			$count      = max( 0, (int) ( $opts['lcp_image_count'] ?? 1 ) );
 			$exclusions = array_filter( array_map( 'strval', (array) ( $opts['lcp_exclusions'] ?? array() ) ) );
 			[ $html, $preload ] = self::build_lcp_preload( $html, $count, $exclusions, (string) ( $opts['page_url'] ?? '' ) );
@@ -72,7 +83,8 @@ final class Resource_Hints_Processor {
 		// that surfaced this, 3.3s of a 5.3s mobile LCP was pure discovery
 		// delay for exactly such an image. (FBS-84578)
 		$manual = array_filter( array_map( 'strval', (array) ( $opts['preload_images'] ?? array() ) ) );
-		if ( ! empty( $manual ) ) {
+		// A page set to None (#703) gets no image preload from the list either.
+		if ( ! empty( $manual ) && array() !== $chosen ) {
 			$hints .= self::build_manual_image_preloads( $manual, $hints );
 		}
 
@@ -85,7 +97,7 @@ final class Resource_Hints_Processor {
 		// hints are emitted, so it must apply before the empty-$hints early-out.
 		$eager = array_filter( array_map( 'strval', (array) ( $opts['eager_excluded_images'] ?? array() ) ) );
 		if ( ! empty( $eager ) ) {
-			$html = self::promote_excluded_images( $html, $eager );
+			$html = self::promote_excluded_images( $html, $eager, null === $chosen );
 		}
 
 		if ( '' === $hints ) {
@@ -162,9 +174,11 @@ final class Resource_Hints_Processor {
 	 * @param string   $html       Full page HTML.
 	 * @param string[] $exclusions Substring patterns identifying above-the-fold heroes.
 	 */
-	private static function promote_excluded_images( string $html, array $exclusions ): string {
+	private static function promote_excluded_images( string $html, array $exclusions, bool $grant_high = true ): string {
 		$img_re  = '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*>#i';
-		$claimed = (bool) preg_match( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*?(?<![-\w])fetchpriority\s*=\s*["\']?high\b#i', $html );
+		// A chosen main image (#703) owns the page's `high`, even when it is a
+		// background with no <img> to carry it, and "None" means none at all.
+		$claimed = ! $grant_high || (bool) preg_match( '#<img\b(?:"[^"]*"|\'[^\']*\'|[^>"\'])*?(?<![-\w])fetchpriority\s*=\s*["\']?high\b#i', $html );
 		$skip    = $claimed ? array() : array_merge( self::chrome_container_ranges( $html ), Lazy_Loader::hidden_ranges( $html ) );
 
 		$result = preg_replace_callback(
@@ -1573,6 +1587,118 @@ final class Resource_Hints_Processor {
 			$kind     = isset( $matched[ $c ] ) ? $candidate['kind'] : 'background';
 			$preload .= self::preload_link( $candidate['url'], $candidate['srcset'], $candidate['sizes'], $kind, $candidate['media'] );
 		}
+		return array( $html, $preload );
+	}
+
+	/**
+	 * The preload candidates for a main image chosen for this page or by a
+	 * site-wide rule (#703).
+	 *
+	 * The choice arrives from the module already resolved:
+	 *  - `none`     (bool) the page has no main image;
+	 *  - `urls`     (string[]) the image, by URL; an attachment's other sizes
+	 *               are listed too, since a theme prints whichever it likes;
+	 *  - `pattern`  (string) text an <img> tag contains, as in the exclusion
+	 *               list, for a rule that names a file name or class;
+	 *  - `link_url` (string) a URL to preload as given when no <img> on the
+	 *               page shows the image: a hero painted from CSS.
+	 *
+	 * The first visible <img> outside site chrome that shows the image wins,
+	 * and the preload carries its own srcset and sizes. Null when the choice
+	 * cannot be applied to this page, so the automatic pick runs instead.
+	 *
+	 * @param mixed  $choice What the module resolved.
+	 * @return array<int,array{url:string,srcset:string,sizes:string,kind:string,media:string}>|null
+	 */
+	private static function chosen_candidates( string $html, $choice ): ?array {
+		if ( ! is_array( $choice ) ) {
+			return null;
+		}
+		if ( ! empty( $choice['none'] ) ) {
+			return array();
+		}
+		$urls    = array_values( array_filter( array_map( 'strval', (array) ( $choice['urls'] ?? array() ) ) ) );
+		$pattern = trim( (string) ( $choice['pattern'] ?? '' ) );
+		$skip    = array_merge( self::chrome_container_ranges( $html ), Lazy_Loader::hidden_ranges( $html ) );
+
+		if ( ( ! empty( $urls ) || '' !== $pattern ) && preg_match_all( '#<img\b[^>]*>#i', $html, $imgs, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $imgs[0] as $match ) {
+				[ $tag, $offset ] = $match;
+				if ( self::offset_in_ranges( $offset, $skip ) || Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
+					continue;
+				}
+				[ $src, $srcset, $sizes ] = self::effective_image_src( $tag );
+				if ( '' === $src ) {
+					continue;
+				}
+				$hit = '' !== $pattern && false !== stripos( $tag, $pattern );
+				foreach ( $urls as $url ) {
+					if ( $hit ) {
+						break;
+					}
+					$hit = self::same_url( $src, $url ) || self::srcset_has( $srcset, $url );
+				}
+				if ( ! $hit ) {
+					continue;
+				}
+				$src = html_entity_decode( $src, ENT_QUOTES );
+				// A document-relative src cannot be turned into a link without
+				// guessing the base, so leave this page to the automatic pick.
+				if ( ! preg_match( '#^(?:https?:)?/#i', $src ) ) {
+					return null;
+				}
+				return array(
+					array(
+						'url'    => $src,
+						'srcset' => html_entity_decode( $srcset, ENT_QUOTES ),
+						'sizes'  => $sizes,
+						'kind'   => 'img',
+						'media'  => '',
+					),
+				);
+			}
+		}
+
+		$link = trim( (string) ( $choice['link_url'] ?? '' ) );
+		if ( '' !== $link && preg_match( '#^(?:https?:)?/#i', $link ) && '' !== esc_url( $link ) ) {
+			return array(
+				array(
+					'url'    => $link,
+					'srcset' => '',
+					'sizes'  => '',
+					'kind'   => 'background',
+					'media'  => '',
+				),
+			);
+		}
+		return null;
+	}
+
+	/**
+	 * Preload a chosen main image and make its <img> the page's one `high`
+	 * image (#703). The supplied-candidate path already promotes the <img>
+	 * and takes `high` from every other image; a choice also sets
+	 * `loading="eager"`, so a lazy loader that runs later leaves it alone.
+	 *
+	 * @param array<int,array{url:string,srcset:string,sizes:string,kind:string,media:string}> $candidates
+	 * @return array{0:string,1:string} [rewritten html, preload markup]
+	 */
+	private static function build_chosen_preload( string $html, array $candidates ): array {
+		[ $html, $preload ] = self::build_supplied_preload( $html, $candidates );
+		if ( empty( $candidates ) ) {
+			return array( $html, $preload );
+		}
+		$html = (string) preg_replace_callback(
+			'#<img\b[^>]*>#i',
+			static function ( array $m ): string {
+				if ( 'high' !== strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
+					return $m[0];
+				}
+				$tag = (string) preg_replace( '#\s*(?<![-\w])loading\s*=\s*(["\']?)[a-z]*\1#i', '', $m[0], 1 );
+				return (string) preg_replace( '#<img\b#i', '<img loading="eager"', $tag, 1 );
+			},
+			$html
+		);
 		return array( $html, $preload );
 	}
 

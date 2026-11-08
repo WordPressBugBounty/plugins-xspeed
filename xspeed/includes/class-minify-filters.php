@@ -1204,9 +1204,13 @@ final class Minify_Filters {
 	 * parser has closed the document, a delayed write would replace the
 	 * page rather than add to it.
 	 *
-	 * @param string $html Complete page HTML.
+	 * @param string $html         Complete page HTML.
+	 * @param bool   $library_only Park only the init code of a delayed library
+	 *                             (Delay_Compat::buffer(), on pages the cache
+	 *                             does not store). Every other inline script is
+	 *                             left as it is.
 	 */
-	public static function delay_inline_snippets( $html ): string {
+	public static function delay_inline_snippets( $html, bool $library_only = false ): string {
 		if ( ! is_string( $html ) || '' === $html ) {
 			return (string) $html;
 		}
@@ -1218,11 +1222,15 @@ final class Minify_Filters {
 			return $html;
 		}
 
-		$handle_delayed = self::handle_delay_outcomes( $html );
+		$library_calls = Delay_Compat::delayed_library_patterns( $html );
+		if ( $library_only && empty( $library_calls ) ) {
+			return $html;
+		}
+		$handle_delayed = $library_only ? array() : self::handle_delay_outcomes( $html );
 
 		$out = preg_replace_callback(
 			'#<script\b([^>]*)>(.*?)</script>#is',
-			static function ( array $m ) use ( $handle_delayed ): string {
+			static function ( array $m ) use ( $handle_delayed, $library_calls, $library_only ): string {
 				list( $whole, $attrs, $body ) = $m;
 
 				if ( '' === trim( $body ) ) {
@@ -1272,6 +1280,15 @@ final class Minify_Filters {
 					return $whole;
 				}
 
+				// Pages the cache does not store get only the library rule
+				// below. See Delay_Compat::buffer().
+				if ( $library_only ) {
+					if ( self::is_excluded_script( '', $body, true ) || ! Delay_Compat::calls_delayed_library( $body, $library_calls ) ) {
+						return $whole;
+					}
+					return '<script' . self::park_type_attrs( $attrs ) . '>' . $body . '</script>';
+				}
+
 				// A handle's own inline blocks follow the handle, not only their
 				// body text. The body rule below decided them alone, so a
 				// `-js-extra` whose data named a target was parked while its
@@ -1315,6 +1332,14 @@ final class Minify_Filters {
 				// vendor's inline code eager.
 				if ( self::is_excluded_script( '', $body, true ) ) {
 					return $whole;
+				}
+
+				// Init code for a library whose files were delayed. No handle
+				// owns it, so the rule above never sees it, and run at load it
+				// calls a library that is not there yet. Revolution Slider
+				// printed its "jquery.js library include" error over the hero.
+				if ( Delay_Compat::calls_delayed_library( $body, $library_calls ) ) {
+					return '<script' . self::park_type_attrs( $attrs ) . '>' . $body . '</script>';
 				}
 
 				if ( ! self::matches_known_third_party( $body ) && ! self::matches_user_targets( $body ) ) {
@@ -1592,6 +1617,51 @@ final class Minify_Filters {
 		return ! self::is_excluded_script( $handle, $src, true )
 			&& ! isset( self::needed_by_excluded()[ $handle ] )
 			&& self::is_user_named_target( $handle, $src );
+	}
+
+	/**
+	 * Action: `wp_head`. Show Bridge's logo before its delayed main script
+	 * runs. See Delay_Compat::bridge_logo_reveal_markup().
+	 */
+	public static function print_bridge_logo_reveal(): void {
+		if ( self::skip_in_non_frontend_context() ) {
+			return;
+		}
+		$markup = Delay_Compat::bridge_logo_reveal_markup( self::delays_handle( 'default' ) );
+		if ( '' !== $markup ) {
+			echo $markup . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed markup, no input.
+		}
+	}
+
+	/**
+	 * Will Delay JS hold back this registered script on this request?
+	 *
+	 * The same decision delay_script_tag() makes later in the request, for
+	 * code that has to act in the head, before the tag is printed.
+	 *
+	 * @param string $handle Script handle.
+	 */
+	private static function delays_handle( string $handle ): bool {
+		$opts = self::opts();
+		if ( empty( $opts['delay_js'] ) ) {
+			return false;
+		}
+		$src = self::registered_src( $handle );
+		if ( '' === $src ) {
+			return false; // Not registered on this page.
+		}
+		if ( self::smart_delay_enabled() ) {
+			return self::smart_delays_handle( $handle );
+		}
+		if ( self::is_excluded_script( $handle, $src, true )
+			|| isset( self::needed_by_excluded()[ $handle ] )
+			|| ! self::is_delay_target( $handle, $src ) ) {
+			return false;
+		}
+		// Plain delay keeps a handle live when inline code reads it, unless
+		// the user named it.
+		return ! isset( self::inline_bound_handles()[ $handle ] )
+			|| self::is_user_named_target( $handle, $src );
 	}
 
 	/**
@@ -2565,6 +2635,10 @@ final class Minify_Filters {
 	 */
 	private static function is_excluded_script( string $handle, string $src, bool $named_lifts_floor = false ): bool {
 		if ( in_array( $handle, self::ALWAYS_EXCLUDED_HANDLES, true ) ) {
+			return true;
+		}
+		// A theme file our compat code reads at load. See Delay_Compat.
+		if ( Delay_Compat::keeps_live( $handle ) ) {
 			return true;
 		}
 		// Never defer or delay our own scripts. The fold and RUM beacons

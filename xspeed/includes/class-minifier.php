@@ -140,9 +140,24 @@ class Minifier {
 			// so the src sweep above never sees them; this one parks an
 			// inline body that names a known third-party host.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'delay_inline_snippets' ), 21 );
+			// A Revolution Slider whose init was just parked gets a poster of
+			// its first slide, so the hero is not empty until interaction.
+			add_filter( 'xspeed_cache_final_html', array( Delay_Compat::class, 'revslider_posters' ), 22 );
+			// Both of the above for pages the cache does not store, such as a
+			// logged-in visitor's. A page with no delayed slider file passes
+			// through unchanged.
+			add_action(
+				'template_redirect',
+				static function () {
+					ob_start( array( Delay_Compat::class, 'buffer' ) );
+				},
+				9
+			);
 			// Elementor's entrance-animation elements are hidden until its
 			// frontend script runs; when that script is delayed, show them.
 			add_action( 'wp_head',           array( Minify_Filters::class, 'print_entrance_animation_reveal' ), 1 );
+			// Same for the Bridge theme's logo.
+			add_action( 'wp_head',           array( Minify_Filters::class, 'print_bridge_logo_reveal' ), 1 );
 		}
 
 		// Everything above honors data-no-optimize / data-no-minify, but

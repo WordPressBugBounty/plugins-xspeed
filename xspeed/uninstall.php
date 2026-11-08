@@ -218,6 +218,22 @@ function xspeed_uninstall_cleanup() {
 		delete_option( $wpins_row );
 	}
 
+	// Per-URL write-hold records. One transient per held URL, named by a
+	// hash, so only a prefix sweep finds them. The values expire on their own;
+	// this removes the rows.
+	delete_transient( 'xspeed_write_hold_logged' );
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- options API has no prefix delete; uninstall only.
+	$write_hold_rows = $wpdb->get_col(
+		$wpdb->prepare(
+			"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+			$wpdb->esc_like( '_transient_xspeed_write_hold_' ) . '%',
+			$wpdb->esc_like( '_transient_timeout_xspeed_write_hold_' ) . '%'
+		)
+	);
+	foreach ( (array) $write_hold_rows as $write_hold_row ) {
+		delete_option( $write_hold_row );
+	}
+
 	// Score history — the plugin's own table, plus the legacy option the
 	// table was migrated from (kept on upgrade so a bad migration is
 	// recoverable; there is nothing to recover on uninstall).

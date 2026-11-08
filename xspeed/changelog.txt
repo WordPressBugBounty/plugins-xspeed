@@ -2,6 +2,100 @@
 
 The three most recent releases are listed in readme.txt. Everything since 1.0.0 is below.
 
+= [1.4.7] – 2026-11-08 =
+
+**WooCommerce shoppers with a cart can get cached pages, you can choose each page's main (LCP) image, and Slider Revolution works with Delay JS.**
+
+Caching:
+- New: Cache pages for shoppers with a cart keeps one cached copy per cart, so a shopper with items in the cart no longer skips the page cache. It is off by default and shows only while WooCommerce is active. Cart, checkout and account pages, add-to-cart requests and logged-in users are still not cached, and a product, price or stock change clears every cart copy.
+- New: An add-on can hold the cache write for up to 5 minutes while a page's optimized version is about to land, so the unoptimized page is not cached first (`xspeed_cache_write_hold`).
+- Fixed: A browser that reloads a cached page with a conditional request now gets a real 304 on the PHP serve path. Before, it got a 200 with an empty body, which showed a blank page and could be stored by a CDN.
+- Fixed: Requests from the Hub renderer and Speed Scan no longer count as visits in WP Statistics, Slimstat or the hit ratio when they send a browser user agent.
+
+Optimization:
+- New: Main (LCP) image. In the block editor sidebar or the classic editor, choose which image a page preloads: automatic, the featured image, an image you pick, or none. Resource Hints has site-wide rules by page type or path. The chosen image gets `fetchpriority="high"` and is not lazy-loaded.
+- Fixed: With Delay JS on, Slider Revolution no longer shows its "jquery.js library include" error in place of the slider, the hero keeps its height until the delayed scripts run, and the Bridge theme's logo shows. This also holds on pages the cache does not store, such as for logged-in users.
+
+Dashboard & Admin UX:
+- Fixed: A link to a module that lives in another page's tab opens that tab.
+
+= [1.4.6] – 2026-11-01 =
+
+**xSpeed can serve Google Analytics and other allow-listed third-party files from your own site, and audio players below the fold wait until played.**
+
+Optimization:
+- New: Third-party files copies CSS and JavaScript from hosts you allow onto your site and points the page at the copy, so Combine CSS, Delay JavaScript and the CDN can work on them. It is off by default. Once it is on, it copies from nine common library hosts, such as cdnjs and jsDelivr, and you can edit that list.
+- New: Local Analytics serves the Google Analytics script from your site, so PageSpeed no longer flags its short cache lifetime. It is off by default, and turning it off puts Google's address back.
+- Fixed: With Lazy-load your own videos on, audio players with no preload setting no longer download their file on page load. A preload you set yourself, and autoplay players, are left alone.
+
+Dashboard & Admin UX:
+- Fixed: An add-on's settings on an unlicensed site now show the licence card, instead of switches that Pro refuses to save.
+
+= [1.4.5] – 2026-10-27 =
+
+**Purge all can clear one cache type at a time, cached pages keep changes other plugins make to the page, and saving a Divi layout clears the cache.**
+
+Dashboard & Admin UX:
+- New: Purge all is a split button. Its menu clears one cache type: page cache, CSS and JS files, object cache, REST API cache, or a type an add-on adds.
+- New: An add-on can hold a setting at a fixed value while one of its own settings needs it. The field is read-only and says what set it, and a different value is refused from REST, the command line and MCP.
+- Fixed: The Cache page no longer asks you to install the .htaccess or nginx rules again when the rewrite check has only expired or could not decide.
+
+Caching:
+- Fixed: A page that another plugin rewrites from its own output buffer, such as ShortPixel's WebP delivery, is cached the way visitors receive it, so cache hits keep the change.
+- Fixed: Saving a Divi Theme Builder layout or Divi Theme Options clears the whole site, so cached pages no longer link stylesheets Divi has deleted.
+- Fixed: Cache cleanup removes cached pages that link a Divi static CSS file that no longer exists.
+- Fixed: Purging the cache no longer stops with an error when the object cache is broken.
+
+Optimization:
+- Fixed: Preload hints go ahead of inline Critical CSS in the head, so the hero image starts loading sooner.
+- Fixed: On right-to-left sites, Minify CSS no longer drops stylesheets that have their own -rtl.css file.
+- Fixed: REST API for logged-in users only refuses visitors with WordPress's own error code, so plugins that check for a login-only REST API recognise it.
+
+Health:
+- Fixed: The edge cache row reports when code running after xSpeed replaces the headers that keep a page out of a shared cache, instead of always showing OK.
+
+AI / MCP:
+- Fixed: xSpeed no longer answers another MCP plugin's OAuth discovery address at the site root, so that plugin's clients sign in to the right server.
+
+Reliability:
+- Fixed: A site no longer shows a fatal error when another plugin asks Composer which package versions are installed.
+
+= [1.4.4] – 2026-10-19 =
+
+**The preloader can skip post types and picks a stalled crawl back up, a cookie consent banner can be deferred, and an import from another caching plugin says when it was only partly done.**
+
+Caching:
+- Improved: Static cached pages are checked for expiry every hour, and just before the preloader requests them, so an expired copy is no longer served.
+- Fixed: Purging the cache while it is being switched on now reaches Cloudflare and the other caches xSpeed clears.
+- Fixed: Saving a page clears cached pages that show it in a widget from another plugin or in a Thrive layout.
+- Fixed: On nginx, a server block pasted without xSpeed's version line is reported as one to paste again, instead of as missing.
+- Fixed: On Apache, when static cache hits cannot be counted, the dashboard says so instead of reporting a low hit ratio.
+- Fixed: The page cache drop-in says which copy is running, and an outdated copy is flagged once and replaced on the next wp-admin load.
+- Fixed: A request that asks for JSON is no longer cached or served as the page, so a page rendered without its styles for such a request no longer reaches visitors. On nginx, the dashboard asks you to paste the server block again.
+- Fixed: An excluded URL with a `[` that is never closed, such as `/shop/[abc`, no longer logs a PHP warning on every page. The bracket is read as a plain character.
+
+Preloader:
+- New: Skip these post types leaves chosen post types out of the crawl, and the panel shows how many URLs were skipped. `wp xspeed preloader set` changes the settings from the command line.
+- Fixed: Saving the Preloader panel no longer clears the page cache or moves the next scheduled crawl.
+- Fixed: A crawl that stops moving is restarted by the next scheduled crawl, or resumed when the Preloader panel or `wp xspeed preloader status` is opened.
+- Fixed: Sitemaps on sites with plain permalinks are read correctly, so the crawl queues every page instead of one.
+
+Optimization:
+- New: Defer the cookie consent banner (opt-in) lets Defer JS defer a consent banner, including one pasted into the theme.
+- Improved: Delay JS never postpones the banners of 14 more consent tools, including Termageddon, CookieAdmin, WPConsent, TermsFeed and GetTerms.
+- Fixed: Minify HTML keeps conditional comments that show content to other browsers, and an empty comment no longer removes the markup after it.
+- Fixed: Only one image gets high fetch priority, and each image is preloaded once.
+- Fixed: A restored script's preload hint points at the right file, on cached and uncached pages.
+- Fixed: The video autoplay script is added only to pages that have a video.
+
+Object Cache:
+- Fixed: Browser autofill can no longer save a Redis username and password, and Enable and Switch test a changed host and port before saving them.
+
+Dashboard & Admin UX:
+- Improved: Share usage data is off until you turn it on, in the setup wizard and in Settings, and both say what is sent: your email address and display name when you turn it on, then site details once a day.
+- Fixed: An import from another caching plugin that brought some settings across shows as partly done, with the reason for each skipped group.
+- Fixed: With Import & switch to xSpeed, the old plugin's page cache file is saved first under a name that cannot be guessed, and xSpeed then takes over the page cache and checks that it serves pages.
+
 = [1.4.3] – 2026-10-16 =
 
 **Tablets can get a cached copy of their own, Markdown versions of a page can be cached beside the HTML, and an AI agent now needs the site owner's approval before an action that cannot be undone.**

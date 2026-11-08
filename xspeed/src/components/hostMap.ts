@@ -30,6 +30,7 @@ export const CHILD_TO_HOST: Record<string, HostTarget> = {
   // Media Optimization (host: lazy). `fonts` is deliberately absent — it is
   // its own Optimization card, not a tab here (#86).
   images: { host: 'lazy', subtab: 'images' },
+  'media-library': { host: 'lazy', subtab: 'library' },
   'smart-image': { host: 'lazy', subtab: 'smart' },
   // Resource Hints (host: resource-hints)
   'smart-predict': { host: 'resource-hints', subtab: 'speculation' },

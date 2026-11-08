@@ -50,10 +50,18 @@ final class ResourceHintsModule extends Module {
 
 	public const SLUG    = 'resource-hints';
 	public const TIER    = self::TIER_FREE;
-	public const VERSION = '1.0.0';
+	public const VERSION = '1.2.0';
 
 	/** Guards the cache-off buffer so it processes exactly once per request. */
 	private static $buffering = false;
+
+	/**
+	 * The main image chosen for the page being served (#703), resolved once
+	 * the main query has run. False until then; null when nothing was chosen.
+	 *
+	 * @var array<string,mixed>|null|false
+	 */
+	private $lcp_choice = false;
 
 	public function ui_metadata(): array {
 		return array(
@@ -103,6 +111,15 @@ final class ResourceHintsModule extends Module {
 				'description' => __( 'Images whose tag contains a line here, such as a file name or class, are never picked as the main image. Useful for tracking pixels and spacers.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'lcp_preload' ),
 			),
+			'lcp_rules'        => array(
+				'type'        => 'list',
+				'default'     => array(),
+				'item_type'   => 'string',
+				'label'       => __( 'Main image rules', 'xspeed' ),
+				'description' => __( 'Pick the main image on pages the editor does not cover, one rule per line: where | image. Where is a page type (front_page, blog, archive, category, tag, author, search, 404, shop, singular, page, post, post_type:product) or a path such as /shop/*. Image is an image URL, featured, none, or a file name or class the image tag contains. The first matching rule wins; a choice made on the page itself beats every rule.', 'xspeed' ),
+				'advanced'    => true,
+				'dependsOn'   => array( 'field' => 'lcp_preload' ),
+			),
 			'preload_images'   => array(
 				'type'        => 'list',
 				'default'     => array(),
@@ -131,6 +148,10 @@ final class ResourceHintsModule extends Module {
 	}
 
 	public function boot(): void {
+		// The per-page choice is edited in wp-admin and saved through REST,
+		// so its hooks run outside the front-end gate below. (#703)
+		Lcp_Choice::boot();
+
 		/*
 		 * Deferred to `init`. This module reads its own settings to decide
 		 * what to hook, and reading settings builds settings_schema(), whose
@@ -172,6 +193,13 @@ final class ResourceHintsModule extends Module {
 		$any = ! empty( $opts['lcp_preload'] ) || ! empty( $opts['preconnect'] ) || ! empty( $opts['preconnect_hosts'] );
 		if ( ! $any ) {
 			return;
+		}
+
+		// The main image chosen for this page needs the main query, which
+		// is ready by template_redirect. Resolved here rather than in the
+		// output callback, which runs at shutdown.
+		if ( ! empty( $opts['lcp_preload'] ) ) {
+			add_action( 'template_redirect', array( $this, 'resolve_lcp_choice' ), 1 );
 		}
 
 		// Cache-write path: transform the HTML just before it is minified and
@@ -242,7 +270,34 @@ final class ResourceHintsModule extends Module {
 			}
 		}
 		$opts['page_url'] = self::current_page_url();
+		if ( is_array( $this->lcp_choice ) ) {
+			$opts['lcp_choice'] = $this->lcp_choice;
+		}
 		return $opts;
+	}
+
+	/**
+	 * Resolve the main image chosen for the page being served: the page's
+	 * own choice, else the first matching rule (#703).
+	 */
+	public function resolve_lcp_choice(): void {
+		$opts             = $this->get_settings();
+		$rules            = array_values( array_filter( array_map( 'strval', (array) ( $opts['lcp_rules'] ?? array() ) ) ) );
+		$post_id          = \XSpeed\Cache_Rules::current_post_id();
+		$singular         = null !== $post_id && in_array( (string) get_post_type( $post_id ), Lcp_Choice::post_types(), true );
+		$this->lcp_choice = ( $singular || ! empty( $rules ) )
+			? Lcp_Choice::resolve( $rules, $singular ? $post_id : null, empty( $rules ) ? array() : Lcp_Choice::current_context() )
+			: null;
+	}
+
+	public function migrations(): array {
+		return array(
+			// Main image rules (#703). Defaults merge on read too; this keeps
+			// the stored row complete for export.
+			'1.2.0' => static function ( array $stored ): array {
+				return $stored + array( 'lcp_rules' => array() );
+			},
+		);
 	}
 
 	/**
@@ -273,23 +328,86 @@ final class ResourceHintsModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed resource-hints',
-				'risk'      => 'read',
+				'risk'      => array( '' => 'read', 'status' => 'read', 'lcp-get' => 'read', 'lcp-set' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'Show LCP-preload / preconnect resource-hint settings.',
+				'shortdesc' => 'Show resource-hint settings, or read/set the main (LCP) image chosen for a post.',
 				'ai_hint'   => 'Browser resource hints — preload, prefetch, preconnect — for the resources that block first paint. Use for LCP problems or "preconnect to required origins" in PageSpeed. Not the same as the Preloader, which warms the page cache.',
-				'synopsis'  => array(),
+				'synopsis'  => array(
+					array(
+						'type'        => 'positional',
+						'name'        => 'action',
+						'description' => 'status (default), lcp-get <post-id>, or lcp-set <post-id> <auto|featured|none|image-url>.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'positional',
+						'name'        => 'post',
+						'description' => 'Post ID, for lcp-get and lcp-set.',
+						'optional'    => true,
+					),
+					array(
+						'type'        => 'positional',
+						'name'        => 'value',
+						'description' => 'For lcp-set: auto, featured, none, or an image URL.',
+						'optional'    => true,
+					),
+				),
 			),
 		);
 	}
 
 	public function cli_handler( array $args, array $assoc ): void {
+		$action = isset( $args[0] ) ? (string) $args[0] : 'status';
+		if ( 'lcp-get' === $action || 'lcp-set' === $action ) {
+			$this->cli_lcp( $action, $args );
+			return;
+		}
+		if ( 'status' !== $action ) {
+			\WP_CLI::error( sprintf( 'Unknown action "%s". Use status, lcp-get or lcp-set.', $action ) );
+			return;
+		}
 		$opts = $this->get_settings();
 		\WP_CLI::log( sprintf( '%-20s %s', 'enabled', ! empty( $opts['enabled'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %s', 'lcp_preload', ! empty( $opts['lcp_preload'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %d', 'lcp_image_count', (int) ( $opts['lcp_image_count'] ?? 1 ) ) );
 		\WP_CLI::log( sprintf( '%-20s %d pattern(s)', 'lcp_exclusions', count( (array) ( $opts['lcp_exclusions'] ?? array() ) ) ) );
+		\WP_CLI::log( sprintf( '%-20s %d rule(s)', 'lcp_rules', count( Lcp_Choice::parse_rules( $opts['lcp_rules'] ?? array() ) ) ) );
 		\WP_CLI::log( sprintf( '%-20s %d url(s)', 'preload_images', count( (array) ( $opts['preload_images'] ?? array() ) ) ) );
 		\WP_CLI::log( sprintf( '%-20s %s', 'preconnect', ! empty( $opts['preconnect'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %d host(s)', 'preconnect_hosts', count( (array) ( $opts['preconnect_hosts'] ?? array() ) ) ) );
+	}
+
+	/**
+	 * `resource-hints lcp-get <post>` / `lcp-set <post> <value>`: the main
+	 * image chosen for one post (#703). Setting it purges that post's page.
+	 *
+	 * @param array<int,string> $args Positional arguments.
+	 */
+	private function cli_lcp( string $action, array $args ): void {
+		$post_id = isset( $args[1] ) ? (int) $args[1] : 0;
+		$post    = $post_id > 0 ? get_post( $post_id ) : null;
+		if ( ! $post instanceof \WP_Post ) {
+			\WP_CLI::error( 'Pass a post ID, e.g. `wp xspeed resource-hints lcp-get 42`.' );
+			return;
+		}
+		if ( ! in_array( $post->post_type, Lcp_Choice::post_types(), true ) ) {
+			\WP_CLI::error( sprintf( 'Post type "%s" has no main image choice.', $post->post_type ) );
+			return;
+		}
+		if ( 'lcp-set' === $action ) {
+			$raw   = isset( $args[2] ) ? trim( (string) $args[2] ) : '';
+			$value = 'auto' === $raw ? '' : Lcp_Choice::sanitize_value( $raw );
+			if ( '' === $raw || ( 'auto' !== $raw && '' === $value ) ) {
+				\WP_CLI::error( 'Value must be auto, featured, none, or an image URL (https://… or /…).' );
+				return;
+			}
+			Lcp_Choice::store( $post_id, $value );
+		}
+		$stored = Lcp_Choice::sanitize_value( get_post_meta( $post_id, Lcp_Choice::META, true ) );
+		\WP_CLI::log( sprintf( '%-12s %d', 'post', $post_id ) );
+		\WP_CLI::log( sprintf( '%-12s %s', 'main_image', '' === $stored ? 'auto' : $stored ) );
+		if ( 'lcp-set' === $action ) {
+			\WP_CLI::success( 'Saved. If the post is published, its cached page was purged.' );
+		}
 	}
 }

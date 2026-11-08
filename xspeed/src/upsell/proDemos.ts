@@ -348,6 +348,27 @@ export const PRO_DEMOS: Record<string, ProDemo> = {
       { icon: 'Zap', text: 'Browsers that support modern formats get them; others fall back cleanly.' },
     ],
   },
+  'media-library': {
+    id: 'media-library',
+    title: 'Every image, measured',
+    subtitle:
+      'See what each image weighs, what xSpeed serves in its place, and convert, compress or resize images one at a time or in bulk.',
+    icon: 'Image',
+    mock: {
+      kind: 'toggles',
+      rows: [
+        { label: 'beach-sunset.jpg  ·  434 KB → 215 KB', on: true, stat: '−50%' },
+        { label: 'team-photo.jpg  ·  540 KB → 305 KB', on: true, stat: '−44%' },
+        { label: 'site-logo.png  ·  original is smaller', on: false },
+      ],
+    },
+    points: [
+      { icon: 'Image', text: 'One list of every JPEG and PNG with its size before and after.' },
+      { icon: 'Filter', text: 'Find images not converted yet, or with a WebP/AVIF larger than the original.' },
+      { icon: 'Zap', text: 'Convert, exclude or re-measure images one at a time or in bulk.' },
+      { icon: 'Shrink', text: 'Compress and resize the original files only if you switch it on. Every file keeps a backup you can restore.' },
+    ],
+  },
   'media-smart': {
     id: 'media-smart',
     title: 'AI-tuned image settings',

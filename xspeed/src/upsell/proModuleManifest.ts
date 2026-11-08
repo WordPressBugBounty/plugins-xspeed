@@ -269,6 +269,14 @@ export const PRO_MODULE_MANIFEST: ProModuleManifestEntry[] = [
     embedded: true,
   },
   {
+    slug: 'media-library',
+    label: 'Media Library',
+    icon: 'Image',
+    description: 'Every image on your site with its size, what xSpeed serves in its place, and how much it saves.',
+    teaser: null,
+    embedded: true,
+  },
+  {
     slug: 'smart-image',
     label: 'AI Suggestions',
     icon: 'Sparkles',

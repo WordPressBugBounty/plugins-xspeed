@@ -15,7 +15,7 @@ import type { PanelProps } from '../customPanels';
  * labels (single source of truth), so they stay in sync with the sidebar
  * + are searchable automatically:
  *   Lazy Loading (this module's tab_label) / Image Optimization (Pro) /
- *   AI Suggestions (Pro)
+ *   Media Library (Pro) / AI Suggestions (Pro)
  *
  * Fonts used to be a fourth tab here. It now has exactly one home — its
  * own Optimization card at #/performance/fonts (#86) — and `nav.ts`
@@ -25,6 +25,7 @@ import type { PanelProps } from '../customPanels';
 const TABS: HostTab[] = [
   { key: 'lazy', slug: 'lazy', self: true },
   { key: 'images', slug: 'images', panel: 'ImagesPanel', pro: true },
+  { key: 'library', slug: 'media-library', panel: 'MediaLibraryPanel', pro: true },
   { key: 'smart', slug: 'smart-image', panel: 'SmartImagePanel', pro: true },
 ];
 
@@ -46,6 +47,11 @@ export function MediaPanel({ module, onSaved, subtab, onSubtabChange, getModule 
         {active === 'images' && (
           <ProTabBody demo="media-formats">
             <ProSlot panel="ImagesPanel" slug="images" getModule={getModule} onSaved={onSaved} />
+          </ProTabBody>
+        )}
+        {active === 'library' && (
+          <ProTabBody demo="media-library">
+            <ProSlot panel="MediaLibraryPanel" slug="media-library" getModule={getModule} onSaved={onSaved} />
           </ProTabBody>
         )}
         {active === 'smart' && (
