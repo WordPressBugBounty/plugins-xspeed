@@ -252,7 +252,7 @@ final class ObjectCacheModule extends Module {
 		);
 	}
 
-	/** Counts failed drop-in sync attempts so a permanent failure stops retrying. */
+	/** Counts fast retries before switching to daily recovery attempts. */
 	private const SYNC_ATTEMPTS_OPTION = 'xspeed_oc_sync_attempts';
 
 	/**
@@ -333,8 +333,9 @@ final class ObjectCacheModule extends Module {
 		return $still;
 	}
 
-	/** Give up after this many failed syncs for one plugin version. */
+	/** Fast attempts for one plugin version and template. */
 	private const MAX_SYNC_ATTEMPTS = 5;
+	private const SYNC_RETRY_INTERVAL = 86400;
 
 	public function boot(): void {
 		// A saved override is promoted into our wp-config block, then the field
@@ -517,54 +518,165 @@ final class ObjectCacheModule extends Module {
 		);
 
 
-		// Keep the deployed drop-in in sync with the shipped template. It is
-		// copied into wp-content/object-cache.php on enable and then never
-		// touched again — so a fix shipped in a plugin update (e.g. the
-		// stale-alloptions eviction on failed backend writes, issue #41)
-		// would never reach existing installs. Version-gated so the file
-		// comparison runs once per plugin version, not on every admin load.
-		add_action(
-			'admin_init',
-			static function (): void {
-				if ( get_option( 'xspeed_oc_dropin_synced', '' ) === XSPEED_VERSION ) {
-					return;
-				}
-				$ok = true;
-				if ( Object_Cache::is_our_dropin_present() ) {
-					// Both steps run regardless of each other — they fail
-					// independently (drop-in needs wp-content writable, the
-					// backfill needs wp-config writable), and short-circuiting
-					// would skip a backfill that could have succeeded.
-					$installed = Object_Cache::install_dropin();
-					$salted    = self::backfill_key_salt();
-					$ok        = $installed && $salted;
-				}
-				// Only stamp the version when the sync actually succeeded. A
-				// transient failure (wp-config momentarily unwritable, a
-				// filesystem hiccup) then gets retried on a later admin load
-				// rather than being recorded as migrated and left unsalted.
-				//
-				// Bounded, though: where the failure is permanent — a host that
-				// ships a read-only wp-config — retrying forever would run
-				// WP_Filesystem work on every single admin page load for no
-				// gain. It is safe to stop, because the drop-in derives its own
-				// salt when the constant is absent, so such an install is
-				// namespaced either way; the constant is only the faster path.
-				if ( $ok ) {
-					update_option( 'xspeed_oc_dropin_synced', XSPEED_VERSION );
-					delete_option( self::SYNC_ATTEMPTS_OPTION );
-					return;
-				}
-
-				$attempts = (int) get_option( self::SYNC_ATTEMPTS_OPTION, 0 ) + 1;
-				if ( $attempts >= self::MAX_SYNC_ATTEMPTS ) {
-					update_option( 'xspeed_oc_dropin_synced', XSPEED_VERSION );
-					delete_option( self::SYNC_ATTEMPTS_OPTION );
-					return;
-				}
-				update_option( self::SYNC_ATTEMPTS_OPTION, $attempts );
+		add_action( 'admin_init', array( __CLASS__, 'sync_dropin' ) );
+		add_action( 'wp_loaded', static function (): void {
+			if ( wp_doing_cron() ) {
+				self::sync_dropin();
 			}
+		} );
+		add_action( 'admin_init', array( __CLASS__, 'cleanup_namespace' ), 20 );
+
+		// A Redis flush only moves the generation counter; these delete the
+		// values it retired, and repeat the bump after a drop-in upgrade
+		// once requests still running the old file have finished. (#801)
+		add_action( Object_Cache::RECLAIM_HOOK, array( Object_Cache::class, 'run_reclaim_event' ) );
+		add_action( Object_Cache::DRAIN_HOOK, array( Object_Cache::class, 'run_generation_drain' ) );
+		add_action( 'admin_init', array( Object_Cache::class, 'run_generation_drain' ), 20 );
+	}
+
+	/** Refresh our installed copy even when the plugin version stays the same. */
+	public static function sync_dropin(): void {
+		if ( ! Object_Cache::is_our_dropin_present() ) {
+			return;
+		}
+		$hash = Object_Cache::dropin_hash();
+		if ( '' === $hash ) {
+			return;
+		}
+		$target = XSPEED_VERSION . ':' . $hash;
+		if ( get_option( 'xspeed_oc_sync_target', '' ) !== $target ) {
+			update_option( 'xspeed_oc_sync_target', $target, false );
+			self::clear_sync_failure();
+		}
+		self::recover_copy_sync( $hash );
+		$attempts = (int) get_option( self::SYNC_ATTEMPTS_OPTION, 0 );
+		if ( $attempts >= self::MAX_SYNC_ATTEMPTS && time() < (int) get_option( 'xspeed_oc_sync_last_attempt', 0 ) + self::SYNC_RETRY_INTERVAL ) {
+			return;
+		}
+		if ( 0 === $attempts && get_option( 'xspeed_oc_dropin_synced', '' ) === XSPEED_VERSION && Object_Cache::dropin_hash( true ) === $hash ) {
+			return;
+		}
+
+		update_option( 'xspeed_oc_sync_last_attempt', time(), false );
+		// The copy and salt backfill can fail independently, so attempt both.
+		$generation_deferred = false;
+		$installed           = Object_Cache::install_dropin( $generation_deferred );
+		$salted              = self::backfill_key_salt();
+		if ( $installed && $salted ) {
+			update_option( 'xspeed_oc_dropin_synced', XSPEED_VERSION );
+			self::clear_sync_failure();
+			return;
+		}
+		// Wait for a safe namespace retirement before spending a copy attempt.
+		if ( $generation_deferred ) {
+			return;
+		}
+		update_option(
+			'xspeed_oc_sync_last_error',
+			! $installed
+				? __( 'Could not update object-cache.php. Check file permissions.', 'xspeed' )
+				: __( 'Could not update the object cache key prefix configuration. Check file permissions.', 'xspeed' ),
+			false
 		);
+		// Keep exhausted attempts for this template, including content drift.
+		update_option( self::SYNC_ATTEMPTS_OPTION, $attempts + 1, false );
+	}
+
+	private static function clear_sync_failure(): void {
+		delete_option( self::SYNC_ATTEMPTS_OPTION );
+		delete_option( 'xspeed_oc_sync_last_attempt' );
+		delete_option( 'xspeed_oc_sync_last_error' );
+	}
+
+	private static function recover_copy_sync( string $hash ): void {
+		// A different site or an operator can repair the network's shared file.
+		if ( '' !== $hash
+			&& get_option( 'xspeed_oc_sync_last_error', '' ) === __( 'Could not update object-cache.php. Check file permissions.', 'xspeed' )
+			&& Object_Cache::dropin_hash( true ) === $hash ) {
+			self::clear_sync_failure();
+		}
+	}
+
+	/** @return array{attempts:int,last_attempt:int,next_retry:int,last_error:string}|null */
+	public static function dropin_sync_status(): ?array {
+		if ( ! Object_Cache::is_our_dropin_present() ) {
+			return null;
+		}
+		$hash = Object_Cache::dropin_hash();
+		if ( '' === $hash || get_option( 'xspeed_oc_sync_target', '' ) !== XSPEED_VERSION . ':' . $hash ) {
+			return null;
+		}
+		self::recover_copy_sync( $hash );
+		$attempts = (int) get_option( self::SYNC_ATTEMPTS_OPTION, 0 );
+		if ( $attempts <= 0 || ( $attempts < self::MAX_SYNC_ATTEMPTS && '' === (string) get_option( 'xspeed_oc_sync_last_error', '' ) ) ) {
+			return null;
+		}
+		$last = (int) get_option( 'xspeed_oc_sync_last_attempt', 0 );
+		return array(
+			'attempts'     => $attempts,
+			'last_attempt' => $last,
+			'next_retry'   => $attempts < self::MAX_SYNC_ATTEMPTS ? 0 : $last + self::SYNC_RETRY_INTERVAL,
+			'last_error'   => (string) get_option( 'xspeed_oc_sync_last_error', '' ),
+		);
+	}
+
+	/**
+	 * An explicit operator request starts a fresh fast-attempt budget.
+	 *
+	 * @return array{ok:bool,reason:string,message:string}
+	 */
+	public static function retry_dropin(): array {
+		if ( ! file_exists( WP_CONTENT_DIR . '/object-cache.php' ) ) {
+			return array( 'ok' => false, 'reason' => 'missing', 'message' => __( 'No object-cache.php is installed; enable Object Cache to install it.', 'xspeed' ) );
+		}
+		if ( ! Object_Cache::is_our_dropin_present() ) {
+			return array( 'ok' => false, 'reason' => 'foreign', 'message' => __( "The installed object-cache.php is not xSpeed's, so xSpeed left it alone.", 'xspeed' ) );
+		}
+		if ( '' !== Object_Cache::dropin_hash() ) {
+			self::clear_sync_failure();
+			// A matching file can still have a failed key-prefix backfill.
+			delete_option( 'xspeed_oc_dropin_synced' );
+			self::sync_dropin();
+			if ( 0 === (int) get_option( self::SYNC_ATTEMPTS_OPTION, 0 ) ) {
+				return array( 'ok' => true, 'reason' => 'ok', 'message' => __( 'Object cache drop-in updated.', 'xspeed' ) );
+			}
+		}
+		return array(
+			'ok'      => false,
+			'reason'  => 'failed',
+			'message' => (string) get_option( 'xspeed_oc_sync_last_error', __( 'The object cache drop-in could not be updated.', 'xspeed' ) ),
+		);
+	}
+
+	/** Retry cleanup separately from the version-gated drop-in sync. */
+	public static function cleanup_namespace(): void {
+		if ( 'pending' !== get_option( 'xspeed_oc_namespace_cleanup', '' ) ) {
+			return;
+		}
+		// The earlier build scheduled the sweep with args, which
+		// wp_next_scheduled() without args never matches. Unscheduling by hook
+		// name is a no-op once they are gone; false means the cron write failed.
+		if ( false === wp_unschedule_hook( 'xspeed_oc_sweep' ) ) {
+			return;
+		}
+		$cache = $GLOBALS['wp_object_cache'] ?? null;
+		if ( ! Object_Cache::is_our_dropin_present() || ! $cache instanceof \XSpeed_Object_Cache || method_exists( $cache, 'sweep_stale' ) ) {
+			return;
+		}
+		$opts = Settings_Manager::get( self::SLUG );
+		if ( 'redis' !== ( $opts['backend'] ?? 'redis' ) ) {
+			return;
+		}
+		if ( Object_Cache::purge_namespace( $opts, true ) >= 0 ) {
+			delete_option( 'xspeed_oc_namespace_cleanup' );
+			delete_option( 'xspeed_oc_namespace_cleanup_attempts' );
+			return;
+		}
+		$attempts = (int) get_option( 'xspeed_oc_namespace_cleanup_attempts', 0 ) + 1;
+		update_option( 'xspeed_oc_namespace_cleanup_attempts', $attempts, false );
+		if ( $attempts >= 5 ) {
+			update_option( 'xspeed_oc_namespace_cleanup', 'failed', false );
+		}
 	}
 
 	/**
@@ -643,6 +755,11 @@ final class ObjectCacheModule extends Module {
 					'path'     => '/flush',
 					'methods'  => 'POST',
 					'callback' => array( $this, 'rest_flush' ),
+				),
+				array(
+					'path'     => '/retry-sync',
+					'methods'  => 'POST',
+					'callback' => array( $this, 'rest_retry_sync' ),
 				),
 				array(
 					'path'     => '/snippet',
@@ -747,12 +864,19 @@ final class ObjectCacheModule extends Module {
 		 * WP-CLI, so the panel kept saying "Redis ready" over a cache that
 		 * stored nothing. (#398)
 		 */
-		$detect  = Object_Cache::detect( true );
-		$failure = self::live_write_failure();
+		$detect                = Object_Cache::detect( true );
+		$detect['dropin_sync'] = self::dropin_sync_status();
+		$failure               = self::live_write_failure();
 		if ( null !== $failure ) {
 			$detect['write_probe'] = $failure;
 		}
 		return rest_ensure_response( $detect );
+	}
+
+	public function rest_retry_sync( \WP_REST_Request $request ) {
+		$result = self::retry_dropin();
+		$result['dropin_sync'] = self::dropin_sync_status();
+		return rest_ensure_response( $result );
 	}
 
 	public function rest_flush( \WP_REST_Request $request ) {
@@ -764,7 +888,11 @@ final class ObjectCacheModule extends Module {
 				\XSpeed\Activity_Log::INFO
 			);
 		}
-		return rest_ensure_response( array( 'ok' => $ok ) );
+		$cache  = $GLOBALS['wp_object_cache'] ?? null;
+		$reason = ! $ok && $cache instanceof \XSpeed_Object_Cache && method_exists( $cache, 'flush_failure_reason' )
+			? $cache->flush_failure_reason()
+			: 'failed';
+		return rest_ensure_response( $ok ? array( 'ok' => true ) : array( 'ok' => false, 'reason' => $reason ) );
 	}
 
 	public function rest_snippet( \WP_REST_Request $request ) {
@@ -886,7 +1014,7 @@ final class ObjectCacheModule extends Module {
 		return array(
 			array(
 				'name'      => 'xspeed objcache',
-				'risk'      => array( '' => 'read', 'status' => 'read', 'flush' => 'write', 'snippet' => 'read', 'enable' => 'write', 'disable' => 'write', 'test' => 'read', 'get' => 'read', 'set' => 'write', 'override' => 'write', 'revert' => 'write' ),
+				'risk'      => array( '' => 'read', 'status' => 'read', 'flush' => 'write', 'retry-sync' => 'write', 'snippet' => 'read', 'enable' => 'write', 'disable' => 'write', 'test' => 'read', 'get' => 'read', 'set' => 'write', 'override' => 'write', 'revert' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show object cache status, read or write a setting, flush, or print the wp-config snippet.',
 				'ai_hint'   => 'Is a persistent object cache (Redis/Memcached) connected and working? Use for slow admin pages, high database load, or "should I add Redis" questions — it reports the backend, connection health and hit rate. `get`/`set <key> [value]` read and write individual settings; `status` also reports whether each value comes from wp-config.php or the database.',
@@ -894,7 +1022,7 @@ final class ObjectCacheModule extends Module {
 					array(
 						'type'     => 'positional',
 						'name'     => 'action',
-						'options'  => array( 'status', 'flush', 'snippet', 'enable', 'disable', 'test', 'get', 'set', 'override', 'revert' ),
+						'options'  => array( 'status', 'flush', 'retry-sync', 'snippet', 'enable', 'disable', 'test', 'get', 'set', 'override', 'revert' ),
 						'optional' => true,
 					),
 					array(
@@ -928,11 +1056,45 @@ final class ObjectCacheModule extends Module {
 		$action = $args[0] ?? 'status';
 		switch ( $action ) {
 			case 'status':
+				$sync = self::dropin_sync_status();
+				if ( null !== $sync ) {
+					\WP_CLI::warning( implode( ' ', array_filter( array(
+						__( 'Object cache update failed.', 'xspeed' ),
+						$sync['last_error'],
+						0 === $sync['next_retry']
+							? __( 'Next automatic retry: on the next admin or cron request.', 'xspeed' )
+							: sprintf(
+								/* translators: %s: UTC retry time. */
+								__( 'Next automatic retry: %s UTC (on an admin or cron request).', 'xspeed' ),
+								gmdate( 'Y-m-d H:i:s', $sync['next_retry'] )
+							),
+						__( 'Run `wp xspeed objcache retry-sync` to retry now.', 'xspeed' ),
+					) ) ) );
+				}
+				if ( 'failed' === get_option( 'xspeed_oc_namespace_cleanup', '' ) ) {
+					\WP_CLI::warning( __( 'Redis namespace cleanup failed. After fixing Redis access, run `wp option update xspeed_oc_namespace_cleanup pending`.', 'xspeed' ) );
+				}
+				$reclaim = Object_Cache::reclaim_state();
+				if ( 'failed' === $reclaim['status'] ) {
+					/* translators: %s: Redis reclaim error. */
+					\WP_CLI::warning( sprintf( __( 'Deleting old Redis generations failed: %s. The next flush retries; `wp cron event schedule xspeed_oc_reclaim now && wp cron event run xspeed_oc_reclaim` retries now.', 'xspeed' ), $reclaim['error'] ) );
+				}
 				$d = Object_Cache::detect();
 				\WP_CLI::log( 'drop-in installed: ' . ( $d['drop_in_installed'] ? 'yes' : 'no' ) );
 				\WP_CLI::log( 'label:             ' . $d['drop_in_label'] );
 				\WP_CLI::log( 'backend:           ' . $d['backend'] );
 				\WP_CLI::log( 'ext object cache:  ' . ( $d['wp_cache_active'] ? 'yes' : 'no' ) );
+				if ( '' !== $reclaim['status'] ) {
+					\WP_CLI::log(
+						sprintf(
+							'old generations:   %s, %d keys deleted%s%s',
+							$reclaim['status'],
+							$reclaim['deleted'],
+							'' !== $reclaim['error'] ? ' (' . $reclaim['error'] . ')' : '',
+							$reclaim['updated'] ? ', ' . gmdate( 'Y-m-d H:i:s', (int) $reclaim['updated'] ) . ' UTC' : ''
+						)
+					);
+				}
 
 				// A backend that connects but refuses WRITES looks identical to
 				// a healthy one everywhere else -- that is the whole failure.
@@ -1063,6 +1225,10 @@ final class ObjectCacheModule extends Module {
 				// The row is what the next request's block was built from. (#398)
 				$after = \XSpeed\Settings_Manager::get_public( self::SLUG, true );
 				\WP_CLI::success( $key . ' = ' . self::scalar_for_display( $after[ $key ] ?? null ) );
+				return;
+			case 'retry-sync':
+				$result = self::retry_dropin();
+				$result['ok'] ? \WP_CLI::success( $result['message'] ) : \WP_CLI::error( $result['message'] );
 				return;
 			case 'flush':
 				$ok = Object_Cache::flush();

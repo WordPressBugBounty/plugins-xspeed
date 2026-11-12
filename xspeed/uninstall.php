@@ -62,6 +62,17 @@ function xspeed_uninstall_cleanup() {
 			$ids = get_sites( array( 'fields' => 'ids', 'number' => 100, 'offset' => $offset ) );
 			foreach ( $ids as $id ) {
 				delete_blog_option( $id, 'xspeed_edge_hold_health' );
+				delete_blog_option( $id, 'xspeed_oc_reclaim' );
+				delete_blog_option( $id, 'xspeed_oc_generation_drain' );
+				switch_to_blog( $id );
+				wp_unschedule_hook( 'xspeed_oc_reclaim' );
+				wp_unschedule_hook( 'xspeed_oc_generation_drain' );
+				restore_current_blog();
+				delete_blog_option( $id, 'xspeed_oc_dropin_synced' );
+				delete_blog_option( $id, 'xspeed_oc_sync_attempts' );
+				delete_blog_option( $id, 'xspeed_oc_sync_target' );
+				delete_blog_option( $id, 'xspeed_oc_sync_last_attempt' );
+				delete_blog_option( $id, 'xspeed_oc_sync_last_error' );
 				delete_blog_option( $id, 'xspeed_security_edge_pending' );
 				delete_blog_option( $id, 'xspeed_security_purge_attempt_1_4_3' );
 			}
@@ -84,6 +95,17 @@ function xspeed_uninstall_cleanup() {
 	delete_option( 'xspeed_oc_dropin_synced' );
 	delete_option( 'xspeed_oc_generation' );
 	delete_option( 'xspeed_oc_sync_attempts' );
+	delete_option( 'xspeed_oc_sync_target' );
+	delete_option( 'xspeed_oc_sync_last_attempt' );
+	delete_option( 'xspeed_oc_sync_last_error' );
+	delete_option( 'xspeed_oc_namespace_cleanup' );
+	delete_option( 'xspeed_oc_namespace_cleanup_attempts' );
+	delete_option( 'xspeed_oc_cleanup_queued_1_4_5' );
+	delete_option( 'xspeed_oc_reclaim_queued_1_4_6' );
+	delete_option( 'xspeed_oc_reclaim' );
+	delete_option( 'xspeed_oc_generation_drain' );
+	wp_unschedule_hook( 'xspeed_oc_reclaim' );
+	wp_unschedule_hook( 'xspeed_oc_generation_drain' );
 	delete_option( 'xspeed_last_mobile_separate' );
 	delete_option( 'xspeed_home_cache_verdict' );
 	delete_option( 'xspeed_last_tablet_split' );
@@ -199,6 +221,8 @@ function xspeed_uninstall_cleanup() {
 	wp_clear_scheduled_hook( 'xspeed_edge_mode_probe_refresh' );
 	delete_transient( 'xspeed_edge_mode_probe' );
 	delete_transient( 'xspeed_edge_mode_probe_token' );
+	// The CSS & JavaScript panel's list of pages async CSS left blocking.
+	delete_transient( 'xspeed_async_css_skips' );
 	// Our own WP Insights rows: the site id, the original URL, and the last
 	// payload — whose name embeds the site id. The payload names are
 	// derivable from the id, but a failed earlier uninstall or a renamed row

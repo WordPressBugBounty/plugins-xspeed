@@ -500,11 +500,7 @@ if ( ! function_exists( 'wp_cache_init' ) ) {
 	}
 
 	function wp_cache_add_multiple( array $data, $group = '', $expire = 0 ) {
-		$out = array();
-		foreach ( $data as $key => $value ) {
-			$out[ $key ] = wp_cache_add( $key, $value, $group, $expire );
-		}
-		return $out;
+		return $GLOBALS['wp_object_cache']->add_multiple( $data, $group, (int) $expire );
 	}
 
 	function wp_cache_replace( $key, $data, $group = '', $expire = 0 ) {
@@ -516,11 +512,7 @@ if ( ! function_exists( 'wp_cache_init' ) ) {
 	}
 
 	function wp_cache_set_multiple( array $data, $group = '', $expire = 0 ) {
-		$out = array();
-		foreach ( $data as $key => $value ) {
-			$out[ $key ] = wp_cache_set( $key, $value, $group, $expire );
-		}
-		return $out;
+		return $GLOBALS['wp_object_cache']->set_multiple( $data, $group, (int) $expire );
 	}
 
 	function wp_cache_get( $key, $group = '', $force = false, &$found = null ) {
@@ -536,11 +528,7 @@ if ( ! function_exists( 'wp_cache_init' ) ) {
 	}
 
 	function wp_cache_delete_multiple( array $keys, $group = '' ) {
-		$out = array();
-		foreach ( $keys as $key ) {
-			$out[ $key ] = wp_cache_delete( $key, $group );
-		}
-		return $out;
+		return $GLOBALS['wp_object_cache']->delete_multiple( $keys, $group );
 	}
 
 	function wp_cache_incr( $key, $offset = 1, $group = '' ) {
@@ -622,16 +610,34 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 		/** @var string Key salt / prefix. */
 		private $salt = '';
 
-		/** Option holding the Memcached generation floor (see generation_floor()). */
+		/** Option holding the generation floor (see generation_floor()). */
 		const GENERATION_OPTION = 'xspeed_oc_generation';
 
 		/**
-		 * @var int|null This site's namespace generation, resolved lazily once
-		 * per request. Advancing it is how Memcached flushes only this site's
-		 * keys — the daemon offers no way to enumerate or scope a real flush.
-		 * Null until first read; 1 means the original, unsuffixed key shape.
+		 * Suffix of the Redis generation counter, `{salt}:generation`. No key
+		 * shape a flush, sweep or cleanup deletes can match it: those all
+		 * need a digit or `g` plus digits after `{salt}:`.
+		 */
+		const REDIS_COUNTER_SUFFIX = ':generation';
+
+		/** Cron hook that deletes Redis keys from earlier generations. */
+		const RECLAIM_HOOK = 'xspeed_oc_reclaim';
+
+		/**
+		 * @var int|null Namespace generation, read once per request and
+		 * re-read whenever Redis reports that a flush moved it. Null until
+		 * first read. On Memcached, 1 uses the original key shape.
 		 */
 		private $generation = null;
+
+		/**
+		 * @var bool True when Redis would not store the counter this request
+		 *           seeded, so the generation is one no other request uses.
+		 */
+		private $generation_private = false;
+
+		/** @var bool True once this request has queued the reclaim event. */
+		private $reclaim_queued = false;
 
 		/**
 		 * @var int|null Lowest generation this site may use, mirrored in the
@@ -922,15 +928,39 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 			return '' === (string) $group ? 'default' : (string) $group;
 		}
 
+		/**
+		 * This request's id for a key, `{salt}:{blog}:{group}:{key}`. The
+		 * runtime cache is keyed by it; the backend key adds the generation
+		 * (see bid()), so a generation change seen mid-request leaves values
+		 * of non-persistent groups in place.
+		 */
 		private function full_key( $key, $group ) {
 			$group  = $this->group( $group );
 			$prefix = isset( $this->global_groups[ $group ] ) ? 0 : $this->blog_prefix;
-			$gen    = $this->generation();
-			// Generation 1 keeps the historical key shape, so Redis (which
-			// flushes by pattern and never advances the generation) is
-			// byte-identical to before and existing entries stay readable.
-			$ns = 1 === $gen ? $this->salt : $this->salt . '.g' . $gen;
-			return $ns . ':' . $prefix . ':' . $group . ':' . $key;
+			return $this->salt . ':' . $prefix . ':' . $group . ':' . $key;
+		}
+
+		/**
+		 * The backend key for a runtime id.
+		 *
+		 * Redis: `{salt}:g{n}:{blog}:{group}:{key}` for every generation, so
+		 * a flush only has to move the counter (#801). The `g` keeps these
+		 * apart from the flat `{salt}:{blog}:` keys earlier versions wrote,
+		 * and from a neighbour whose salt ends in `:<digits>`.
+		 *
+		 * Memcached: generation 1 keeps the historical shape, later ones are
+		 * `{salt}.g{n}:...`.
+		 *
+		 * @param string $id Runtime id from full_key().
+		 * @return string
+		 */
+		private function bid( $id ) {
+			$gen  = $this->generation();
+			$rest = (string) substr( $id, strlen( $this->salt ) );
+			if ( 'redis' === $this->backend ) {
+				return $this->salt . ':g' . $gen . $rest;
+			}
+			return 1 === $gen ? $id : $this->salt . '.g' . $gen . $rest;
 		}
 
 		private function is_persistent_group( $group ) {
@@ -962,7 +992,7 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 						$data = clone $data;
 					}
 					$payload = maybe_serialize( $data );
-					$stored  = $this->conn->add( $id, $payload, (int) $expire );
+					$stored  = $this->backend_add( $id, $payload, (int) $expire );
 					if ( ! $stored ) {
 						return false; // key already exists in the backend.
 					}
@@ -998,11 +1028,17 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 				try {
 					$payload = maybe_serialize( $data );
 					if ( 'redis' === $this->backend ) {
-						$stored = $expire > 0
-							? (bool) $this->conn->setex( $id, (int) $expire, $payload )
-							: (bool) $this->conn->set( $id, $payload );
+						// Preserve the bundled client's rejection of null payloads.
+						if ( null === $payload && 'builtin' === $this->client ) {
+							throw new \TypeError( 'Redis payload must be a string' );
+						}
+						$cmd     = $expire > 0
+							? array( 'SETEX', $this->bid( $id ), (string) (int) $expire, $payload )
+							: array( 'SET', $this->bid( $id ), $payload );
+						$replies = $this->redis_write( array( $cmd ), array( $id ) );
+						$stored  = is_array( $replies ) && true === $replies[0];
 					} else {
-						$stored = (bool) $this->conn->set( $id, $payload, (int) $expire );
+						$stored = (bool) $this->conn->set( $this->bid( $id ), $payload, (int) $expire );
 					}
 				} catch ( \Throwable $e ) {
 					$threw = true;
@@ -1053,7 +1089,12 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 
 			if ( $this->is_persistent_group( $group ) ) {
 				try {
-					$raw = $this->conn->get( $id );
+					if ( 'redis' === $this->backend ) {
+						$raw = $this->redis_read( array( $id ) );
+						$raw = $raw[ $id ] ?? false;
+					} else {
+						$raw = $this->conn->get( $this->bid( $id ) );
+					}
 					if ( false !== $raw && null !== $raw ) {
 						$val                = maybe_unserialize( $raw );
 						$this->cache[ $id ] = $val;
@@ -1071,10 +1112,207 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 			return false;
 		}
 
+		/**
+		 * Read several keys: the ones already in this request's cache are
+		 * served locally, the rest come back in one MGET / getMulti instead
+		 * of a round trip each. WordPress primes posts, meta and terms this
+		 * way, so a page asks for hundreds of keys in a handful of calls.
+		 * (#800)
+		 */
 		public function get_multiple( $keys, $group = 'default', $force = false ) {
-			$out = array();
+			$out     = array();
+			$missing = array(); // full id => caller's key.
+
 			foreach ( (array) $keys as $key ) {
-				$out[ $key ] = $this->get( $key, $group, $force );
+				$id = $this->full_key( $key, $group );
+				if ( ! $force && isset( $this->cache[ $id ] ) ) {
+					++$this->cache_hits;
+					$val         = $this->cache[ $id ];
+					$out[ $key ] = is_object( $val ) ? clone $val : $val;
+					continue;
+				}
+				$out[ $key ]    = false;
+				$missing[ $id ] = $key;
+			}
+
+			if ( ! empty( $missing ) && $this->is_persistent_group( $group ) ) {
+				try {
+					$raw = $this->backend_get_multi( array_keys( $missing ) );
+				} catch ( \Throwable $e ) {
+					$raw = array(); // Backend trouble reads as misses.
+				}
+				foreach ( $raw as $id => $value ) {
+					if ( ! isset( $missing[ $id ] ) || false === $value || null === $value ) {
+						continue;
+					}
+					$val                = maybe_unserialize( $value );
+					$this->cache[ $id ] = $val;
+					++$this->cache_hits;
+					$out[ $missing[ $id ] ] = is_object( $val ) ? clone $val : $val;
+					unset( $missing[ $id ] );
+				}
+			}
+
+			$this->cache_misses += count( $missing );
+			return $out;
+		}
+
+		/**
+		 * Store several values with one pipelined round trip on Redis (one
+		 * setMulti on ext-memcached). The runtime cache takes every value.
+		 * A key the backend refused is reported false and evicted so no
+		 * reader gets the previous value.
+		 */
+		public function set_multiple( array $data, $group = 'default', $expire = 0 ) {
+			if ( ! $this->is_persistent_group( $group ) ) {
+				$out = array();
+				foreach ( $data as $key => $value ) {
+					$out[ $key ] = $this->set( $key, $value, $group, $expire );
+				}
+				return $out;
+			}
+
+			$out         = array();
+			$payloads    = array();
+			$caller_keys = array();
+			foreach ( $data as $key => $value ) {
+				// Preserve the client's single-key handling of null payloads.
+				if ( null === $value && 'redis' === $this->backend ) {
+					$out[ $key ] = $this->set( $key, $value, $group, $expire );
+					continue;
+				}
+				$id = $this->full_key( $key, $group );
+				if ( is_object( $value ) ) {
+					$value = clone $value;
+				}
+				$this->cache[ $id ] = $value;
+				$payloads[ $id ]    = maybe_serialize( $value );
+				$caller_keys[ $id ] = $key;
+				$out[ $key ]        = true;
+			}
+
+			if ( empty( $payloads ) ) {
+				return $out;
+			}
+
+			try {
+				$failed = $this->backend_set_multi( $payloads, (int) $expire );
+			} catch ( \Throwable $e ) {
+				$failed = $this->backend_set_individual( $payloads, (int) $expire );
+			}
+			if ( ! empty( $failed ) ) {
+				foreach ( $failed as $id ) {
+					$out[ $caller_keys[ $id ] ] = false;
+				}
+				// See set(): the backend may still hold the previous value.
+				foreach ( $failed as $id ) {
+					try {
+						$this->backend_delete( $id );
+					} catch ( \Throwable $e ) {
+						break; // Backend fully down, so reads fail too.
+					}
+				}
+				$this->degraded = true;
+			}
+			return $out;
+		}
+
+		/**
+		 * Add several values: SET NX for each key, pipelined into one round
+		 * trip on Redis. A key already present, in this request or in the
+		 * backend, is left alone and reported false, exactly as add() does.
+		 */
+		public function add_multiple( array $data, $group = 'default', $expire = 0 ) {
+			$out = array();
+			if ( wp_suspend_cache_addition() ) {
+				foreach ( $data as $key => $unused ) {
+					$out[ $key ] = false;
+				}
+				return $out;
+			}
+			if ( 'redis' !== $this->backend || ! $this->conn || ! $this->is_persistent_group( $group ) ) {
+				foreach ( $data as $key => $value ) {
+					$out[ $key ] = $this->add( $key, $value, $group, $expire );
+				}
+				return $out;
+			}
+
+			$pending = array(); // full id => array( key, value ).
+			foreach ( $data as $key => $value ) {
+				if ( null === $value ) {
+					$out[ $key ] = $this->add( $key, $value, $group, $expire );
+					continue;
+				}
+				$id = $this->full_key( $key, $group );
+				if ( isset( $this->cache[ $id ] ) || isset( $pending[ $id ] ) ) {
+					$out[ $key ] = false;
+					continue;
+				}
+				if ( is_object( $value ) ) {
+					$value = clone $value;
+				}
+				$pending[ $id ] = array( $key, $value );
+				$out[ $key ]    = false;
+			}
+			if ( empty( $pending ) ) {
+				return $out;
+			}
+
+			$commands = array();
+			foreach ( $pending as $id => $entry ) {
+				$commands[ $id ] = maybe_serialize( $entry[1] );
+			}
+			try {
+				$stored = $this->redis_add_multi( $commands, (int) $expire );
+			} catch ( \Throwable $e ) {
+				$stored = null;
+			}
+			if ( null === $stored ) {
+				// The pipeline failed as a whole: fall back to add() per key,
+				// which has its own runtime-only path for a dead backend.
+				foreach ( $pending as $entry ) {
+					$out[ $entry[0] ] = $this->add( $entry[0], $entry[1], $group, $expire );
+				}
+				return $out;
+			}
+			foreach ( $pending as $id => $entry ) {
+				if ( ! empty( $stored[ $id ] ) ) {
+					$this->cache[ $id ] = $entry[1];
+					$out[ $entry[0] ]   = true;
+				}
+			}
+			return $out;
+		}
+
+		/**
+		 * Delete several keys, pipelined into one round trip on Redis.
+		 */
+		public function delete_multiple( array $keys, $group = 'default' ) {
+			if ( count( $keys ) < 2 || 'redis' !== $this->backend || ! $this->conn || ! $this->is_persistent_group( $group ) ) {
+				$out = array();
+				foreach ( $keys as $key ) {
+					$out[ $key ] = $this->delete( $key, $group );
+				}
+				return $out;
+			}
+
+			$ids = array();
+			foreach ( $keys as $key ) {
+				$id = $this->full_key( $key, $group );
+				unset( $this->cache[ $id ] );
+				$ids[ $id ] = $key;
+			}
+			$out = array();
+			try {
+				$replies = $this->redis_delete_multi( array_keys( $ids ) );
+			} catch ( \Throwable $e ) {
+				$replies = false;
+			}
+			$i = 0;
+			foreach ( $ids as $key ) {
+				// A dead backend reports true, like delete() does.
+				$out[ $key ] = is_array( $replies ) ? (bool) ( $replies[ $i ] ?? false ) : true;
+				++$i;
 			}
 			return $out;
 		}
@@ -1133,12 +1371,32 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 			return $val;
 		}
 
+		/** @var string Normalized failure code for the last flush in this request. */
+		private $flush_failure = '';
+
+		public function flush_failure_reason(): string {
+			return $this->flush_failure ?: 'failed';
+		}
+
+		private function record_flush_failure( string $message ): void {
+			$this->flush_failure = preg_match( '/NOPERM|permission(?:s)?[ -]denied/i', $message ) ? 'permission_denied' : 'failed';
+		}
+
 		public function flush() {
+			$this->flush_failure = '';
 			$this->cache = array();
-			if ( $this->persistent ) {
+			if ( $this->persistent && $this->conn ) {
 				try {
-					return (bool) $this->backend_flush( );
+					if ( method_exists( $this->conn, 'clearLastError' ) ) {
+						$this->conn->clearLastError();
+					}
+					$ok = (bool) $this->backend_flush();
+					if ( ! $ok && '' === $this->flush_failure && method_exists( $this->conn, 'getLastError' ) ) {
+						$this->record_flush_failure( (string) $this->conn->getLastError() );
+					}
+					return $ok;
 				} catch ( \Throwable $e ) {
+					$this->record_flush_failure( $e->getMessage() );
 					return false;
 				}
 			}
@@ -1152,103 +1410,742 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 
 		private function backend_delete( $id ) {
 			if ( 'redis' === $this->backend ) {
-				return $this->conn->del( $id );
+				$replies = $this->redis_write( array( array( 'DEL', $this->bid( $id ) ) ), array( $id ) );
+				return is_array( $replies ) ? $replies[0] : false;
 			}
-			return $this->conn->delete( $id );
+			return $this->conn->delete( $this->bid( $id ) );
+		}
+
+		/**
+		 * Atomic add: store only when the key is absent. phpredis has no
+		 * add() method, so Redis takes SET with the NX option; calling add()
+		 * on phpredis threw, and the catch in add() fell through to a plain
+		 * set() that overwrote whatever another process had stored.
+		 */
+		private function backend_add( $id, $payload, $expire ) {
+			if ( 'redis' === $this->backend ) {
+				if ( null === $payload && 'builtin' === $this->client ) {
+					throw new \TypeError( 'Redis payload must be a string' );
+				}
+				$replies = $this->redis_write( array( $this->redis_set_nx_command( $this->bid( $id ), $payload, $expire ) ), array( $id ), true );
+				return is_array( $replies ) && true === $replies[0];
+			}
+			return (bool) $this->conn->add( $this->bid( $id ), $payload, (int) $expire );
+		}
+
+		/**
+		 * Read several ids in one round trip where the client can.
+		 *
+		 * @param string[] $ids Runtime ids.
+		 * @return array<string,mixed> Raw values keyed by runtime id; misses
+		 *                             may be absent or false.
+		 */
+		private function backend_get_multi( array $ids ) {
+			if ( 'redis' === $this->backend ) {
+				return $this->redis_read( $ids );
+			}
+			$map = array();
+			foreach ( $ids as $id ) {
+				$map[ $this->bid( $id ) ] = $id;
+			}
+			if ( 'ext-memcached' === $this->client ) {
+				$vals = $this->conn->getMulti( array_keys( $map ) );
+			} elseif ( 'builtin-memcached' === $this->client && method_exists( $this->conn, 'get_multi' ) ) {
+				$vals = $this->conn->get_multi( array_keys( $map ) );
+			} else {
+				$vals = array();
+				foreach ( $map as $bid => $unused ) {
+					$vals[ $bid ] = $this->conn->get( $bid );
+				}
+			}
+			$out = array();
+			foreach ( is_array( $vals ) ? $vals : array() as $bid => $value ) {
+				if ( isset( $map[ $bid ] ) ) {
+					$out[ $map[ $bid ] ] = $value;
+				}
+			}
+			return $out;
+		}
+
+		/**
+		 * Store several payloads, batched where the client can.
+		 *
+		 * @param array<string,string> $payloads Serialized values keyed by runtime id.
+		 * @param int                  $expire   TTL in seconds, 0 for none.
+		 * @return string[] Runtime ids the backend did not store.
+		 */
+		private function backend_set_multi( array $payloads, $expire ) {
+			$failed = array();
+
+			if ( 'redis' === $this->backend ) {
+				$commands = array();
+				foreach ( $payloads as $id => $payload ) {
+					$commands[] = $expire > 0
+						? array( 'SETEX', $this->bid( $id ), (string) $expire, $payload )
+						: array( 'SET', $this->bid( $id ), $payload );
+				}
+				$replies = $this->redis_write( $commands, array_keys( $payloads ) );
+				$i       = 0;
+				foreach ( $payloads as $id => $unused ) {
+					if ( ! is_array( $replies ) || true !== $replies[ $i ] ) {
+						$failed[] = $id;
+					}
+					++$i;
+				}
+				return $failed;
+			}
+
+			$map = array();
+			foreach ( $payloads as $id => $payload ) {
+				$map[ $this->bid( $id ) ] = $id;
+			}
+			if ( 'ext-memcached' === $this->client && $this->conn->setMulti( array_combine( array_keys( $map ), array_values( $payloads ) ), $expire ) ) {
+				return array();
+			}
+
+			// No batch primitive, or setMulti refused something (an item over
+			// the size limit fails the whole call): store one by one to learn
+			// which keys did not make it.
+			return $this->backend_set_individual( $payloads, $expire );
+		}
+
+		/** Isolate payload errors so one refused value cannot erase its neighbors. */
+		private function backend_set_individual( array $payloads, $expire ) {
+			$failed = array();
+			$disconnected = false;
+			foreach ( $payloads as $id => $payload ) {
+				if ( $disconnected ) {
+					$failed[] = $id;
+					continue;
+				}
+				try {
+					if ( 'redis' === $this->backend ) {
+						$cmd = $expire > 0
+							? array( 'SETEX', $this->bid( $id ), (string) $expire, $payload )
+							: array( 'SET', $this->bid( $id ), $payload );
+						$replies = $this->redis_write( array( $cmd ), array( $id ) );
+						$ok = is_array( $replies ) && true === $replies[0];
+						$disconnected = false === $replies;
+					} else {
+						$ok = $this->conn->set( $this->bid( $id ), $payload, $expire );
+					}
+				} catch ( \Throwable $e ) {
+					$ok = false;
+					// Only payload errors leave the connection safe to retry.
+					$disconnected = ! $e instanceof \TypeError && ! $e instanceof \ValueError;
+				}
+				if ( ! $ok ) {
+					$failed[] = $id;
+				}
+			}
+			return $failed;
+		}
+
+		/**
+		 * SET NX for several ids in one Redis round trip.
+		 *
+		 * @param array<string,string> $payloads Serialized values keyed by runtime id.
+		 * @param int                  $expire   TTL in seconds, 0 for none.
+		 * @return array<string,bool>|null Stored flag per runtime id, or null
+		 *                                 when the pipeline failed.
+		 */
+		private function redis_add_multi( array $payloads, $expire ) {
+			$commands = array();
+			foreach ( $payloads as $id => $payload ) {
+				$commands[] = $this->redis_set_nx_command( $this->bid( $id ), $payload, $expire );
+			}
+			$replies = $this->redis_write( $commands, array_keys( $payloads ), true );
+			if ( ! is_array( $replies ) ) {
+				return null;
+			}
+			$stored = array();
+			$i      = 0;
+			foreach ( $payloads as $id => $unused ) {
+				$stored[ $id ] = true === $replies[ $i ];
+				++$i;
+			}
+			return $stored;
+		}
+
+		/**
+		 * DEL several ids in one Redis round trip, one reply per id.
+		 *
+		 * @param string[] $ids Runtime ids.
+		 * @return array|false Per-id delete counts, or false on failure.
+		 */
+		private function redis_delete_multi( array $ids ) {
+			$commands = array();
+			foreach ( $ids as $id ) {
+				$commands[] = array( 'DEL', $this->bid( $id ) );
+			}
+			return $this->redis_write( $commands, $ids );
 		}
 
 		private function backend_incr( $id, $offset ) {
 			if ( 'redis' === $this->backend ) {
-				return $this->conn->incrBy( $id, $offset );
+				$replies = $this->redis_write( array( array( 'INCRBY', $this->bid( $id ), (string) $offset ) ), array( $id ), true );
+				return is_array( $replies ) ? $replies[0] : false;
 			}
 			return 'builtin-memcached' === $this->client
-				? $this->conn->incr( $id, $offset )
-				: $this->conn->increment( $id, $offset );
+				? $this->conn->incr( $this->bid( $id ), $offset )
+				: $this->conn->increment( $this->bid( $id ), $offset );
 		}
 
 		private function backend_decr( $id, $offset ) {
 			if ( 'redis' === $this->backend ) {
-				return $this->conn->decrBy( $id, $offset );
+				$replies = $this->redis_write( array( array( 'DECRBY', $this->bid( $id ), (string) $offset ) ), array( $id ), true );
+				return is_array( $replies ) ? $replies[0] : false;
 			}
 			return 'builtin-memcached' === $this->client
-				? $this->conn->decr( $id, $offset )
-				: $this->conn->decrement( $id, $offset );
+				? $this->conn->decr( $this->bid( $id ), $offset )
+				: $this->conn->decrement( $this->bid( $id ), $offset );
 		}
 
+		// --- Redis generation checks -----------------------------------
+		// A Redis flush only moves the generation counter (#801), so a
+		// request that resolved its generation before another request
+		// flushed would keep reading and writing the dead one. Every read
+		// and write therefore carries a read of the counter in the same
+		// round trip, and the request follows the counter when it moved.
+
+		/**
+		 * Read ids with one MGET that also fetches the generation counter.
+		 * When the counter moved, the request adopts it and reads again
+		 * from the new generation.
+		 *
+		 * @param string[] $ids Runtime ids.
+		 * @return array<string,mixed> Raw values keyed by runtime id.
+		 */
+		private function redis_read( array $ids ) {
+			$ids  = array_values( $ids );
+			$vals = $this->redis_mget( $ids, true );
+			if ( ! is_array( $vals ) ) {
+				return array();
+			}
+			$counter = array_pop( $vals );
+			if ( $this->generation_moved( $counter ) ) {
+				$vals = $this->redis_mget( $ids, false );
+				if ( ! is_array( $vals ) ) {
+					return array();
+				}
+			}
+			return array_combine( $ids, $vals );
+		}
+
+		/**
+		 * MGET the backend keys for $ids, optionally followed by the counter.
+		 *
+		 * @return array|false Values in order, false on failure.
+		 */
+		private function redis_mget( array $ids, $with_counter ) {
+			$keys = array();
+			foreach ( $ids as $id ) {
+				$keys[] = $this->bid( $id );
+			}
+			if ( $with_counter ) {
+				$keys[] = $this->generation_key();
+			}
+			if ( method_exists( $this->conn, 'mget' ) ) {
+				$vals = $this->conn->mget( $keys );
+			} else {
+				$vals = array();
+				foreach ( $keys as $key ) {
+					$vals[] = $this->conn->get( $key );
+				}
+			}
+			return is_array( $vals ) && count( $vals ) === count( $keys ) ? array_values( $vals ) : false;
+		}
+
+		/**
+		 * Run Redis write commands in one round trip, followed by a read of
+		 * the generation counter.
+		 *
+		 * When the counter shows that another request flushed after this one
+		 * resolved its generation, the commands wrote to the dead generation.
+		 *
+		 * A plain write (SET, DEL) is not repeated in the new generation: this
+		 * request's value may come from a read made before the flush, and a
+		 * third request may already have cached an older database value
+		 * there. Those keys are deleted in the new generation instead, so the
+		 * next read goes to the database.
+		 *
+		 * An atomic write (SET NX, INCRBY, DECRBY) is run again in the new
+		 * generation and its replies replace the dead generation's. Deleting
+		 * there would drop a lock or counter another request holds, and the
+		 * dead generation's SET NX reply would report a lock nobody can see.
+		 * Atomic commands must be one per id, in the order of $ids.
+		 *
+		 * @param array    $commands Commands as array( NAME, key, ...args ).
+		 * @param string[] $ids      Runtime ids the commands touch.
+		 * @param bool     $atomic   True for SET NX, INCRBY and DECRBY.
+		 * @return array|false Normalised replies, one per command, or false
+		 *                     when the round trip failed.
+		 */
+		private function redis_write( array $commands, array $ids, $atomic = false ) {
+			$ids = array_values( $ids );
+			for ( $attempt = 1; ; ++$attempt ) {
+				$commands[] = array( 'GET', $this->generation_key() );
+				$replies    = $this->redis_pipeline( $commands );
+				array_pop( $commands );
+				if ( ! is_array( $replies ) ) {
+					return false;
+				}
+				$counter = array_pop( $replies );
+				if ( empty( $ids ) || ! $this->generation_moved( $counter ) ) {
+					return $replies;
+				}
+				if ( ! $atomic ) {
+					$deletes = array();
+					foreach ( $ids as $id ) {
+						$deletes[] = array( 'DEL', $this->bid( $id ) );
+					}
+					try {
+						$deleted = $this->redis_pipeline( $deletes );
+					} catch ( \Throwable $e ) {
+						// A fallback write would revive values read before the flush.
+						return false;
+					}
+					if ( ! is_array( $deleted ) || count( $deleted ) !== count( $ids ) ) {
+						return false;
+					}
+					foreach ( $deleted as $result ) {
+						if ( ! is_int( $result ) || $result < 0 ) {
+							return false;
+						}
+					}
+					return $replies;
+				}
+				if ( $attempt >= 3 ) {
+					// Flushes keep landing between attempts: report nothing
+					// stored rather than a result from a dead generation.
+					return array_fill( 0, count( $replies ), false );
+				}
+				foreach ( $commands as $i => $cmd ) {
+					$commands[ $i ][1] = $this->bid( $ids[ $i ] );
+				}
+			}
+		}
+
+		/**
+		 * Follow a counter value read from Redis.
+		 *
+		 * @param mixed $value Counter reply.
+		 * @return bool True when the generation changed.
+		 */
+		private function adopt_generation( $value ) {
+			if ( ! $this->is_generation_value( $value ) || (int) $value === $this->generation ) {
+				return false;
+			}
+			$this->generation         = (int) $value;
+			$this->generation_private = false;
+			return true;
+		}
+
+		/**
+		 * Check a counter reply fetched beside a read or write, and switch to
+		 * the counter's generation when it differs from this request's.
+		 *
+		 * A missing counter (evicted, or deleted by a disable) proves
+		 * nothing: another request may have flushed before it went, and the
+		 * retired generation's values stay in Redis until the reclaim. So the
+		 * request resolves the counter again, which seeds a new one above
+		 * every earlier generation. When Redis would not store this request's
+		 * seed, the generation is already one nobody else writes to and
+		 * there is nothing to check.
+		 *
+		 * @param mixed $value Counter reply.
+		 * @return bool True when the generation changed.
+		 */
+		private function generation_moved( $value ) {
+			if ( $this->is_generation_value( $value ) ) {
+				return $this->adopt_generation( $value );
+			}
+			if ( $this->generation_private ) {
+				return false;
+			}
+			$fresh = $this->resolve_redis_generation();
+			if ( $fresh === $this->generation ) {
+				return false;
+			}
+			$this->generation = $fresh;
+			return true;
+		}
+
+		/**
+		 * Read the counter now and follow it, for an operation that must act
+		 * on the current generation rather than the one this request saw
+		 * first.
+		 *
+		 * @return int The current generation.
+		 */
+		private function refresh_generation() {
+			$gen = $this->generation();
+			try {
+				$this->generation_moved( $this->conn->get( $this->generation_key() ) );
+			} catch ( \Throwable $e ) {
+				unset( $e );
+			}
+			return null === $this->generation ? $gen : $this->generation;
+		}
+
+		/** @param mixed $value */
+		private function is_generation_value( $value ) {
+			return ( is_int( $value ) && $value > 0 ) || ( is_string( $value ) && '' !== $value && ctype_digit( $value ) && (int) $value > 0 );
+		}
+
+		/** SET NX command, with a TTL when $expire is positive. */
+		private function redis_set_nx_command( $key, $payload, $expire ) {
+			$cmd = array( 'SET', $key, $payload, 'NX' );
+			if ( $expire > 0 ) {
+				$cmd[] = 'EX';
+				$cmd[] = (string) (int) $expire;
+			}
+			return $cmd;
+		}
+
+		/**
+		 * Send commands to Redis in one round trip on either client and
+		 * normalise the replies: true/false for SET and SETEX, an int (or
+		 * false on an error reply) for DEL, INCRBY and DECRBY, and the value
+		 * or false for GET.
+		 *
+		 * @param array $commands Commands as array( NAME, key, ...args ).
+		 * @return array|false Replies in order, or false when the round trip failed.
+		 */
+		private function redis_pipeline( array $commands ) {
+			$commands = array_values( $commands );
+			if ( 'phpredis' === $this->client ) {
+				$pipe = $this->conn->multi( \Redis::PIPELINE );
+				foreach ( $commands as $cmd ) {
+					$this->phpredis_queue( $pipe, $cmd );
+				}
+				$raw = $pipe->exec();
+			} elseif ( method_exists( $this->conn, 'pipeline' ) ) {
+				$raw = $this->conn->pipeline( $commands );
+			} else {
+				$raw = array();
+				foreach ( $commands as $cmd ) {
+					$raw[] = $this->redis_single( $cmd );
+				}
+			}
+			if ( ! is_array( $raw ) || count( $raw ) !== count( $commands ) ) {
+				return false;
+			}
+			$out = array();
+			foreach ( $commands as $i => $cmd ) {
+				$r = $raw[ $i ];
+				switch ( $cmd[0] ) {
+					case 'SET':
+					case 'SETEX':
+						$out[] = true === $r || 'OK' === $r || '+OK' === $r;
+						break;
+					case 'GET':
+						$out[] = null === $r ? false : $r;
+						break;
+					default:
+						$out[] = is_int( $r ) || ( is_string( $r ) && is_numeric( $r ) ) ? (int) $r : false;
+				}
+			}
+			return $out;
+		}
+
+		/** Queue one command on a phpredis pipeline. */
+		private function phpredis_queue( $pipe, array $cmd ) {
+			switch ( $cmd[0] ) {
+				case 'SET':
+					if ( isset( $cmd[3] ) ) {
+						$opts = isset( $cmd[5] ) ? array( 'nx', 'ex' => (int) $cmd[5] ) : array( 'nx' );
+						$pipe->set( $cmd[1], $cmd[2], $opts );
+					} else {
+						$pipe->set( $cmd[1], $cmd[2] );
+					}
+					break;
+				case 'SETEX':
+					$pipe->setex( $cmd[1], (int) $cmd[2], $cmd[3] );
+					break;
+				case 'DEL':
+					$pipe->del( $cmd[1] );
+					break;
+				case 'INCRBY':
+					$pipe->incrBy( $cmd[1], (int) $cmd[2] );
+					break;
+				case 'DECRBY':
+					$pipe->decrBy( $cmd[1], (int) $cmd[2] );
+					break;
+				default:
+					$pipe->get( $cmd[1] );
+			}
+		}
+
+		/** Run one command on a client that cannot pipeline. */
+		private function redis_single( array $cmd ) {
+			switch ( $cmd[0] ) {
+				case 'SET':
+					return isset( $cmd[3] )
+						? $this->conn->add( $cmd[1], $cmd[2], isset( $cmd[5] ) ? (int) $cmd[5] : 0 )
+						: $this->conn->set( $cmd[1], $cmd[2] );
+				case 'SETEX':
+					return $this->conn->setex( $cmd[1], (int) $cmd[2], $cmd[3] );
+				case 'DEL':
+					return $this->conn->del( $cmd[1] );
+				case 'INCRBY':
+					return $this->conn->incrBy( $cmd[1], (int) $cmd[2] );
+				case 'DECRBY':
+					return $this->conn->decrBy( $cmd[1], (int) $cmd[2] );
+				default:
+					return $this->conn->get( $cmd[1] );
+			}
+		}
+
+		/**
+		 * Flush persistent values.
+		 *
+		 * Redis advances the generation counter, so every key of the old
+		 * generation becomes unreachable in one command and a cron event
+		 * deletes them later (#801). Memcached advances its own counter the
+		 * same way and lets LRU drop the old keys.
+		 *
+		 * @return bool False when the flush could not be carried out.
+		 */
 		private function backend_flush() {
 			if ( 'redis' === $this->backend ) {
-				// Scope the flush to THIS site's namespace (salt:*) instead of
-				// FLUSHDB, which would wipe the entire Redis database —
-				// including other sites / apps sharing the same DB index.
-				// (FBS-83119)
-				//
-				// There is deliberately NO empty-salt fallback to FLUSHDB.
-				// xspeed_oc_salt() always returns a non-empty value, but a
-				// drop-in left over from an older version can still be the
-				// object loaded for the request that runs the upgrade
-				// migration — and that is exactly when a global flush would
-				// destroy a neighbouring site's cache. An unsalted pattern is
-				// scoped to nothing, so we bail rather than widen the blast
-				// radius.
+				// An empty salt cannot limit the flush to this site. (FBS-83119)
 				if ( '' === $this->salt ) {
 					return false;
 				}
-				return $this->delete_redis_pattern( $this->escape_glob( $this->salt ) . ':*' ) >= 0;
+				return $this->redis_flush();
 			}
 
-			// Memcached has no key enumeration, so flush_all() / flush() are
-			// unavoidably SERVER-WIDE — they wipe every other site and app on
-			// the same daemon. Bump this site's namespace generation instead:
-			// every key is built through it (see full_key()), so incrementing
-			// it orphans this site's entries and leaves everyone else's alone.
-			// The orphans expire on their own under Memcached's LRU.
+			// Memcached cannot enumerate keys. Advance this site's namespace
+			// so its values become unreachable without a server-wide flush.
 			return $this->bump_generation();
 		}
 
 		/**
+		 * Advance the Redis generation counter.
+		 *
+		 * INCRBY keeps concurrent flushes from overwriting each other. When
+		 * the counter came back at or below this request's generation, it was
+		 * evicted and recreated, so it is raised past both this request's
+		 * generation and the time-based seed. When Redis refuses the
+		 * increment (out of memory under noeviction, NOPERM, an error), the
+		 * flush deletes this site's keys instead and reports whether that
+		 * worked.
+		 *
+		 * @return bool
+		 */
+		private function redis_flush() {
+			$key     = $this->generation_key();
+			$current = $this->generation();
+			$new     = $this->redis_incr( $key, 1 );
+
+			if ( false !== $new && $new <= $current ) {
+				$target = max( $current + 1, $this->generation_seed() );
+				$new    = $this->redis_incr( $key, $target - $new );
+				if ( false === $new || $new <= $current ) {
+					// A counter that cannot be moved past this generation
+					// would hand other requests a generation that is still
+					// live. Remove it; the next reader seeds a fresh one.
+					try {
+						$this->conn->del( $key );
+					} catch ( \Throwable $e ) {
+						unset( $e );
+					}
+					$new = false;
+				}
+			}
+
+			if ( false === $new ) {
+				return $this->redis_flush_by_delete();
+			}
+
+			$this->generation         = $new;
+			$this->generation_private = false;
+			$this->persist_generation_floor( $new );
+			$this->queue_reclaim();
+			return true;
+		}
+
+		/**
+		 * Delete every key this site owns in every generation, for when the
+		 * counter cannot be moved. Covers the current `{salt}:g{n}:{blog}:`
+		 * shape, the flat `{salt}:{blog}:` shape of 1.4.4 and earlier, and the
+		 * `{salt}|g{n}:` keys and `{salt}.xspeed-oc-gen` counter of the build
+		 * QA tested before #813. The lookaheads keep a neighbouring salt such
+		 * as `{salt}:3` or `{salt}:g5:3` out of the match. The counter itself
+		 * is kept.
+		 *
+		 * @return bool True only when every matching key was deleted.
+		 */
+		private function redis_flush_by_delete() {
+			$salt = preg_quote( $this->salt, '/' );
+			return -1 !== $this->delete_redis_pattern(
+				$this->escape_glob( $this->salt ) . '*',
+				'/\A' . $salt . '(?::g[0-9]+:[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|:[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|\|g[0-9]+:[0-9]+:|\.xspeed-oc-gen\z)/'
+			);
+		}
+
+		/**
+		 * INCRBY on the connected Redis client.
+		 *
+		 * @return int|false The new value, or false when Redis refused.
+		 */
+		private function redis_incr( $key, $by ) {
+			try {
+				$new = $this->redis_single( array( 'INCRBY', $key, (string) (int) $by ) );
+			} catch ( \Throwable $e ) {
+				return false;
+			}
+			return is_int( $new ) || ( is_string( $new ) && is_numeric( $new ) ) ? (int) $new : false;
+		}
+
+		/**
+		 * Value for a new Redis counter: the current time in milliseconds,
+		 * and never below the database floor. Either guard alone stops an
+		 * evicted counter from coming back at a generation an earlier flush
+		 * already retired: the floor holds even if the clock went back, and
+		 * the clock holds even if a floor write was lost.
+		 *
+		 * @return int
+		 */
+		private function generation_seed() {
+			return max( $this->generation_floor() + 1, (int) floor( microtime( true ) * 1000 ) );
+		}
+
+		/**
+		 * Read or create the Redis generation counter for this request.
+		 *
+		 * A missing counter (never created, evicted, deleted by a disable) is
+		 * seeded with SET NX, so concurrent requests agree on one value. The
+		 * database floor is read only here and on a flush, so a normal request
+		 * adds no query.
+		 *
+		 * @return int
+		 */
+		private function resolve_redis_generation() {
+			$key = $this->generation_key();
+			try {
+				$this->generation_private = false;
+				$val                      = $this->conn->get( $key );
+				if ( $this->is_generation_value( $val ) ) {
+					return (int) $val;
+				}
+				$seed    = $this->generation_seed();
+				$replies = $this->redis_pipeline(
+					array(
+						array( 'SET', $key, (string) $seed, 'NX' ),
+						array( 'GET', $key ),
+					)
+				);
+				if ( is_array( $replies ) && $this->is_generation_value( $replies[1] ) ) {
+					return (int) $replies[1];
+				}
+				$this->generation_private = true;
+				return $seed;
+			} catch ( \Throwable $e ) {
+				// Unreadable counter: a fresh generation nobody else uses
+				// misses every read, which is safe, where guessing an old one
+				// could serve values a flush retired.
+				$this->generation_private = true;
+				return $this->generation_seed();
+			}
+		}
+
+		/**
+		 * Schedule the reclaim event at the end of the request. Once per
+		 * request, however many times it flushed.
+		 */
+		private function queue_reclaim() {
+			if ( $this->reclaim_queued || ! function_exists( 'add_action' ) ) {
+				return;
+			}
+			$this->reclaim_queued = true;
+			add_action( 'shutdown', array( $this, 'schedule_reclaim' ) );
+		}
+
+		/**
+		 * Schedule the plugin's reclaim of old Redis generations, unless one
+		 * is already pending. The event carries no arguments, so
+		 * wp_next_scheduled() sees an event queued by any earlier flush.
+		 *
+		 * @return void
+		 */
+		public function schedule_reclaim() {
+			if ( ! function_exists( 'wp_next_scheduled' ) || ! function_exists( 'wp_schedule_single_event' ) ) {
+				return;
+			}
+			// Disabling Object Cache flushes, then removes this file in the same request.
+			if ( defined( 'WP_CONTENT_DIR' ) && ! file_exists( WP_CONTENT_DIR . '/object-cache.php' ) ) {
+				return;
+			}
+			try {
+				if ( ! wp_next_scheduled( self::RECLAIM_HOOK ) ) {
+					wp_schedule_single_event( time() + 30, self::RECLAIM_HOOK );
+				}
+			} catch ( \Throwable $e ) {
+				// The keys stay unreachable either way; the next flush retries.
+				unset( $e );
+			}
+		}
+
+		/**
 		 * Advance this site's namespace generation, invalidating every key
-		 * built from it. Used as the Memcached flush primitive.
+		 * built from it in Memcached.
 		 *
 		 * @return bool
 		 */
 		private function bump_generation() {
-			$key = $this->generation_key();
-			$new = null;
+			$key     = $this->generation_key();
+			$current = $this->generation();
+			$new     = $this->increment_counter( $key, 1 );
 
-			try {
-				$new = 'builtin-memcached' === $this->client
-					? $this->conn->incr( $key, 1 )
-					: $this->conn->increment( $key, 1 );
-			} catch ( \Throwable $e ) {
-				$new = false;
+			// Memcached refuses to increment a counter that does not exist,
+			// either never seeded or evicted under LRU. Seed it with add(),
+			// which only succeeds when the key is still absent; losing that
+			// race means another request created it, so increment again.
+			if ( false === $new ) {
+				try {
+					// A string: the bundled client types this parameter.
+					$seeded = $this->conn->add( $key, (string) ( $current + 1 ), 0 );
+				} catch ( \Throwable $e ) {
+					$seeded = false;
+				}
+				$new = $seeded ? $current + 1 : $this->increment_counter( $key, 1 );
 			}
 
-			// increment() fails when the counter does not exist — either it was
-			// never seeded, or the daemon evicted it under LRU. Either way,
-			// resuming from the CURRENT generation is what matters: seeding
-			// back to a low number could land on a generation this site used
-			// before and resurrect the keys this flush is meant to clear.
-			// Jumping forward from the generation we resolved for this request
-			// keeps the namespace monotonic across an eviction.
-			if ( false === $new || null === $new ) {
-				$next = $this->generation() + 1;
-				try {
-					// Store as a string: the bundled Memcached_Client types
-					// this parameter `string`, and Memcached stores scalars as
-					// strings regardless. (This file has no strict_types — it
-					// must load standalone — so an int would be coerced rather
-					// than rejected, but passing the right type keeps the two
-					// clients behaving identically.)
-					$this->conn->set( $key, (string) $next, 0 );
-					$new = $next;
-				} catch ( \Throwable $e ) {
-					return false;
-				}
+			// A re-seeded counter may be below the database floor. Increment
+			// by the difference so a concurrent flush is never overwritten.
+			if ( false !== $new && $new <= $current ) {
+				$new = $this->increment_counter( $key, $current + 1 - $new );
+			}
+
+			if ( false === $new || $new <= $current ) {
+				return false;
 			}
 
 			$this->generation = (int) $new;
 			$this->persist_generation_floor( $this->generation );
 			return true;
+		}
+
+		/**
+		 * Atomically add to a counter on whichever client is connected.
+		 *
+		 * @param string $key Counter key.
+		 * @param int    $by  Amount to add.
+		 * @return int|false The new value, or false when the counter write fails.
+		 */
+		private function increment_counter( $key, $by ) {
+			try {
+				if ( 'builtin-memcached' === $this->client ) {
+					$new = $this->conn->incr( $key, $by );
+				} else {
+					$new = $this->conn->increment( $key, $by );
+				}
+			} catch ( \Throwable $e ) {
+				return false;
+			}
+			return is_numeric( $new ) ? (int) $new : false;
 		}
 
 		/**
@@ -1258,28 +2155,14 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 		 * @return string
 		 */
 		private function generation_key() {
-			// Deliberately OUTSIDE the `{salt}:` namespace: Redis flushes by
-			// deleting everything matching `{salt}:*`, which would otherwise
-			// sweep away this invalidation marker if a site were reconfigured
-			// from memcached to redis and back.
+			if ( 'redis' === $this->backend ) {
+				return $this->salt . self::REDIS_COUNTER_SUFFIX;
+			}
+			// Memcached keeps the key it has always used, so an upgrade does
+			// not lose the generation a site is on.
 			return $this->salt . '.xspeed-oc-gen';
 		}
 
-		/**
-		 * The lowest generation this site may use, read from the database.
-		 *
-		 * Memcached can evict the counter at any time; the database cannot, so
-		 * this is what stops an eviction from silently rewinding the namespace
-		 * and resurrecting keys a Purge already cleared.
-		 *
-		 * Read straight through $wpdb rather than get_option(), because the
-		 * options API routes through this very cache and would recurse. Returns
-		 * 1 whenever the database is not available yet — the drop-in loads
-		 * before $wpdb exists, and on those early requests nothing has been
-		 * flushed anyway.
-		 *
-		 * @return int
-		 */
 		/**
 		 * The options table holding the generation floor, or '' when the
 		 * database cannot be queried yet.
@@ -1316,6 +2199,22 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 			return isset( $wpdb->options ) ? (string) $wpdb->options : '';
 		}
 
+		/**
+		 * The lowest generation this site may use, read from the database.
+		 *
+		 * The counter lives in the cache it namespaces, and either backend
+		 * can evict it; the database cannot, so this is what stops an
+		 * eviction from rewinding the namespace and resurrecting keys a Purge
+		 * already cleared.
+		 *
+		 * Read straight through $wpdb rather than get_option(), because the
+		 * options API routes through this very cache and would recurse. Returns
+		 * 1 whenever the database is not available yet; the drop-in loads
+		 * before $wpdb exists, and on those early requests nothing has been
+		 * flushed anyway.
+		 *
+		 * @return int
+		 */
 		private function generation_floor() {
 			if ( null !== $this->generation_floor ) {
 				return $this->generation_floor;
@@ -1323,7 +2222,7 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 
 			$this->generation_floor = 1;
 
-			if ( 'memcached' !== $this->backend || ! isset( $GLOBALS['wpdb'] ) ) {
+			if ( ! isset( $GLOBALS['wpdb'] ) ) {
 				return $this->generation_floor;
 			}
 
@@ -1354,11 +2253,14 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 		 * Persist the generation as the new floor, so an eviction of the cached
 		 * counter cannot rewind past it.
 		 *
+		 * The upsert only ever raises the stored value: two flushes finishing
+		 * out of order must not leave the lower generation as the floor.
+		 *
 		 * @param int $generation The generation just written.
 		 * @return void
 		 */
 		private function persist_generation_floor( $generation ) {
-			if ( 'memcached' !== $this->backend || ! isset( $GLOBALS['wpdb'] ) ) {
+			if ( ! isset( $GLOBALS['wpdb'] ) ) {
 				return;
 			}
 
@@ -1375,15 +2277,16 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 					$wpdb->prepare(
 						"INSERT INTO {$table} (option_name, option_value, autoload)
 						 VALUES (%s, %s, 'no')
-						 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is derived from $wpdb, never user input.
+						 ON DUPLICATE KEY UPDATE option_value = IF( CAST( option_value AS UNSIGNED ) < CAST( VALUES(option_value) AS UNSIGNED ), VALUES(option_value), option_value )", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is derived from $wpdb, never user input.
 						self::GENERATION_OPTION,
 						(string) (int) $generation
 					)
 				);
-				$this->generation_floor = (int) $generation;
+				$this->generation_floor = max( (int) $this->generation_floor, (int) $generation );
 			} catch ( \Throwable $e ) {
 				// Best effort: the cached counter still carries the flush for
-				// as long as it survives.
+				// as long as it survives, and a re-seeded Redis counter starts
+				// from the clock.
 				return;
 			}
 		}
@@ -1391,14 +2294,15 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 		/**
 		 * Read this site's namespace generation, once per request.
 		 *
-		 * Only meaningful for Memcached, where flushing works by advancing the
-		 * generation rather than deleting keys. Redis deletes by pattern, so it
-		 * stays on generation 1 and its key shape is unchanged.
-		 *
 		 * @return int
 		 */
 		private function generation() {
 			if ( null !== $this->generation ) {
+				return $this->generation;
+			}
+
+			if ( 'redis' === $this->backend ) {
+				$this->generation = $this->persistent && $this->conn ? $this->resolve_redis_generation() : 1;
 				return $this->generation;
 			}
 
@@ -1456,37 +2360,54 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 		}
 
 		/**
-		 * Delete every Redis key matching $pattern across both client kinds
-		 * (phpredis native scan + our pure-PHP Redis_Client). Returns the
-		 * count deleted, or -1 if the backend isn't redis. SCAN-based so it
-		 * never blocks the server the way KEYS would. (FBS-83119)
-		 *
-		 * Callers MUST pass any literal segment through escape_glob() — this
-		 * receives a finished pattern and cannot tell wildcard from data.
+		 * Delete matching Redis keys, or return -1 if any scan or deletion fails.
+		 * Literal glob segments must pass through escape_glob(). (FBS-83119)
 		 */
-		private function delete_redis_pattern( $pattern ) {
+		private function delete_redis_pattern( $pattern, $filter ) {
 			if ( 'redis' !== $this->backend || ! $this->conn ) {
 				return -1;
 			}
-			// Our pure-PHP client.
-			if ( method_exists( $this->conn, 'delete_by_pattern' ) ) {
-				return $this->conn->delete_by_pattern( $pattern );
-			}
-			// phpredis: iterate the SCAN cursor (setOption SCAN_RETRY keeps it
-			// simple — scan() returns false when the cursor is exhausted).
-			if ( $this->conn instanceof \Redis ) {
-				$deleted = 0;
-				$it      = null;
-				if ( defined( '\Redis::SCAN_RETRY' ) ) {
-					$this->conn->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+			try {
+				if ( method_exists( $this->conn, 'delete_by_pattern' ) ) {
+					$deleted = $this->conn->delete_by_pattern( $pattern, 500, $filter );
+					return false === $deleted ? -1 : $deleted;
 				}
-				do {
-					$keys = $this->conn->scan( $it, $pattern, 500 );
-					if ( is_array( $keys ) && ! empty( $keys ) ) {
-						$deleted += (int) $this->conn->del( $keys );
-					}
-				} while ( $it > 0 );
-				return $deleted;
+				if ( $this->conn instanceof \Redis ) {
+					$deleted = 0;
+					$cursor  = '0';
+					do {
+						// scan() conflates an empty page with failure. The raw
+						// reply keeps the cursor and keys separate in both cases.
+						$reply = $this->conn->rawCommand( 'SCAN', $cursor, 'MATCH', $pattern, 'COUNT', '500' );
+						if ( ! is_array( $reply ) || count( $reply ) !== 2 || ! is_string( $reply[0] ) || ! ctype_digit( $reply[0] ) || ! is_array( $reply[1] ) ) {
+							return -1;
+						}
+						foreach ( $reply[1] as $key ) {
+							if ( ! is_string( $key ) ) {
+								return -1;
+							}
+						}
+						$cursor = $reply[0];
+						$keys   = preg_grep( $filter, $reply[1] );
+						if ( ! empty( $keys ) ) {
+							$keys = array_values( $keys );
+							$n    = $this->conn->unlink( $keys );
+							// Redis before 4.0 has no UNLINK; any other error is a failure.
+							if ( false === $n && 0 === strpos( (string) $this->conn->getLastError(), 'ERR unknown command' ) ) {
+								$this->conn->clearLastError();
+								$n = $this->conn->del( $keys );
+							}
+							if ( false === $n ) {
+								return -1;
+							}
+							$deleted += $n;
+						}
+					} while ( '0' !== $cursor );
+					return $deleted;
+				}
+			} catch ( \Throwable $e ) {
+				$this->record_flush_failure( $e->getMessage() );
+				return -1;
 			}
 			return -1;
 		}
@@ -1519,13 +2440,21 @@ if ( ! class_exists( 'XSpeed_Object_Cache' ) ) {
 			// targeted invalidation (core or third-party calling
 			// wp_cache_flush_group) stops serving stale data — previously this
 			// was a runtime-only no-op against the backend. The key layout is
-			// salt:{prefix}:{group}:{key}, so match salt:*:{group}:* to cover
-			// both blog-prefixed and global groups for this site's namespace.
+			// salt:g{gen}:{prefix}:{group}:{key}, so match
+			// salt:g{gen}:*:{group}:* to cover both blog-prefixed and global
+			// groups for this site's namespace.
 			// (FBS-83119)
-			if ( $this->is_persistent_group( $group ) && 'redis' === $this->backend && '' !== $this->salt ) {
+			// Only the current generation holds live values; older ones are
+			// already unreachable and the reclaim event deletes them. The
+			// counter is read again first, since another request may have
+			// flushed since this one resolved it. A flush landing during the
+			// scan retires the whole generation, this group included.
+			if ( $this->is_persistent_group( $group ) && 'redis' === $this->backend && '' !== $this->salt && $this->conn ) {
 				try {
-					$this->delete_redis_pattern(
-						$this->escape_glob( $this->salt ) . ':*:' . $this->escape_glob( $group ) . ':*'
+					$gen = $this->refresh_generation();
+					return -1 !== $this->delete_redis_pattern(
+						$this->escape_glob( $this->salt ) . ':g' . $gen . ':*:' . $this->escape_glob( $group ) . ':*',
+						'/\A' . preg_quote( $this->salt, '/' ) . ':g' . $gen . ':[0-9]+:' . preg_quote( $group, '/' ) . ':/'
 					);
 				} catch ( \Throwable $e ) {
 					return false;

@@ -10,6 +10,7 @@
   "require-dev": {
     "brain/monkey": "^2.6",
     "mockery/mockery": "^1.6",
+    "nikic/php-parser": "^5.1",
     "phpunit/phpunit": "^9.6"
   },
   "autoload": {

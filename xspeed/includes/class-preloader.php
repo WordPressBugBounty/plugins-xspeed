@@ -61,6 +61,8 @@ final class Preloader {
 	 */
 	public const USER_AGENT     = 'xSpeed-Warmer/1.0 (+cache warmer; admin-initiated)';
 	public const REQUEST_TIMEOUT = 8;
+	/** Longest page-warm timeout the filter may ask for, in seconds. */
+	public const MAX_REQUEST_TIMEOUT = 60;
 
 	/**
 	 * Default cap on NEW remote images resolved per warmed page.
@@ -208,6 +210,30 @@ final class Preloader {
 	}
 
 	/**
+	 * Seconds one page warm may take before it counts as a timeout.
+	 *
+	 * A cold render on a heavy WooCommerce or Elementor page can take longer
+	 * than the default 8 s. A client saw 9 s, and every such page timed out
+	 * on every crawl. Core's `http_request_timeout` filter cannot help,
+	 * because the warm passes its own `timeout`. (#837)
+	 *
+	 * Capped at MAX_REQUEST_TIMEOUT so one bad value cannot hold a cron run
+	 * for minutes per URL.
+	 */
+	public static function request_timeout(): int {
+		/**
+		 * Filter: xspeed_preloader_request_timeout
+		 *
+		 * Seconds to wait for one page warm. Raise it for sites whose cold
+		 * renders are slow.
+		 *
+		 * @param int $timeout Default 8, kept between 1 and 60.
+		 */
+		$timeout = (int) apply_filters( 'xspeed_preloader_request_timeout', self::REQUEST_TIMEOUT );
+		return max( 1, min( self::MAX_REQUEST_TIMEOUT, $timeout ) );
+	}
+
+	/**
 	 * Request arguments for one warm of one device copy.
 	 *
 	 * `Sec-CH-UA-Mobile` settles the device whatever the user-agent filters
@@ -225,7 +251,7 @@ final class Preloader {
 			$user_agent = self::user_agent();
 		}
 		return array(
-			'timeout'    => self::REQUEST_TIMEOUT,
+			'timeout'    => self::request_timeout(),
 			'sslverify'  => false,
 			'user-agent' => $user_agent,
 			'headers'    => Self_Traffic::headers( $headers ),
@@ -238,12 +264,18 @@ final class Preloader {
 	 *
 	 * @param array<string,string> $headers     Extra request headers.
 	 * @param bool                 $with_tablet False skips the tablet copy (past tablet_page_limit()).
-	 * @return array{failures: array<int,array{device:string,error:string}>, body: string}
-	 *         The failures, and the desktop response body ('' when it failed).
+	 * A failure is `retryable` when a later attempt could go through: a
+	 * timeout or dropped connection, a 5xx, or a 429. A 4xx other than 429
+	 * will answer the same way again.
+	 *
+	 * @return array{failures: array<int,array{device:string,error:string,retryable:bool}>, body: string, bypassed: bool}
+	 *         The failures, the desktop response body ('' when it failed), and
+	 *         whether a copy came back `X-XSpeed-Cache: BYPASS` (not cached).
 	 */
 	private static function warm_devices( string $url, array $headers = array(), bool $with_tablet = true ): array {
 		$failures = array();
 		$body     = '';
+		$bypassed = false;
 		foreach ( self::devices() as $device ) {
 			if ( ! $with_tablet && Cache_Devices::TABLET === $device ) {
 				continue;
@@ -251,16 +283,25 @@ final class Preloader {
 			$args     = self::warm_args( $device, $headers );
 			$response = wp_remote_get( $url, $args );
 			if ( is_wp_error( $response ) ) {
-				$failures[] = array( 'device' => $device, 'error' => $response->get_error_message() );
+				$failures[] = array( 'device' => $device, 'error' => $response->get_error_message(), 'retryable' => true );
 				continue;
 			}
 			$code = (int) wp_remote_retrieve_response_code( $response );
 			if ( $code >= 400 ) {
-				$failures[] = array( 'device' => $device, 'error' => self::failure_detail( $code, $args['user-agent'] ) );
+				$failures[] = array(
+					'device'    => $device,
+					'error'     => self::failure_detail( $code, $args['user-agent'] ),
+					'retryable' => $code >= 500 || 429 === $code,
+				);
 				if ( self::is_firewall_block( $code ) ) {
 					self::remember_firewall_block( $url, $code, $args['user-agent'] );
 				}
 				continue;
+			}
+			// A 200 is not proof the page is cached: the cache may have
+			// refused it. Our own header says so. (#837)
+			if ( 0 === stripos( (string) wp_remote_retrieve_header( $response, 'x-xspeed-cache' ), 'BYPASS' ) ) {
+				$bypassed = true;
 			}
 			if ( 'desktop' === $device ) {
 				$body = (string) wp_remote_retrieve_body( $response );
@@ -272,7 +313,7 @@ final class Preloader {
 		if ( empty( $failures ) ) {
 			self::clear_firewall_block();
 		}
-		return array( 'failures' => $failures, 'body' => $body );
+		return array( 'failures' => $failures, 'body' => $body, 'bypassed' => $bypassed );
 	}
 
 	/** "phone: " or "tablet: " for a failure of that copy, so the log says which copy failed. */
@@ -451,6 +492,13 @@ final class Preloader {
 			'queue'         => array_values( $urls ),
 			'processed'     => 0,
 			'total'         => count( $urls ),
+			// processed = warmed + failed + not_cached + untracked. The error
+			// list is a capped sample; these counts are not. (#837)
+			'warmed'        => 0,
+			'failed'        => 0,
+			'not_cached'    => 0,
+			'untracked'     => 0,
+			'retried'       => array(),
 			'last_url'      => '',
 			'errors'        => $errors,
 			// Consumers render on these: the panel needs to distinguish
@@ -520,7 +568,7 @@ final class Preloader {
 		if ( $state['running'] ) {
 			Activity_Log::record(
 				'preloader_stopped',
-				sprintf( 'Preloader stopped (%d/%d URLs warmed).', $state['processed'], $state['total'] ),
+				sprintf( 'Preloader stopped (%d/%d URLs crawled, %d warmed).', $state['processed'], $state['total'], $state['warmed'] ),
 				Activity_Log::INFO
 			);
 		}
@@ -540,7 +588,15 @@ final class Preloader {
 		if ( ! is_array( $raw ) ) {
 			return self::empty_state();
 		}
-		return wp_parse_args( $raw, self::empty_state() );
+		$state = wp_parse_args( $raw, self::empty_state() );
+		// A crawl saved before the outcome counts existed. Its URLs were
+		// crawled, but nothing recorded which were warmed, so they are not
+		// counted as warmed or failed: 0 of each would read as a fact. A
+		// crawl that resumes keeps this number and counts from there. (#837)
+		if ( ! array_key_exists( 'warmed', $raw ) ) {
+			$state['untracked'] = (int) $state['processed'];
+		}
+		return $state;
 	}
 
 	private static function empty_state(): array {
@@ -552,6 +608,11 @@ final class Preloader {
 			'queue'        => array(),
 			'processed'    => 0,
 			'total'        => 0,
+			'warmed'       => 0,
+			'failed'       => 0,
+			'not_cached'   => 0,
+			'untracked'    => 0,
+			'retried'      => array(),
 			'last_url'     => '',
 			'errors'       => array(),
 			'skipped'      => array(),
@@ -607,12 +668,27 @@ final class Preloader {
 		$state['devices'] = $devices;
 		$per_url          = count( $devices );
 		$requests         = 0;
+		$requeued         = array();
 		while ( ! empty( $state['queue'] ) && ( 0 === $requests || $requests + $per_url <= $batch ) ) {
-			$url = (string) array_shift( $state['queue'] );
-			self::warm_url( $url, $state );
-			$state['processed']++;
+			// A URL put back in this tick waits for the next one; on a short
+			// queue it would otherwise be asked again the same second.
+			if ( isset( $requeued[ (string) reset( $state['queue'] ) ] ) ) {
+				break;
+			}
+			$url     = (string) array_shift( $state['queue'] );
+			$outcome = self::warm_url( $url, $state );
 			$state['last_url'] = $url;
 			$requests         += $per_url;
+			if ( 'retry' === $outcome ) {
+				// Back of the queue, so a slow page gets the rest of the crawl
+				// to finish rendering before we ask again. Not counted yet.
+				$state['retried'][] = $url;
+				$state['queue'][]   = $url;
+				$requeued[ $url ]   = true;
+			} else {
+				$state['processed']++;
+				$state[ $outcome ] = (int) ( $state[ $outcome ] ?? 0 ) + 1;
+			}
 
 			// A heartbeat while the batch runs. One URL can take close to two
 			// minutes (its page plus up to 20 remote image lookups), so a big
@@ -669,7 +745,18 @@ final class Preloader {
 		return true;
 	}
 
-	private static function warm_url( string $url, array &$state ): void {
+	/**
+	 * Warm every copy of one queued URL.
+	 *
+	 * A timeout or 5xx goes back on the queue once (`retry`). On a timeout
+	 * PHP often finishes the render after we hang up, so the second request
+	 * usually finds the page cached. Only the attempt that will not be
+	 * retried is written to the error list. (#837)
+	 *
+	 * @return string 'warmed', 'not_cached' (answered, but the cache bypassed
+	 *                it), 'failed', or 'retry'.
+	 */
+	private static function warm_url( string $url, array &$state ): string {
 		// The web server would answer with an expired static page as a HIT
 		// and nothing would be rebuilt. (#645)
 		Cache_GC::expire_static_url( $url );
@@ -680,6 +767,18 @@ final class Preloader {
 			array( 'Accept' => 'text/html,application/xhtml+xml' ),
 			0 === $limit || (int) ( $state['processed'] ?? 0 ) < $limit
 		);
+		if ( '' !== $result['body'] ) {
+			self::warm_remote_dimensions( $result['body'] );
+		}
+		if ( empty( $result['failures'] ) ) {
+			return $result['bypassed'] ? 'not_cached' : 'warmed';
+		}
+
+		$retryable = ! empty( array_filter( array_column( $result['failures'], 'retryable' ) ) );
+		if ( $retryable && ! in_array( $url, (array) ( $state['retried'] ?? array() ), true ) ) {
+			return 'retry';
+		}
+
 		foreach ( $result['failures'] as $failure ) {
 			$state['errors'][] = array(
 				'url'   => $url,
@@ -688,11 +787,9 @@ final class Preloader {
 			);
 		}
 		// Cap retained errors so a broken sitemap doesn't blow the
-		// transient size.
+		// transient size. The `failed` count keeps the real total.
 		$state['errors'] = array_slice( $state['errors'], -20 );
-		if ( '' !== $result['body'] ) {
-			self::warm_remote_dimensions( $result['body'] );
-		}
+		return 'failed';
 	}
 
 	/**
@@ -789,16 +886,44 @@ final class Preloader {
 		$state['queue']       = array();
 		set_transient( self::STATE_KEY, $state, self::STATE_TTL );
 
+		// Counts, not the capped error sample: a crawl with 25 failures used
+		// to report 20, and every attempt as warmed. (#837)
+		$failed     = (int) ( $state['failed'] ?? 0 );
+		$not_cached = (int) ( $state['not_cached'] ?? 0 );
+		$message    = sprintf(
+			/* translators: 1: URLs warmed, 2: URLs in the crawl, 3: URLs that failed. */
+			__( 'Preloader finished: %1$d of %2$d URLs warmed, %3$d failed.', 'xspeed' ),
+			(int) ( $state['warmed'] ?? 0 ),
+			$state['total'],
+			$failed
+		);
+		if ( $not_cached > 0 ) {
+			$message .= ' ' . sprintf(
+				/* translators: %d: URLs that loaded but were not cached. */
+				_n( '%d loaded but was not cached (the cache bypassed it).', '%d loaded but were not cached (the cache bypassed them).', $not_cached, 'xspeed' ),
+				$not_cached
+			);
+		}
+		$untracked = (int) ( $state['untracked'] ?? 0 );
+		if ( $untracked > 0 ) {
+			$message .= ' ' . sprintf(
+				/* translators: %d: URLs crawled before an update, with no recorded outcome. */
+				_n( '%d was crawled before an update, so its outcome was not recorded.', '%d were crawled before an update, so their outcome was not recorded.', $untracked, 'xspeed' ),
+				$untracked
+			);
+		}
+		$retried = count( (array) ( $state['retried'] ?? array() ) );
+		if ( $retried > 0 ) {
+			$message .= ' ' . sprintf(
+				/* translators: %d: URLs that were tried a second time. */
+				_n( '%d was retried after a timeout or server error.', '%d were retried after a timeout or server error.', $retried, 'xspeed' ),
+				$retried
+			);
+		}
 		Activity_Log::record(
 			'preloader_completed',
-			sprintf(
-				'Preloader finished — %d/%d URLs warmed, %d error%s.',
-				$state['processed'],
-				$state['total'],
-				count( $state['errors'] ),
-				1 === count( $state['errors'] ) ? '' : 's'
-			),
-			empty( $state['errors'] ) ? Activity_Log::SUCCESS : Activity_Log::WARN
+			$message,
+			0 === $failed && empty( $state['errors'] ) ? Activity_Log::SUCCESS : Activity_Log::WARN
 		);
 	}
 
@@ -1287,8 +1412,8 @@ final class Preloader {
 				Activity_Log::record(
 					'preloader_skipped',
 					sprintf(
-						/* translators: 1: URLs warmed so far, 2: URLs in the crawl. */
-						__( 'Scheduled preload skipped: a crawl is still running (%1$d/%2$d URLs warmed).', 'xspeed' ),
+						/* translators: 1: URLs crawled so far, 2: URLs in the crawl. */
+						__( 'Scheduled preload skipped: a crawl is still running (%1$d/%2$d URLs crawled).', 'xspeed' ),
 						$state['processed'],
 						$state['total']
 					),
@@ -1301,8 +1426,8 @@ final class Preloader {
 			Activity_Log::record(
 				'preloader_restarted',
 				sprintf(
-					/* translators: 1: URLs warmed, 2: URLs in the crawl. */
-					__( 'Preloader restarted a crawl that had stopped moving (%1$d/%2$d URLs warmed).', 'xspeed' ),
+					/* translators: 1: URLs crawled so far, 2: URLs in the crawl. */
+					__( 'Preloader restarted a crawl that had stopped moving (%1$d/%2$d URLs crawled).', 'xspeed' ),
 					$state['processed'],
 					$state['total']
 				),
@@ -1353,8 +1478,8 @@ final class Preloader {
 		Activity_Log::record(
 			'preloader_resumed',
 			sprintf(
-				/* translators: 1: URLs warmed, 2: URLs in the crawl. */
-				__( 'Preloader resumed a crawl that had stopped moving (%1$d/%2$d URLs warmed).', 'xspeed' ),
+				/* translators: 1: URLs crawled so far, 2: URLs in the crawl. */
+				__( 'Preloader resumed a crawl that had stopped moving (%1$d/%2$d URLs crawled).', 'xspeed' ),
 				$state['processed'],
 				$state['total']
 			),

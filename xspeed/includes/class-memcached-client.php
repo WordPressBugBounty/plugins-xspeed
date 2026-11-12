@@ -138,6 +138,47 @@ class Memcached_Client {
 		return false === $data ? false : substr( $data, 0, $bytes );
 	}
 
+	/**
+	 * Read several keys in one round trip (`get k1 k2 ...`).
+	 *
+	 * @param string[] $keys Keys to read.
+	 * @return array<string,string>|false Found values keyed by the caller's
+	 *                                    key; missing keys are left out.
+	 *                                    False on a socket error.
+	 */
+	public function get_multi( array $keys ) {
+		$out = array();
+		foreach ( array_chunk( array_values( $keys ), 100 ) as $chunk ) {
+			$map = array();
+			foreach ( $chunk as $key ) {
+				$map[ $this->sanitize_key( (string) $key ) ] = (string) $key;
+			}
+			if ( ! $this->write( 'get ' . implode( ' ', array_keys( $map ) ) . "\r\n" ) ) {
+				return false;
+			}
+			while ( true ) {
+				$line = $this->read_line();
+				if ( 'END' === $line ) {
+					break;
+				}
+				if ( ! is_string( $line ) || 0 !== strpos( $line, 'VALUE' ) ) {
+					return false;
+				}
+				// "VALUE <key> <flags> <bytes>".
+				$parts = explode( ' ', $line );
+				$bytes = isset( $parts[3] ) ? (int) $parts[3] : 0;
+				$data  = $this->read_bytes( $bytes + 2 );
+				if ( false === $data ) {
+					return false;
+				}
+				if ( isset( $parts[1], $map[ $parts[1] ] ) ) {
+					$out[ $map[ $parts[1] ] ] = substr( $data, 0, $bytes );
+				}
+			}
+		}
+		return $out;
+	}
+
 	public function delete( string $key ): bool {
 		$key = $this->sanitize_key( $key );
 		if ( ! $this->write( "delete {$key}\r\n" ) ) {

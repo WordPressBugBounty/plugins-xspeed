@@ -13,8 +13,18 @@ import { InlineConfirm } from '../InlineConfirm';
 import type { SchemaField, SettingOrigin } from '../../types';
 import type { PanelProps } from '../customPanels';
 
+interface DropinSyncFailure {
+  attempts: number;
+  last_attempt: number;
+  next_retry: number;
+  last_error: string;
+}
+
+type FlushResponse = { ok: true } | { ok: false; reason?: 'permission_denied' | 'failed' };
+
 interface DetectResponse {
   drop_in_installed: boolean;
+  dropin_sync?: DropinSyncFailure | null;
   /** Installed AND carrying our tag — false when another plugin owns it. */
   drop_in_is_ours?: boolean;
   drop_in_path: string;
@@ -97,7 +107,7 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
   const [overrideBusy, setOverrideBusy] = useState<string | null>(null);
   const [detect, setDetect] = useState<DetectResponse | null>(null);
   const [snippet, setSnippet] = useState<string>('');
-  const [busy, setBusy] = useState<null | 'detect' | 'flush' | 'snippet' | 'test' | 'enable' | 'disable' | 'credentials'>(null);
+  const [busy, setBusy] = useState<null | 'detect' | 'flush' | 'snippet' | 'test' | 'enable' | 'disable' | 'credentials' | 'retry-sync'>(null);
   const [error, setError] = useState<string | null>(null);
   // Scoped to the SAVE path only. `error` is shared with scan / flush /
   // start-stop actions, so passing it straight to SaveSpinner would paint a
@@ -319,8 +329,11 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
     setError(null);
     setNotice(null);
     try {
-      const res = await api.request<{ ok: boolean }>('/object-cache/flush', { method: 'POST' });
-      setNotice(res.ok ? 'Object cache flushed.' : 'Flush returned false — cache backend may not be active.');
+      const res = await api.request<FlushResponse>('/object-cache/flush', { method: 'POST' });
+      if (res.ok) setNotice('Object cache flushed.');
+      else setError(res.reason === 'permission_denied'
+        ? 'Permission was refused for this key prefix. The object cache could not be cleared.'
+        : 'The object cache could not be cleared.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Flush failed');
     } finally {
@@ -437,6 +450,22 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
     }
   };
 
+  const handleRetrySync = async () => {
+    setBusy('retry-sync');
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.request<{ ok: boolean; message: string }>('/object-cache/retry-sync', { method: 'POST' });
+      if (result.ok) setNotice(result.message);
+      else setError(result.message);
+      setDetect(await api.request<DetectResponse>('/object-cache/detect'));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(snippet);
@@ -504,6 +533,29 @@ export function ObjectCachePanel({ module, onSaved }: PanelProps) {
 
   return (
     <div className="space-y-4">
+      {detect?.dropin_sync && (
+        <Callout
+          tone="warn"
+          title="Object cache update failed"
+          body={
+            <span className="block space-y-2">
+              {detect.dropin_sync.last_error && <span className="block">{detect.dropin_sync.last_error}</span>}
+              <span className="block">{detect.dropin_sync.next_retry === 0
+                ? 'Next automatic retry: on the next admin or cron request.'
+                : `Next automatic retry: ${new Date(detect.dropin_sync.next_retry * 1000).toLocaleString()}. It runs on an admin or cron request.`}</span>
+              <button
+                type="button"
+                onClick={handleRetrySync}
+                disabled={busy !== null}
+                className="inline-flex items-center gap-1.5 rounded border border-line-strong bg-panel px-3 py-1.5 text-[13px] text-ink disabled:opacity-50"
+              >
+                {busy === 'retry-sync' && <RefreshCw size={13} className="animate-spin" />}
+                Retry drop-in update
+              </button>
+            </span>
+          }
+        />
+      )}
       <div className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 rounded-lg p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">

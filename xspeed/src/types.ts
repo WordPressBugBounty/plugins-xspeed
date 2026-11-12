@@ -723,6 +723,17 @@ export interface PreloaderState {
   queue: string[];
   processed: number;
   total: number;
+  /**
+   * processed = warmed + failed + not_cached + untracked. `errors` is only the last 20,
+   * so counts come from these. Absent on a crawl saved by an older version. (#837)
+   */
+  warmed?: number;
+  failed?: number;
+  not_cached?: number;
+  /** URLs crawled before an update added the counts; their outcome is unknown. */
+  untracked?: number;
+  /** URLs put back on the queue once after a timeout or server error. */
+  retried?: string[];
   last_url: string;
   /**
    * Per-URL warm failures are objects; a whole-crawl failure (an unreachable

@@ -33,6 +33,9 @@ defined( 'ABSPATH' ) || exit;
 
 final class Resource_Hints_Processor {
 
+	/** @var array<string,mixed>|null Captured CDN options for this transform. */
+	private static $cdn_context = null;
+
 	/**
 	 * Transform the page HTML, injecting preload + preconnect hints.
 	 *
@@ -41,6 +44,17 @@ final class Resource_Hints_Processor {
 	 * @return string Rewritten HTML (unchanged when disabled or no match).
 	 */
 	public static function process( string $html, array $opts ): string {
+		$previous = self::$cdn_context;
+		self::$cdn_context = isset( $opts['cdn_context'] ) && is_array( $opts['cdn_context'] ) ? $opts['cdn_context'] : null;
+		try {
+			return self::transform( $html, $opts );
+		} finally {
+			self::$cdn_context = $previous;
+		}
+	}
+
+	/** @param array<string,mixed> $opts Module settings and request context. */
+	private static function transform( string $html, array $opts ): string {
 		if ( empty( $opts['enabled'] ) ) {
 			return $html;
 		}
@@ -52,7 +66,6 @@ final class Resource_Hints_Processor {
 		}
 
 		$hints = '';
-
 		if ( ! empty( $opts['preconnect'] ) || ! empty( $opts['preconnect_hosts'] ) ) {
 			$hints .= self::build_preconnect( $html, (array) ( $opts['preconnect_hosts'] ?? array() ), ! empty( $opts['preconnect'] ) );
 		}
@@ -481,12 +494,13 @@ final class Resource_Hints_Processor {
 			// Idempotency: if this src is already the target of a
 			// rel="preload" as="image" link, still promote the tag but don't
 			// emit a duplicate <link>.
-			$already = (bool) preg_match(
-				'#rel=["\']preload["\'][^>]*as=["\']image["\'][^>]*' . preg_quote( $w['src'], '#' ) . '#i',
-				$existing
-			);
-			if ( ! $already ) {
-				$preload .= self::preload_link( $w['src'], $w['srcset'], $w['sizes'], empty( $w['background'] ) ? 'img' : 'background' );
+			// A document-relative src (`images/hero.jpg`) left esc_url() as
+			// `http://images/hero.jpg`, a fetch to a host named `images`. The
+			// tag is still promoted; only the link is left out.
+			$linkable = (bool) preg_match( '#^(?:https?:)?/#i', html_entity_decode( (string) $w['src'], ENT_QUOTES ) );
+			$intent   = $linkable ? self::preload_link( $w['src'], $w['srcset'], $w['sizes'], empty( $w['background'] ) ? 'img' : 'background' ) : '';
+			if ( $linkable && ! self::preload_covered( $existing . $preload, $intent ) ) {
+				$preload .= $intent;
 			}
 			// Only <img> winners are promoted in PASS 2 — there is no
 			// fetchpriority/loading attribute to fix on a background element,
@@ -1567,25 +1581,13 @@ final class Resource_Hints_Processor {
 
 		$preload = '';
 		foreach ( $candidates as $c => $candidate ) {
-			// Idempotency, as for the automatic pick: a second pass over an
-			// already-processed body must not emit the link twice. Compared
-			// with `&amp;` decoded, the way the markup spells a query.
-			$already = false;
-			if ( preg_match_all( '#<link\b[^>]*rel=["\']preload["\'][^>]*>#i', $html, $links ) ) {
-				foreach ( $links[0] as $link ) {
-					if ( false !== strpos( html_entity_decode( $link, ENT_QUOTES ), $candidate['url'] ) ) {
-						$already = true;
-						break;
-					}
-				}
-			}
-			if ( $already ) {
-				continue;
-			}
 			// An image the page shows through no <img> is a background,
 			// whatever the answer said: nothing here can wrap it in <picture>.
 			$kind     = isset( $matched[ $c ] ) ? $candidate['kind'] : 'background';
-			$preload .= self::preload_link( $candidate['url'], $candidate['srcset'], $candidate['sizes'], $kind, $candidate['media'] );
+			$intent = self::preload_link( $candidate['url'], $candidate['srcset'], $candidate['sizes'], $kind, $candidate['media'] );
+			if ( ! self::preload_covered( $html . $preload, $intent ) ) {
+				$preload .= $intent;
+			}
 		}
 		return array( $html, $preload );
 	}
@@ -1710,29 +1712,7 @@ final class Resource_Hints_Processor {
 
 	/** Two URLs name the same image: `&amp;` decoded, and a root-relative one compared by path. */
 	private static function same_url( string $a, string $b ): bool {
-		$a = html_entity_decode( $a, ENT_QUOTES );
-		$b = html_entity_decode( $b, ENT_QUOTES );
-		if ( '' === $a || '' === $b ) {
-			return false;
-		}
-		if ( $a === $b ) {
-			return true;
-		}
-		// A format sibling is the same image: `hero.png.webp` is `hero.png`.
-		$a = self::format_original( $a );
-		$b = self::format_original( $b );
-		if ( $a === $b ) {
-			return true;
-		}
-		$rel = static function ( string $u ): string {
-			if ( 0 === strpos( $u, '/' ) && 0 !== strpos( $u, '//' ) ) {
-				return $u;
-			}
-			$path  = (string) wp_parse_url( $u, PHP_URL_PATH );
-			$query = (string) wp_parse_url( $u, PHP_URL_QUERY );
-			return $path . ( '' !== $query ? '?' . $query : '' );
-		};
-		return ( 0 === strpos( $a, '/' ) || 0 === strpos( $b, '/' ) ) && $rel( $a ) === $rel( $b );
+		return Cdn_Rewriter::same_asset( $a, $b, self::$cdn_context );
 	}
 
 	/**
@@ -1963,5 +1943,114 @@ final class Resource_Hints_Processor {
 			}
 		}
 		return null;
+	}
+
+	private static function preload_covered( string $html, string $intent ): bool {
+		$wanted = self::tag_attrs( $intent );
+		$href = Cdn_Rewriter::asset_key( $wanted['href'] ?? '', self::$cdn_context );
+		if ( null === $href ) {
+			return false;
+		}
+		foreach ( self::real_tags( $html, array( 'link' ) ) as $match ) {
+			$attrs = self::tag_attrs( $match[0] );
+			$rels = preg_split( '/\s+/', strtolower( $attrs['rel'] ?? '' ) );
+			if ( ! in_array( 'preload', $rels, true ) || 'image' !== strtolower( $attrs['as'] ?? '' )
+				|| $href !== Cdn_Rewriter::asset_key( $attrs['href'] ?? '', self::$cdn_context )
+				|| ( $attrs['type'] ?? '' ) !== ( $wanted['type'] ?? '' )
+				|| self::normalized_space( strtolower( $attrs['media'] ?? '' ) ) !== self::normalized_space( strtolower( $wanted['media'] ?? '' ) ) ) {
+				continue;
+			}
+			$set = self::fetch_set( $attrs['imagesrcset'] ?? '' );
+			$wanted_set = self::fetch_set( $wanted['imagesrcset'] ?? '' );
+			if ( null !== $set && null !== $wanted_set && $set === $wanted_set
+				&& ( empty( $set ) || self::normalized_space( $attrs['imagesizes'] ?? '' ) === self::normalized_space( $wanted['imagesizes'] ?? '' ) ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static function normalized_space( string $value ): string {
+		return (string) preg_replace( '/\s+/', ' ', trim( html_entity_decode( $value, ENT_QUOTES ) ) );
+	}
+
+	private static function fetch_set( string $srcset ): ?array {
+		if ( '' === trim( $srcset ) ) {
+			return array();
+		}
+		$out = array();
+		$descriptors = array();
+		$kind = null;
+		foreach ( explode( ',', html_entity_decode( $srcset, ENT_QUOTES ) ) as $entry ) {
+			$parts = preg_split( '/\s+/', trim( $entry ) );
+			$url = Cdn_Rewriter::asset_key( $parts[0] ?? '', self::$cdn_context );
+			if ( null === $url || count( $parts ) > 2 ) {
+				return null;
+			}
+			$descriptor = $parts[1] ?? '1x';
+			if ( preg_match( '/^([0-9]+)w$/D', $descriptor, $number ) ) {
+				$unit = 'w';
+			} elseif ( preg_match( '/^((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)x$/D', $descriptor, $number ) ) {
+				$unit = 'x';
+			} else {
+				return null;
+			}
+			$value = (float) $number[1];
+			$key = $unit . ':' . (string) $value;
+			// Invalid or ambiguous sets must not suppress a usable preload.
+			if ( ! is_finite( $value ) || $value <= 0 || isset( $descriptors[ $key ] ) || ( null !== $kind && $kind !== $unit ) ) {
+				return null;
+			}
+			$descriptors[ $key ] = true;
+			$kind = $unit;
+			$out[] = $url . "\n" . $descriptor;
+		}
+		$out = array_values( array_unique( $out ) );
+		sort( $out, SORT_STRING );
+		return $out;
+	}
+
+	private static function real_tags( string $html, array $names ): array {
+		$out = array();
+		$i = 0;
+		$inert = 0;
+		while ( false !== ( $lt = strpos( $html, '<', $i ) ) ) {
+			if ( 0 === substr_compare( $html, '<!--', $lt, 4 ) ) {
+				$close = strpos( $html, '-->', $lt + 2 );
+				if ( false === $close ) {
+					break;
+				}
+				$i = $close + 3;
+				continue;
+			}
+			if ( ! preg_match( '#\G<(/?)([a-z][a-z0-9-]*)(?=[\s/>])#i', $html, $token, 0, $lt ) ) {
+				$i = $lt + 1;
+				continue;
+			}
+			$gt = self::tag_end( $html, $lt + strlen( $token[0] ) );
+			if ( null === $gt ) {
+				break;
+			}
+			$i = $gt + 1;
+			$name = strtolower( $token[2] );
+			if ( in_array( $name, array( 'template', 'noscript' ), true ) ) {
+				$inert = '/' === $token[1] ? max( 0, $inert - 1 ) : $inert + 1;
+				continue;
+			}
+			if ( '/' === $token[1] ) {
+				continue;
+			}
+			if ( in_array( $name, array( 'script', 'style', 'textarea', 'title' ), true ) ) {
+				if ( ! preg_match( '#</' . $name . '\s*>#i', $html, $close, PREG_OFFSET_CAPTURE, $i ) ) {
+					break;
+				}
+				$i = $close[0][1] + strlen( $close[0][0] );
+				continue;
+			}
+			if ( 0 === $inert && ( empty( $names ) || in_array( $name, $names, true ) ) ) {
+				$out[] = array( substr( $html, $lt, $gt + 1 - $lt ), $lt );
+			}
+		}
+		return $out;
 	}
 }

@@ -2203,64 +2203,7 @@ class Cache {
 		$key  = self::cache_key();
 		$file = self::cache_file_for( $key );
 
-		if ( file_exists( $file ) && ! self::is_expired( $file ) ) {
-			// Symmetric with the miss branch below: a bot, scanner or one of
-			// xSpeed's own warm/benchmark requests that lands a HIT must not
-			// inflate the ratio either — excluding only their misses would
-			// shrink the denominator while their hits kept feeding the
-			// numerator, making the displayed ratio MORE optimistic than
-			// before the exclusion existed.
-			if ( self::miss_is_excluded() ) {
-				Hit_Counter::record_excluded();
-			} else {
-				Hit_Counter::record_hit();
-			}
-			// Emit the HIT marker on THIS path too. The drop-in
-			// (advanced-cache.php) sends "HIT (php)" and the nginx static
-			// rewrite sends "HIT (nginx)", but this template_redirect
-			// serve path — the one that runs when the drop-in isn't loaded
-			// (e.g. WP_CACHE not true) — previously streamed the cached
-			// file with NO marker, so a genuine HIT looked like a MISS in
-			// the response headers. Same header + value as the drop-in.
-			//
-			// The sidecar is read first because the HIT's edge lifetime
-			// depends on it: an entry with a lifetime of its own may not be
-			// kept at the edge past it. See entry_lifetime_left().
-			$meta = self::read_meta( $key );
-			self::mark( 'HIT (php)', '', self::entry_lifetime_left( $meta, $file ) );
-			// Replay stored response bits so the HIT matches the original:
-			// a non-HTML Content-Type (cached feeds, sitemaps) and a non-200
-			// status (a cached 404 must serve 404, not 200). No-op for
-			// ordinary pages, which write no .meta.
-			if ( ! headers_sent() ) {
-				if ( ! empty( $meta['status'] ) ) {
-					self::send_status( (int) $meta['status'] );
-				}
-				if ( ! empty( $meta['content_type'] ) && is_string( $meta['content_type'] ) ) {
-					header( 'Content-Type: ' . $meta['content_type'] );
-				}
-				// Conditional GET: emit Last-Modified + ETag and answer a
-				// matching If-Modified-Since / If-None-Match with 304 so
-				// aggregators (and browsers) skip re-downloading an unchanged
-				// cached response — the bandwidth win feeds are about.
-				// (FBS-82407 #5)
-				if ( self::serve_not_modified( $file ) ) {
-					exit; // 304 sent, no body.
-				}
-			}
-			// Serve the precompressed Brotli sibling when the client accepts
-			// it (an add-on, the Pro Brotli module, wrote <file>.br). On this
-			// PHP serve path the web server never sees the .br, so without
-			// this a br-capable client got the plain .html — precompression
-			// did nothing here. Falls through to plain readfile otherwise.
-			$br = self::maybe_serve_brotli( $file );
-			if ( null !== $br ) {
-				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming a static cache file directly; WP_Filesystem would buffer through PHP memory and is not appropriate for response streaming.
-				readfile( $br );
-				exit;
-			}
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- readfile is optimal for streaming a static cache file directly to the visitor; WP_Filesystem would buffer through PHP memory and is not appropriate for response streaming.
-			readfile( $file );
+		if ( file_exists( $file ) && ! self::is_expired( $file ) && self::serve_hit( $key, $file ) ) {
 			exit;
 		}
 
@@ -2303,6 +2246,99 @@ class Cache {
 		self::$buffer_level = ob_get_level();
 
 		add_action( 'shutdown', array( __CLASS__, 'close_buffer' ), 0 );
+	}
+
+	/**
+	 * Serve a stored entry as a HIT on the PHP serve path.
+	 *
+	 * The entry is opened before anything that can run add-on code. mark()
+	 * resolves the edge filters, and a listener on
+	 * `xspeed_edge_optimization_pending` may purge this very page. The file
+	 * used to be read only after mark(), so a purge in that window sent a
+	 * `HIT (php)` with an empty body. An open handle still reads after the
+	 * file is unlinked. An entry that cannot be opened, or holds no bytes,
+	 * sends nothing, and the caller renders the page as a MISS. (#887)
+	 *
+	 * @param string $key  Cache key of the entry.
+	 * @param string $file Absolute path to its .html file.
+	 * @return bool True when a response was sent and the caller should exit.
+	 */
+	private static function serve_hit( string $key, string $file ): bool {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.PHP.NoSilencedErrors.Discouraged -- streaming our own cache file; WP_Filesystem would buffer it through memory. A concurrent purge makes this fail, which is handled below.
+		$handle = @fopen( $file, 'rb' );
+		if ( false === $handle ) {
+			return false;
+		}
+		$stat = fstat( $handle );
+		if ( false === $stat || $stat['size'] <= 0 ) {
+			fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- our own handle.
+			return false;
+		}
+
+		// Symmetric with the miss branch below: a bot, scanner or one of
+		// xSpeed's own warm/benchmark requests that lands a HIT must not
+		// inflate the ratio either — excluding only their misses would
+		// shrink the denominator while their hits kept feeding the
+		// numerator, making the displayed ratio MORE optimistic than
+		// before the exclusion existed.
+		if ( self::miss_is_excluded() ) {
+			Hit_Counter::record_excluded();
+		} else {
+			Hit_Counter::record_hit();
+		}
+		// Emit the HIT marker on THIS path too. The drop-in
+		// (advanced-cache.php) sends "HIT (php)" and the nginx static
+		// rewrite sends "HIT (nginx)", but this template_redirect
+		// serve path — the one that runs when the drop-in isn't loaded
+		// (e.g. WP_CACHE not true) — previously streamed the cached
+		// file with NO marker, so a genuine HIT looked like a MISS in
+		// the response headers. Same header + value as the drop-in.
+		//
+		// The sidecar is read first because the HIT's edge lifetime
+		// depends on it: an entry with a lifetime of its own may not be
+		// kept at the edge past it. See entry_lifetime_left().
+		$meta = self::read_meta( $key );
+		self::mark( 'HIT (php)', '', self::entry_lifetime_left( $meta, $file ) );
+		// Replay stored response bits so the HIT matches the original:
+		// a non-HTML Content-Type (cached feeds, sitemaps) and a non-200
+		// status (a cached 404 must serve 404, not 200). No-op for
+		// ordinary pages, which write no .meta.
+		if ( ! headers_sent() ) {
+			if ( ! empty( $meta['status'] ) ) {
+				self::send_status( (int) $meta['status'] );
+			}
+			if ( ! empty( $meta['content_type'] ) && is_string( $meta['content_type'] ) ) {
+				header( 'Content-Type: ' . $meta['content_type'] );
+			}
+			// Conditional GET: emit Last-Modified + ETag and answer a
+			// matching If-Modified-Since / If-None-Match with 304 so
+			// aggregators (and browsers) skip re-downloading an unchanged
+			// cached response — the bandwidth win feeds are about.
+			// (FBS-82407 #5)
+			if ( self::serve_not_modified( $file, (int) $stat['mtime'] ) ) {
+				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- our own handle.
+				return true; // 304 sent, no body.
+			}
+		}
+		// Serve the precompressed Brotli sibling when the client accepts
+		// it (an add-on, the Pro Brotli module, wrote <file>.br). On this
+		// PHP serve path the web server never sees the .br, so without
+		// this a br-capable client got the plain .html — precompression
+		// did nothing here. Falls through to the plain .html otherwise.
+		$br = self::maybe_serve_brotli( $file );
+		if ( null !== $br ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.PHP.NoSilencedErrors.Discouraged -- streaming our own cache file; a purge may have removed it, which falls back to the open .html.
+			$br_handle = @fopen( $br, 'rb' );
+			if ( false !== $br_handle ) {
+				fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- our own handle.
+				$handle = $br_handle;
+			} else {
+				header_remove( 'Content-Encoding' );
+			}
+		}
+		fpassthru( $handle );
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- our own handle.
+		return true;
 	}
 
 	/**
@@ -4021,9 +4057,17 @@ class Cache {
 	 * derivation in nginx_snippet(). Shared by the write and the purge so the
 	 * two can't drift; when they did, purging a page on a ported host deleted
 	 * nothing and the stale copy kept being served by the rewrite.
+	 *
+	 * Lowercased, and a `:80` or `:443` suffix is dropped, because nginx's
+	 * `$host` is lowercase and port-free and the purge and GC paths already
+	 * name the host that way. A raw `Host: EXAMPLE.COM` or `example.com:443`
+	 * otherwise wrote a copy the nginx rule never looked for and no purge
+	 * ever reached. (#885)
 	 */
 	public static function static_host_dir( string $host ): string {
-		return (string) preg_replace( '/[^a-zA-Z0-9.\-]/', '', $host );
+		$host = strtolower( $host );
+		$host = (string) preg_replace( '/:(?:80|443)$/', '', $host );
+		return (string) preg_replace( '/[^a-z0-9.\-]/', '', $host );
 	}
 
 	public static function host_dir( string $host ): string {
@@ -4592,11 +4636,14 @@ class Cache {
 	 * serve code writes `X-XSpeed-Built`, so a value older than the purge is
 	 * proof the origin answered with old HTML.
 	 *
-	 * @param string $file Absolute path to the cache .html file.
+	 * @param string   $file  Absolute path to the cache .html file.
+	 * @param int|null $mtime The entry's mtime when the caller holds it open.
+	 *                        A listener in mark() may have purged the file by
+	 *                        now, and filemtime() would warn. (#887)
 	 * @return bool True when a 304 was sent.
 	 */
-	public static function serve_not_modified( string $file ): bool {
-		$mtime = (int) filemtime( $file );
+	public static function serve_not_modified( string $file, ?int $mtime = null ): bool {
+		$mtime = $mtime ?? (int) filemtime( $file );
 		if ( $mtime <= 0 ) {
 			return false;
 		}
@@ -7890,6 +7937,59 @@ class Cache {
 	}
 
 	/**
+	 * Causes of automatic purges that change nothing the object cache holds:
+	 * xSpeed's own page-cache settings. Content and presentation purges are
+	 * recognised by their intent instead; see purge_flushes_object_cache().
+	 */
+	private const OBJECT_CACHE_KEEP_CAUSES = array(
+		'settings change',
+		'page cache toggled',
+		'tablet_separate changed',
+		'mobile_separate changed',
+		'edge device keying changed',
+		'cdn settings change',
+	);
+
+	/**
+	 * Whether a full purge should also flush the persistent object cache.
+	 *
+	 * A page-cache purge and an object-cache flush are different operations.
+	 * Saving a post, a product, a menu or a widget, or switching the theme,
+	 * changes what the cached HTML says, but WordPress core (and WooCommerce
+	 * for its own data) already invalidates exactly the objects that changed:
+	 * clean_post_cache(), the `last_changed` stamps, the meta and term caches.
+	 * Flushing on top of that added no correctness and threw away the whole
+	 * object cache on every save, so a store got slower with the object cache
+	 * on than off (#799). Those purges carry a `content` or `presentation`
+	 * intent, and xSpeed's own settings changes have a cause in
+	 * OBJECT_CACHE_KEEP_CAUSES.
+	 *
+	 * Everything else still flushes: the Purge All button, the purge type
+	 * runner, CLI / REST / MCP purges, plugin activation and deactivation,
+	 * updates, imports and the database
+	 * optimizer, which writes rows behind the object cache's back.
+	 *
+	 * @param string $cause  The purge cause.
+	 * @param string $intent The invalidation intent.
+	 * @return bool
+	 */
+	public static function purge_flushes_object_cache( string $cause, string $intent = 'complete' ): bool {
+		$flush = in_array( $cause, array( 'hook:activated_plugin', 'hook:deactivated_plugin' ), true )
+			|| ( ! in_array( $intent, array( 'content', 'presentation' ), true )
+				&& ! in_array( $cause, self::OBJECT_CACHE_KEEP_CAUSES, true ) );
+
+		/**
+		 * Filters whether a full purge flushes the persistent object cache.
+		 *
+		 * @param bool   $flush  Whether to flush.
+		 * @param string $cause  The purge cause, e.g. `manual`, `post:product`.
+		 * @param string $intent The invalidation intent: complete, content,
+		 *                       presentation or assets.
+		 */
+		return (bool) apply_filters( 'xspeed_purge_flushes_object_cache', $flush, $cause, $intent );
+	}
+
+	/**
 	 * Purge this site's cache: the local sweep, then the object cache, then
 	 * the bookkeeping every caller expects (stats, `xspeed_after_purge_all`,
 	 * inventory invalidation, purge log).
@@ -7939,7 +8039,9 @@ class Cache {
 		$local_complete = $removed['complete'];
 		$count   = $removed['pages'] + $removed['rest'];
 
-		self::flush_object_cache( $network_wide );
+		if ( self::purge_flushes_object_cache( $cause, $intent ) ) {
+			self::flush_object_cache( $network_wide );
+		}
 
 		self::update_stats( array( 'last_purge' => time() ) );
 
@@ -11376,18 +11478,16 @@ class Cache {
 
 		$lines   = array();
 		$lines[] = '# xSpeed static cache — paste at server level, above location / { }.';
-		// Cache host must match the on-disk dir PHP writes: store_static() /
-		// static_host() take HTTP_HOST and strip every char outside
-		// [a-zA-Z0-9.\-] — i.e. it removes the colon but KEEPS the port digits
-		// (localhost:8192 → localhost8192). nginx's own $host can't reproduce
-		// that: $host has the port already stripped ENTIRELY (→ localhost), so
-		// the -f check looks for localhost/... while PHP wrote localhost8192/...
-		// and the rewrite never fires on a non-standard port. Derive
-		// $xspeed_host from $http_host (which keeps the port) and drop just the
-		// colon, so it equals the PHP dir on every port. On standard ports
-		// $http_host has no colon, so $xspeed_host == $host == the bare domain.
-		$lines[] = 'set $xspeed_host $http_host;'; // default: no port → unchanged (e.g. example.com)
-		$lines[] = 'if ($http_host ~ "^([^:]+):(\\d+)$") { set $xspeed_host $1$2; }'; // host:port → hostport (matches PHP static_host())
+		// Cache host must match the folder static_host_dir() writes: lowercase,
+		// `:80`/`:443` dropped, any other port folded in (localhost:8192 →
+		// localhost8192). Start from $host, which nginx lowercases, strips of
+		// its port and fills from `:authority` on HTTP/2 and HTTP/3. The raw
+		// $http_host is used only to read back a non-default port, since $host
+		// has none. Keying on $http_host alone missed every HTTP/3 request, an
+		// upper-case Host and `Host: site.com:443`, and sent them all to PHP.
+		// (#885)
+		$lines[] = 'set $xspeed_host $host;';
+		$lines[] = 'if ($http_host ~ ":(?!(?:80|443)$)(\\d+)$") { set $xspeed_host $host$1; }';
 		$lines[] = 'set $xspeed_no_cache "no-cache";';
 		$lines[] = 'if ($request_method != GET) { set $xspeed_no_cache "$xspeed_no_cache-method"; }';
 		$lines[] = 'if ($args) { set $xspeed_no_cache "$xspeed_no_cache-args"; }';

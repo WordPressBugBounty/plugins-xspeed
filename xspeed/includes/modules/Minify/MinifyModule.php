@@ -92,7 +92,7 @@ final class MinifyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Load CSS without blocking', 'xspeed' ),
-				'description' => __( 'On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump.', 'xspeed' ),
+				'description' => __( 'On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump. Pages with a slider, carousel or masonry grid also load their CSS normally, because those scripts lay the page out before late CSS would arrive.', 'xspeed' ),
 			),
 			'remove_query_strings' => array(
 				'type'        => 'bool',
@@ -152,14 +152,14 @@ final class MinifyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Combine CSS files', 'xspeed' ),
-				'description' => __( 'Joins your site\'s own CSS files into one. This helps only on old HTTP/1.1 servers, so leave it off on most hosts.', 'xspeed' ),
+				'description' => __( 'Joins your site\'s own CSS files into one. This helps only on old HTTP/1.1 servers, so leave it off on most hosts. Runs for logged-in visitors too, so an admin browsing the site sees the combined page.', 'xspeed' ),
 				'advanced'    => true,
 			),
 			'combine_js' => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Combine JavaScript files', 'xspeed' ),
-				'description' => __( 'Joins your site\'s own scripts into one file. Turn off if a script stops working after you enable it.', 'xspeed' ),
+				'description' => __( 'Joins your site\'s own scripts into one file. Turn off if a script stops working after you enable it. Runs for logged-in visitors too, so an admin browsing the site sees the combined page.', 'xspeed' ),
 				'advanced'    => true,
 			),
 		);
@@ -257,6 +257,14 @@ final class MinifyModule extends Module {
 		 * one hook later is equivalent.
 		 */
 		add_action( 'init', array( $this, 'boot_on_init' ) );
+		// A saved change can lift the reason a page was left alone, so the
+		// panel starts its list again from the next cache MISS. (#553)
+		add_action(
+			'update_option_' . Settings_Manager::OPTION_PREFIX . self::SLUG,
+			static function (): void {
+				delete_transient( Minify_Filters::ASYNC_CSS_SKIPS_TRANSIENT );
+			}
+		);
 	}
 
 	/**
@@ -285,14 +293,15 @@ final class MinifyModule extends Module {
 	 * @return array<int,array<string,mixed>>
 	 */
 	public function ui_notices(): array {
-		$opts = $this->get_settings();
+		$opts    = $this->get_settings();
+		$notices = $this->async_css_notices( $opts );
 		if ( empty( $opts['minify_html'] ) ) {
-			return array();
+			return $notices;
 		}
 
 		$reason = LegacyMinifier::skip_reason();
 		if ( '' === $reason ) {
-			return array();
+			return $notices;
 		}
 
 		// Two different causes, two different fixes — naming the wrong one
@@ -301,13 +310,73 @@ final class MinifyModule extends Module {
 			? __( 'HTML minification is paused because WP_DEBUG is enabled in wp-config.php. Readable HTML is usually what you want while debugging, so xSpeed leaves the markup alone. Cached pages are served un-minified until WP_DEBUG is turned off.', 'xspeed' )
 			: __( 'HTML minification is paused because a plugin or theme is returning true from the xspeed_skip_minify filter. Cached pages are served un-minified until that filter stops suppressing it.', 'xspeed' );
 
-		return array(
-			array(
-				'tone'  => 'info',
-				'title' => __( 'HTML minification is on but currently paused', 'xspeed' ),
-				'body'  => $body,
-			),
+		$notices[] = array(
+			'tone'  => 'info',
+			'title' => __( 'HTML minification is on but currently paused', 'xspeed' ),
+			'body'  => $body,
 		);
+		return $notices;
+	}
+
+	/**
+	 * Say which pages Load CSS without blocking left alone, and why.
+	 *
+	 * Both guards in Minify_Filters::async_style_tag() are deliberate, but
+	 * the setting read "on" while a slider page's stylesheets stayed
+	 * render-blocking, with nothing saying why. (#553)
+	 *
+	 * @param array<string,mixed> $opts This module's settings.
+	 * @return array<int,array<string,mixed>>
+	 */
+	private function async_css_notices( array $opts ): array {
+		if ( empty( $opts['async_css'] ) ) {
+			return array();
+		}
+		$report = get_transient( Minify_Filters::ASYNC_CSS_SKIPS_TRANSIENT );
+		if ( ! is_array( $report ) ) {
+			return array();
+		}
+
+		$notices = array();
+		foreach ( array( 'no_critical_css', 'js_measured_layout' ) as $reason ) {
+			if ( empty( $report[ $reason ]['paths'] ) || ! is_array( $report[ $reason ]['paths'] ) ) {
+				continue;
+			}
+			$paths   = implode( ', ', array_map( 'strval', $report[ $reason ]['paths'] ) );
+			$handles = isset( $report[ $reason ]['handles'] ) && is_array( $report[ $reason ]['handles'] )
+				? implode( ', ', array_map( 'strval', $report[ $reason ]['handles'] ) )
+				: '';
+
+			if ( 'no_critical_css' === $reason ) {
+				$body = sprintf(
+					/* translators: %s: comma-separated page paths, e.g. "/, /shop/". */
+					__( 'Stylesheets stayed render-blocking on %s because those pages have no critical CSS. Without it, deferred CSS makes the page show unstyled and then jump. A theme or plugin that inlines critical CSS for a page can return true from the xspeed_async_css_page_has_critical_css filter.', 'xspeed' ),
+					$paths
+				);
+			} elseif ( '' !== $handles ) {
+				$body = sprintf(
+					/* translators: 1: comma-separated page paths, 2: comma-separated script handles, e.g. "swiper". */
+					__( 'Stylesheets stayed render-blocking on %1$s because a script there lays the page out by measuring it (%2$s). Sliders, carousels and masonry grids stay broken when their CSS arrives after the script has run. If the layout on those pages is pure CSS, return false from the xspeed_async_css_js_measured_layout filter.', 'xspeed' ),
+					$paths,
+					$handles
+				);
+			} else {
+				$body = sprintf(
+					/* translators: %s: comma-separated page paths, e.g. "/, /shop/". */
+					__( 'Stylesheets stayed render-blocking on %s because the xspeed_async_css_js_measured_layout filter reports a layout built by a script there. Return false from that filter if the layout on those pages is pure CSS.', 'xspeed' ),
+					$paths
+				);
+			}
+
+			$notices[] = array(
+				'tone'  => 'info',
+				'title' => 'no_critical_css' === $reason
+					? __( 'Load CSS without blocking skipped pages without critical CSS', 'xspeed' )
+					: __( 'Load CSS without blocking skipped pages with a slider or grid', 'xspeed' ),
+				'body'  => $body,
+			);
+		}
+		return $notices;
 	}
 
 	private function seed_from_legacy_if_needed(): void {

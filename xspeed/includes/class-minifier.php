@@ -191,6 +191,9 @@ class Minifier {
 			// critical CSS. Runs after every script pass so its own
 			// inline script is never deferred or delayed.
 			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'hold_transitions_for_async_css' ), 26 );
+			// Last, after any extension's own stylesheet deferral, so a page
+			// counts as left alone only when nothing deferred it. (#553)
+			add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'record_async_css_outcome' ), 27 );
 		}
 
 		/*

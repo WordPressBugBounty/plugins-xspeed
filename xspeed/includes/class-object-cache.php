@@ -152,15 +152,72 @@ final class Object_Cache {
 	}
 
 	/**
-	 * Delete this site's keys from Redis, the same `salt:*` scope the
-	 * drop-in's flush uses. For when the drop-in is not loaded in this
-	 * request, so wp_cache_flush() would flush someone else's cache or none.
+	 * Open a Redis_Client from the object-cache settings, authenticated and
+	 * on the configured database.
+	 *
+	 * @param array $opts Settings array.
+	 * @return Redis_Client|null Null when it cannot connect or authenticate.
+	 */
+	private static function redis_connect( array $opts ): ?Redis_Client {
+		$client = new Redis_Client(
+			self::str( $opts, 'redis_host', '127.0.0.1' ),
+			self::int( $opts, 'redis_port', 6379 ),
+			(float) ( $opts['connection_timeout'] ?? 1 ),
+			false
+		);
+		if ( ! $client->connect() ) {
+			return null;
+		}
+		$user = self::str( $opts, 'redis_user', '' );
+		$pass = self::str( $opts, 'redis_password', '' );
+		if ( ( '' !== $pass || '' !== $user ) && false === $client->auth( $pass, $user ) ) {
+			$client->close();
+			return null;
+		}
+		$db = self::int( $opts, 'redis_database', 0 );
+		if ( $db > 0 && false === $client->select( $db ) ) {
+			$client->close();
+			return null;
+		}
+		return $client;
+	}
+
+	/** $salt escaped for a SCAN MATCH pattern. */
+	private static function glob_literal( string $salt ): string {
+		return str_replace(
+			array( '\\', '*', '?', '[', ']' ),
+			array( '\\\\', '\\*', '\\?', '\\[', '\\]' ),
+			$salt
+		);
+	}
+
+	/**
+	 * Regex for every Redis key this site's drop-in has ever written: the
+	 * `{salt}:g{n}:{blog}:` generation keys, the flat `{salt}:{blog}:` keys
+	 * of 1.4.4 and earlier, the `{salt}|g{n}:` keys and `{salt}.xspeed-oc-gen`
+	 * counter of the build QA tested before #813, and the
+	 * `{salt}:generation` counter. The lookaheads keep a neighbouring salt
+	 * such as `{salt}:3` or `{salt}:g5:3` out of the match.
+	 */
+	private static function namespace_filter( string $salt, bool $legacy_only = false ): string {
+		if ( $legacy_only ) {
+			return '/\A' . preg_quote( $salt, '/' ) . '(?::[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|\|g[0-9]+:[0-9]+:|\.xspeed-oc-gen\z)/';
+		}
+		return '/\A' . preg_quote( $salt, '/' ) . '(?::g[0-9]+:[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|:[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|\|g[0-9]+:[0-9]+:|\.xspeed-oc-gen\z|' . preg_quote( self::REDIS_COUNTER_SUFFIX, '/' ) . '\z)/';
+	}
+
+	/**
+	 * Delete this site's Redis keys in every generation and layout,
+	 * counters included. Used when the drop-in is not loaded, and on
+	 * disable, when a flush that only moves the counter would leave the
+	 * values behind.
 	 * Memcached has no key enumeration; its namespace generation covers it.
 	 *
 	 * @param array $opts Settings array.
-	 * @return int Keys deleted, or -1 when nothing could be done.
+	 * @param bool  $legacy_only Delete only old layouts, if their counter exists.
+	 * @return int Keys deleted, or -1 on failure.
 	 */
-	public static function purge_namespace( array $opts ): int {
+	public static function purge_namespace( array $opts, bool $legacy_only = false ): int {
 		if ( 'redis' !== (string) ( $opts['backend'] ?? 'redis' ) ) {
 			return -1;
 		}
@@ -168,33 +225,358 @@ final class Object_Cache {
 		if ( '' === $salt ) {
 			return -1;
 		}
-		$client = new Redis_Client(
-			self::str( $opts, 'redis_host', '127.0.0.1' ),
-			self::int( $opts, 'redis_port', 6379 ),
-			(float) self::int( $opts, 'connection_timeout', 1 ),
-			false
-		);
-		if ( ! $client->connect() ) {
+		$client = self::redis_connect( $opts );
+		if ( null === $client ) {
 			return -1;
 		}
-		$user = self::str( $opts, 'redis_user', '' );
-		$pass = self::str( $opts, 'redis_password', '' );
-		if ( ( '' !== $pass || '' !== $user ) && false === $client->auth( $pass, $user ) ) {
-			$client->close();
-			return -1;
+		if ( $legacy_only ) {
+			$exists = $client->exists( $salt . '.xspeed-oc-gen' );
+			if ( 1 !== $exists ) {
+				$client->close();
+				return 0 === $exists ? 0 : -1;
+			}
 		}
-		$db = self::int( $opts, 'redis_database', 0 );
-		if ( $db > 0 ) {
-			$client->select( $db );
-		}
-		$pattern = str_replace(
-			array( '\\', '*', '?', '[', ']' ),
-			array( '\\\\', '\\*', '\\?', '\\[', '\\]' ),
-			$salt
-		) . ':*';
-		$deleted = $client->delete_by_pattern( $pattern );
+		$deleted = $client->delete_by_pattern( self::glob_literal( $salt ) . '*', 500, self::namespace_filter( $salt, $legacy_only ) );
 		$client->close();
-		return $deleted;
+		return false === $deleted ? -1 : $deleted;
+	}
+
+	/**
+	 * Empty the namespace again after shutdown writes. A flush through the
+	 * drop-in only moves the generation counter, which would leave every
+	 * value in Redis after the drop-in is gone, so this deletes them.
+	 */
+	public static function purge_live_namespace(): bool {
+		$flushed = self::flush();
+		if ( ! class_exists( __NAMESPACE__ . '\\Settings_Manager' ) ) {
+			return $flushed;
+		}
+		$opts = (array) Settings_Manager::get( 'object-cache' );
+		if ( 'redis' !== (string) ( $opts['backend'] ?? 'redis' ) ) {
+			return $flushed;
+		}
+		return self::purge_namespace( $opts ) >= 0;
+	}
+
+	/** Suffix of the drop-in's Redis generation counter, `{salt}:generation`. */
+	public const REDIS_COUNTER_SUFFIX = ':generation';
+
+	/** Option holding the reclaim state shown by `wp xspeed objcache status`. */
+	public const RECLAIM_OPTION = 'xspeed_oc_reclaim';
+
+	/** Cron hook the drop-in schedules after a Redis flush. */
+	public const RECLAIM_HOOK = 'xspeed_oc_reclaim';
+
+	/** Option holding the times at which the post-upgrade bumps are due. */
+	public const DRAIN_OPTION = 'xspeed_oc_generation_drain';
+
+	/** Cron hook that runs the post-upgrade bumps. */
+	public const DRAIN_HOOK = 'xspeed_oc_generation_drain';
+
+	/** Reclaim attempts before the state is marked failed. */
+	private const RECLAIM_MAX_ATTEMPTS = 3;
+
+	/**
+	 * Move the Redis generation counter forward from outside the drop-in.
+	 *
+	 * Runs before a changed drop-in replaces ours, and again once requests
+	 * that loaded the old file have finished. Values written by either file
+	 * before the bump become unreachable, so a request still running the old
+	 * code cannot leave behind a value the new code would serve.
+	 *
+	 * A missing counter needs nothing: the next request seeds a new one
+	 * above every generation used before. A successful bump queues the
+	 * reclaim of the generation it retired. When Redis refuses the
+	 * increment, the site's keys are deleted instead.
+	 *
+	 * @param array|null $opts Settings array; the saved settings when null.
+	 * @return bool False when neither the bump nor the delete worked.
+	 */
+	public static function advance_generation( ?array $opts = null ): bool {
+		$opts = $opts ?? self::settings();
+		if ( 'redis' !== (string) ( $opts['backend'] ?? 'redis' ) ) {
+			return true;
+		}
+		$salt = self::effective_salt( $opts );
+		if ( '' === $salt ) {
+			return true;
+		}
+		$client = self::redis_connect( $opts );
+		if ( null === $client ) {
+			return false;
+		}
+		$key    = $salt . self::REDIS_COUNTER_SUFFIX;
+		$exists = $client->exists( $key );
+		if ( 0 === $exists ) {
+			$client->close();
+			return true;
+		}
+		$new = 1 === $exists ? $client->incrBy( $key, 1 ) : false;
+		$client->close();
+		if ( is_int( $new ) && $new > 1 ) {
+			self::write_generation_floor( $new );
+			// The generation just retired holds whatever was cached since the
+			// last bump, and nothing else will delete it.
+			self::schedule_reclaim( 30 );
+			return true;
+		}
+		return self::purge_namespace( $opts ) >= 0;
+	}
+
+	/**
+	 * Raise the generation floor the drop-in reads, never lower it. Written
+	 * with SQL because the options API would go through the object cache,
+	 * and the drop-in reads this row from the database for the same reason.
+	 */
+	private static function write_generation_floor( int $generation ): void {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'query' ) || ! method_exists( $wpdb, 'prepare' ) ) {
+			return;
+		}
+		$table = ( isset( $wpdb->base_prefix ) && '' !== (string) $wpdb->base_prefix ? $wpdb->base_prefix : ( $wpdb->prefix ?? 'wp_' ) ) . 'options';
+		$wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- the options API would route through the object cache.
+			$wpdb->prepare(
+				"INSERT INTO {$table} (option_name, option_value, autoload)
+				 VALUES (%s, %s, 'no')
+				 ON DUPLICATE KEY UPDATE option_value = IF( CAST( option_value AS UNSIGNED ) < CAST( VALUES(option_value) AS UNSIGNED ), VALUES(option_value), option_value )", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is derived from $wpdb.
+				'xspeed_oc_generation',
+				(string) $generation
+			)
+		);
+	}
+
+	/**
+	 * Queue the bumps that follow a drop-in replacement: one a minute later
+	 * for ordinary requests that loaded the old file, one after fifteen
+	 * minutes for cron and CLI runs. Held in an option as well as cron, so
+	 * a site with WP-Cron off still runs them on an admin page load.
+	 */
+	public static function schedule_generation_drain(): void {
+		$now = time();
+		update_option( self::DRAIN_OPTION, array( $now + MINUTE_IN_SECONDS, $now + 15 * MINUTE_IN_SECONDS ), false );
+		if ( function_exists( 'wp_schedule_single_event' ) ) {
+			wp_schedule_single_event( $now + MINUTE_IN_SECONDS + 5, self::DRAIN_HOOK );
+			wp_schedule_single_event( $now + 15 * MINUTE_IN_SECONDS + 5, self::DRAIN_HOOK );
+		}
+	}
+
+	/**
+	 * Run the post-upgrade bumps that are due. A bump that fails stays
+	 * queued for the next admin load or cron run.
+	 */
+	public static function run_generation_drain(): void {
+		$due = get_option( self::DRAIN_OPTION, array() );
+		if ( ! is_array( $due ) || empty( $due ) || ! self::is_our_dropin_present() ) {
+			return;
+		}
+		$now     = time();
+		$pending = array();
+		$ran     = false;
+		foreach ( $due as $at ) {
+			if ( (int) $at > $now ) {
+				$pending[] = (int) $at;
+				continue;
+			}
+			if ( $ran ) {
+				continue; // Overdue bumps collapse into one.
+			}
+			if ( ! self::advance_generation() ) {
+				$pending[] = (int) $at;
+			}
+			$ran = true;
+		}
+		if ( empty( $pending ) ) {
+			delete_option( self::DRAIN_OPTION );
+		} else {
+			update_option( self::DRAIN_OPTION, $pending, false );
+		}
+	}
+
+	/** The running drop-in configuration, or saved settings before it loads. */
+	private static function settings(): array {
+		$opts = class_exists( __NAMESPACE__ . '\\Settings_Manager' ) ? (array) Settings_Manager::get( 'object-cache' ) : array();
+		// Pending panel overrides can differ from the file already loaded.
+		// Bumps and reclaim must use the namespace that request is serving.
+		if ( function_exists( 'xspeed_oc_config' ) ) {
+			foreach ( array(
+				'backend'  => array( 'backend', 'redis' ),
+				'host'     => array( 'redis_host', '127.0.0.1' ),
+				'port'     => array( 'redis_port', 6379 ),
+				'user'     => array( 'redis_user', '' ),
+				'password' => array( 'redis_password', '' ),
+				'database' => array( 'redis_database', 0 ),
+				'timeout'  => array( 'connection_timeout', 1 ),
+				'salt'     => array( 'key_prefix', '' ),
+			) as $key => $field ) {
+				$opts[ $field[0] ] = \xspeed_oc_config( $key, $field[1] );
+			}
+			if ( function_exists( 'xspeed_oc_salt' ) ) {
+				$opts['key_prefix'] = \xspeed_oc_salt();
+			}
+		}
+		return $opts;
+	}
+
+	/**
+	 * The reclaim state, with defaults filled in.
+	 *
+	 * @return array{status:string,cursor:string,pass_gen:int,deleted:int,attempts:int,error:string,updated:int}
+	 */
+	public static function reclaim_state(): array {
+		$state = get_option( self::RECLAIM_OPTION, array() );
+		return array_merge(
+			array(
+				'status'   => '',
+				'cursor'   => '0',
+				'pass_gen' => 0,
+				'deleted'  => 0,
+				'attempts' => 0,
+				'error'    => '',
+				'updated'  => 0,
+			),
+			is_array( $state ) ? $state : array()
+		);
+	}
+
+	/**
+	 * Delete Redis keys from generations a flush retired, a slice at a time.
+	 *
+	 * A flush only moves the counter, so the old generation's values stay in
+	 * Redis until this runs. It SCANs the site's keys and UNLINKs those from
+	 * a generation below the current one, plus any key in a layout an
+	 * earlier version wrote. Values in the current generation and the
+	 * counter are never touched.
+	 *
+	 * A slice stops after $budget seconds and schedules the next one. A
+	 * failed slice retries a minute later, up to three times, then the
+	 * state reads `failed` until the next flush schedules a fresh run. When
+	 * the counter moved during a pass, a new pass starts so keys the newer
+	 * flush retired are deleted too.
+	 *
+	 * @param array|null $opts   Settings array; the saved settings when null.
+	 * @param float      $budget Seconds one slice may run.
+	 * @return array The state after this slice.
+	 */
+	public static function reclaim( ?array $opts = null, float $budget = 5.0 ): array {
+		$opts  = $opts ?? self::settings();
+		$state = self::reclaim_state();
+		if ( 'running' !== $state['status'] ) {
+			$state['attempts'] = 0;
+		}
+		$salt  = self::effective_salt( $opts );
+		if ( 'redis' !== (string) ( $opts['backend'] ?? 'redis' ) || '' === $salt ) {
+			return self::save_reclaim( array( 'status' => 'skipped', 'cursor' => '0', 'error' => 'not a Redis object cache' ) + $state );
+		}
+		$client = self::redis_connect( $opts );
+		if ( null === $client ) {
+			return self::reclaim_failed( $state, 'could not connect to Redis' );
+		}
+		$counter = $client->get( $salt . self::REDIS_COUNTER_SUFFIX );
+		if ( ! is_string( $counter ) || ! ctype_digit( $counter ) ) {
+			$client->close();
+			// Without a counter there is no current generation to keep, and
+			// the next request will seed one above every old generation.
+			return self::save_reclaim(
+				array(
+					'status' => 'skipped',
+					'cursor' => '0',
+					'error'  => false === $counter ? 'no generation counter' : 'generation counter unreadable',
+				) + $state
+			);
+		}
+		$current = (int) $counter;
+		if ( 'running' !== $state['status'] ) {
+			$state['cursor']   = '0';
+			$state['pass_gen'] = $current;
+			$state['deleted']  = 0;
+		}
+
+		$quoted  = preg_quote( $salt, '/' );
+		$gen_re  = '/\A' . $quoted . ':g([0-9]+):[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)/';
+		$old_re  = '/\A' . $quoted . '(?::[0-9]+:(?!g[0-9]+:[0-9]+:|generation\z)|\|g[0-9]+:[0-9]+:|\.xspeed-oc-gen\z)/';
+		$pattern = self::glob_literal( $salt ) . '*';
+		$started = microtime( true );
+		$cursor  = (string) $state['cursor'];
+		do {
+			$step = $client->scan_step( $cursor, $pattern, 1000 );
+			if ( false === $step ) {
+				$client->close();
+				return self::reclaim_failed( $state, 'SCAN refused: ' . $client->last_error() );
+			}
+			list( $cursor, $keys ) = $step;
+			$dead = array();
+			foreach ( $keys as $key ) {
+				if ( preg_match( $gen_re, $key, $m ) ? (int) $m[1] < $current : 1 === preg_match( $old_re, $key ) ) {
+					$dead[] = $key;
+				}
+			}
+			if ( ! empty( $dead ) ) {
+				$n = $client->unlink( $dead );
+				if ( false === $n ) {
+					$client->close();
+					return self::reclaim_failed( $state, 'UNLINK refused: ' . $client->last_error() );
+				}
+				$state['deleted'] += $n;
+			}
+			$state['cursor'] = $cursor;
+		} while ( '0' !== $cursor && ( microtime( true ) - $started ) < $budget );
+
+		$state['attempts'] = 0;
+		$state['error']    = '';
+		if ( '0' !== $cursor ) {
+			$client->close();
+			$state['status'] = 'running';
+			self::schedule_reclaim( 5 );
+			return self::save_reclaim( $state );
+		}
+
+		$now = $client->get( $salt . self::REDIS_COUNTER_SUFFIX );
+		$client->close();
+		if ( is_string( $now ) && ctype_digit( $now ) && (int) $now !== (int) $state['pass_gen'] ) {
+			// Flushed again after this pass started: the keys scanned before
+			// that flush were still current then, so start over for the
+			// keys it retired.
+			$state['status']   = 'running';
+			$state['cursor']   = '0';
+			$state['pass_gen'] = (int) $now;
+			self::schedule_reclaim( 5 );
+			return self::save_reclaim( $state );
+		}
+		$state['status'] = 'done';
+		return self::save_reclaim( $state );
+	}
+
+	/** The reclaim event. An event queued before Object Cache was turned off does nothing. */
+	public static function run_reclaim_event(): void {
+		if ( self::is_our_dropin_present() ) {
+			self::reclaim();
+		}
+	}
+
+	/** Record a failed slice and schedule the retry, or give up. */
+	private static function reclaim_failed( array $state, string $error ): array {
+		$state['attempts'] = (int) $state['attempts'] + 1;
+		$state['error']    = $error;
+		if ( $state['attempts'] >= self::RECLAIM_MAX_ATTEMPTS ) {
+			$state['status'] = 'failed';
+		} else {
+			// Keep the cursor: the retry resumes where this slice stopped.
+			$state['status'] = 'running';
+			self::schedule_reclaim( MINUTE_IN_SECONDS );
+		}
+		return self::save_reclaim( $state );
+	}
+
+	private static function save_reclaim( array $state ): array {
+		$state['updated'] = time();
+		update_option( self::RECLAIM_OPTION, $state, false );
+		return $state;
+	}
+
+	private static function schedule_reclaim( int $delay ): void {
+		if ( function_exists( 'wp_next_scheduled' ) && ! wp_next_scheduled( self::RECLAIM_HOOK ) ) {
+			wp_schedule_single_event( time() + $delay, self::RECLAIM_HOOK );
+		}
 	}
 
 	/**
@@ -285,6 +667,16 @@ final class Object_Cache {
 		}
 		$contents = file_get_contents( $target ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- read-only ours-check; WP_Filesystem may not be initialized this early.
 		return is_string( $contents ) && false !== strpos( $contents, self::DROPIN_TAG );
+	}
+
+	/** Content identity includes changes made without a plugin version bump. */
+	public static function dropin_hash( bool $installed = false ): string {
+		$path = $installed ? WP_CONTENT_DIR . '/object-cache.php' : XSPEED_DIR . 'includes/object-cache.php';
+		if ( ! is_readable( $path ) ) {
+			return '';
+		}
+		$hash = hash_file( 'sha256', $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_hash_file -- Read-only identity check before WP_Filesystem is initialized.
+		return is_string( $hash ) ? $hash : '';
 	}
 
 	/**
@@ -805,7 +1197,7 @@ final class Object_Cache {
 		if ( self::is_our_dropin_present() ) {
 			if ( self::our_dropin_is_live() ) {
 				self::flush();
-				add_action( 'shutdown', array( __CLASS__, 'flush' ), PHP_INT_MAX );
+				add_action( 'shutdown', array( __CLASS__, 'purge_live_namespace' ), PHP_INT_MAX );
 			} elseif ( class_exists( __NAMESPACE__ . '\\Settings_Manager' ) ) {
 				self::purge_namespace( (array) Settings_Manager::get( 'object-cache' ) );
 			}
@@ -813,6 +1205,10 @@ final class Object_Cache {
 
 		$dropin_removed = self::remove_dropin();
 		$config_removed = self::remove_wp_config();
+		if ( $dropin_removed && function_exists( 'wp_unschedule_hook' ) ) {
+			wp_unschedule_hook( self::RECLAIM_HOOK );
+			wp_unschedule_hook( self::DRAIN_HOOK );
+		}
 
 		/*
 		 * The sidecar is the config on a host where wp-config.php is read-only,
@@ -860,8 +1256,11 @@ final class Object_Cache {
 	 * Copy our object-cache.php template into wp-content/. Mirrors
 	 * Cache::install_dropin(): only overwrites our own file, backs up a
 	 * foreign drop-in before replacing it.
+	 *
+	 * @param bool|null $generation_deferred Set when sync must wait for a safe generation change.
 	 */
-	public static function install_dropin(): bool {
+	public static function install_dropin( ?bool &$generation_deferred = null ): bool {
+		$generation_deferred = false;
 		$source = ( defined( 'XSPEED_DIR' ) ? XSPEED_DIR : plugin_dir_path( __DIR__ ) . '../' ) . 'includes/object-cache.php';
 		$target = WP_CONTENT_DIR . '/object-cache.php';
 		if ( ! file_exists( $source ) ) {
@@ -886,8 +1285,20 @@ final class Object_Cache {
 				if ( $existing === $source_contents ) {
 					return true;
 				}
+				// Requests running the old file and requests running the new
+				// one overlap for a while, and they may not lay out or flush
+				// keys the same way. Retire everything cached so far before
+				// the switch, and again once the old requests are done. When
+				// that cannot happen, the old file stays and the sync retries.
+				if ( ! self::advance_generation() ) {
+					$generation_deferred = true;
+					return false;
+				}
 				$written = (bool) $fs->put_contents( $target, $source_contents, FS_CHMOD_FILE );
 				self::invalidate_compiled( $target );
+				if ( $written ) {
+					self::schedule_generation_drain();
+				}
 				return $written;
 			}
 

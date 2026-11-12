@@ -24,6 +24,12 @@ defined( 'ABSPATH' ) || exit;
 final class Minify_Filters {
 
 	/**
+	 * Pages where Load CSS without blocking left every stylesheet blocking,
+	 * keyed by the guard that decided it. Read by the CSS & JavaScript panel.
+	 */
+	public const ASYNC_CSS_SKIPS_TRANSIENT = 'xspeed_async_css_skips';
+
+	/**
 	 * Settings cache (one read per request).
 	 *
 	 * @var array|null
@@ -1759,6 +1765,7 @@ final class Minify_Filters {
 		// Jetpack Boost and FlyingPress likewise never defer CSS without
 		// critical CSS. (#588)
 		if ( ! self::page_has_critical_css() ) {
+			self::note_async_skip( 'no_critical_css', '' );
 			return $tag;
 		}
 		// The stylesheets that lay the page out stay render-blocking.
@@ -1796,6 +1803,7 @@ final class Minify_Filters {
 		// so pairing handles misses it. Whether a measuring library is present
 		// at all is the signal that generalises. (#269)
 		if ( self::page_has_js_measured_layout() ) {
+			self::note_async_skip( 'js_measured_layout', self::$js_measured_handle );
 			return $tag;
 		}
 		// Avoid double-wrapping.
@@ -2360,6 +2368,18 @@ final class Minify_Filters {
 			return true;
 		}
 		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return true;
+		}
+		// The login screen is not is_admin(), but it never fires wp_footer,
+		// so the delay bootstrap is never printed there: a delayed login
+		// captcha (Cloudflare Turnstile) never loaded, not even after typing,
+		// and WordPress refused every login. Some custom login URL plugins set
+		// $pagenow (WPS Hide Login); others require wp-login.php from a
+		// front-end request and leave it at index.php (Hide My WP Ghost).
+		// wp-login.php fires login_init before login_header() enqueues or
+		// prints any script, whichever way it was loaded. is_login() would
+		// need WordPress 6.1.
+		if ( ( isset( $GLOBALS['pagenow'] ) && 'wp-login.php' === $GLOBALS['pagenow'] ) || did_action( 'login_init' ) ) {
 			return true;
 		}
 		return false;
@@ -3133,6 +3153,8 @@ final class Minify_Filters {
 		self::$uploads_base            = null;
 		self::$delay_bootstrap_printed = false;
 		self::$js_measured_layout      = null;
+		self::$js_measured_handle      = '';
+		self::$async_skip              = array( 'reason' => '', 'handle' => '' );
 		self::$has_critical_css        = null;
 		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
@@ -3352,6 +3374,123 @@ final class Minify_Filters {
 	private static $js_measured_layout = null;
 
 	/**
+	 * The script handle that made page_has_js_measured_layout() true, or ''
+	 * when nothing matched or only the filter said so.
+	 *
+	 * @var string
+	 */
+	private static $js_measured_handle = '';
+
+	/**
+	 * The guard that kept this request's stylesheets blocking, if one did.
+	 *
+	 * @var array{reason:string,handle:string}
+	 */
+	private static $async_skip = array( 'reason' => '', 'handle' => '' );
+
+	/** Keep the first guard that fired; both guards are page-wide. */
+	private static function note_async_skip( string $reason, string $handle ): void {
+		if ( '' === self::$async_skip['reason'] ) {
+			self::$async_skip = array( 'reason' => $reason, 'handle' => $handle );
+		}
+	}
+
+	/**
+	 * Why async CSS left this request's stylesheets alone.
+	 *
+	 * `reason` is `no_critical_css`, `js_measured_layout` or '' when no
+	 * guard fired. `handle` names the measuring script, when one was found.
+	 *
+	 * @return array{reason:string,handle:string}
+	 */
+	public static function async_css_skip(): array {
+		return self::$async_skip;
+	}
+
+	/**
+	 * Filter: `xspeed_cache_final_html` — note pages where Load CSS without
+	 * blocking deferred nothing, so the panel can say why. Returns the HTML
+	 * unchanged.
+	 *
+	 * A guard firing in async_style_tag() is not enough on its own: an
+	 * extension can defer stylesheets itself on the finished page, so the
+	 * page counts as left alone only when no link carries an extension's
+	 * deferral marker and a blocking stylesheet is still there. The setting otherwise reads "on" while doing
+	 * nothing, which is how #553 was reported.
+	 *
+	 * Runs on a cache MISS only, and writes only when the report changes.
+	 *
+	 * @param string $html
+	 * @return string
+	 */
+	public static function record_async_css_outcome( $html ) {
+		if ( ! is_string( $html ) || '' === self::$async_skip['reason'] ) {
+			return $html;
+		}
+		// An extension's deferral markers. Our own `data-xs-async` does not
+		// count: the font-CSS pass adds it whatever the guards decided.
+		if ( preg_match( '#<link\b[^>]*\bdata-xspeed-(?:async|load)\b#i', $html ) ) {
+			return $html;
+		}
+		if ( ! self::has_blocking_stylesheet( $html ) ) {
+			return $html;
+		}
+
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- reduced to its path and length-capped below; shown to admins as text.
+		$uri  = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
+		$path = substr( (string) wp_parse_url( $uri, PHP_URL_PATH ), 0, 200 );
+		if ( '' === $path ) {
+			$path = '/';
+		}
+
+		$reason = self::$async_skip['reason'];
+		$report = get_transient( self::ASYNC_CSS_SKIPS_TRANSIENT );
+		if ( ! is_array( $report ) ) {
+			$report = array();
+		}
+		$entry = isset( $report[ $reason ] ) && is_array( $report[ $reason ] )
+			? $report[ $reason ] + array( 'paths' => array(), 'handles' => array() )
+			: array( 'paths' => array(), 'handles' => array() );
+		$before = $entry;
+
+		if ( count( $entry['paths'] ) < 5 && ! in_array( $path, $entry['paths'], true ) ) {
+			$entry['paths'][] = $path;
+		}
+		$handle = self::$async_skip['handle'];
+		if ( '' !== $handle && count( $entry['handles'] ) < 5 && ! in_array( $handle, $entry['handles'], true ) ) {
+			$entry['handles'][] = $handle;
+		}
+		if ( $entry === $before ) {
+			return $html;
+		}
+
+		$report[ $reason ] = $entry;
+		set_transient( self::ASYNC_CSS_SKIPS_TRANSIENT, $report, 7 * DAY_IN_SECONDS );
+		return $html;
+	}
+
+	/**
+	 * True when a render-blocking `<link rel=stylesheet>` sits outside every
+	 * `<noscript>` — the fallback copies there never block.
+	 */
+	private static function has_blocking_stylesheet( string $html ): bool {
+		$outside = (string) preg_replace( '#<noscript\b.*?</noscript\s*>#is', '', $html );
+		if ( ! preg_match_all( '#<link\b[^>]*>#i', $outside, $links ) ) {
+			return false;
+		}
+		foreach ( $links[0] as $tag ) {
+			if ( ! preg_match( '#(?<![-\w])rel\s*=\s*(["\']?)\s*stylesheet\s*\1#i', $tag ) ) {
+				continue;
+			}
+			if ( false !== stripos( $tag, 'data-xs-async' ) || preg_match( '#\bmedia\s*=\s*(["\']?)\s*print\s*\1#i', $tag ) ) {
+				continue;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Per-request memo for page_has_critical_css(). Null = not resolved.
 	 *
 	 * @var bool|null
@@ -3447,7 +3586,8 @@ final class Minify_Filters {
 					$handle = strtolower( (string) $handle );
 					foreach ( $markers as $marker ) {
 						if ( false !== strpos( $handle, $marker ) ) {
-							$found = true;
+							$found                    = true;
+							self::$js_measured_handle = $handle;
 							break 2;
 						}
 					}

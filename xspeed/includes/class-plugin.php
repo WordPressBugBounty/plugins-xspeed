@@ -15,7 +15,7 @@ class Plugin {
 	 * Data-schema version for one-time migrations, independent of the
 	 * plugin version header. Bump when adding a step to maybe_upgrade().
 	 */
-	public const DATA_VERSION = '1.4.4';
+	public const DATA_VERSION = '1.4.6';
 
 	private static $instance = null;
 
@@ -268,6 +268,26 @@ class Plugin {
 		// which the new defaults never reach, so add them to it.
 		if ( version_compare( $current, '1.3.6', '<' ) ) {
 			self::add_new_ignored_params();
+		}
+
+		// 1.4.5: replace the earlier Redis generation drop-in before cleanup.
+		if ( version_compare( $current, '1.4.5', '<' ) && ! get_option( 'xspeed_oc_cleanup_queued_1_4_5' ) ) {
+			wp_unschedule_hook( 'xspeed_oc_sweep' );
+			$object_cache = (array) get_option( 'xspeed_module_object-cache', array() );
+			if ( 'redis' === ( $object_cache['backend'] ?? 'redis' ) && Object_Cache::is_our_dropin_present() ) {
+				update_option( 'xspeed_oc_namespace_cleanup', 'pending', false );
+			}
+			update_option( 'xspeed_oc_cleanup_queued_1_4_5', 1, false );
+		}
+
+		// 1.4.6: generation keys replace the flat Redis layout (#801).
+		// The version/hash sync target handles replacement and its retry cap.
+		if ( version_compare( $current, '1.4.6', '<' ) && ! get_option( 'xspeed_oc_reclaim_queued_1_4_6' ) ) {
+			$object_cache = (array) get_option( 'xspeed_module_object-cache', array() );
+			if ( 'redis' === ( $object_cache['backend'] ?? 'redis' ) && Object_Cache::is_our_dropin_present() && ! wp_next_scheduled( Object_Cache::RECLAIM_HOOK ) ) {
+				wp_schedule_single_event( time() + 5 * MINUTE_IN_SECONDS, Object_Cache::RECLAIM_HOOK );
+			}
+			update_option( 'xspeed_oc_reclaim_queued_1_4_6', 1, false );
 		}
 
 		// 1.4.3 — the lazy loader rewrote an autoplay video's src through a

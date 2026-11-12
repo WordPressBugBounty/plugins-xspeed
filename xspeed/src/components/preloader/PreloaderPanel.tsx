@@ -165,6 +165,33 @@ export function PreloaderPanel({ module, onSaved }: PanelProps) {
   );
 }
 
+/**
+ * One-line crawl progress. Counts come from the state, not `errors.length`:
+ * the error list keeps only the last 20, and `processed` counts URLs tried,
+ * not URLs cached. (#837)
+ */
+export function crawlSummary(state: PreloaderState, skipped: number): string {
+  const untracked = state.untracked ?? 0;
+  const parts = [`${state.processed} / ${state.total} URLs crawled`];
+  if (untracked > 0) {
+    // Crawled before an update added the counts: 0 warmed would be a guess
+    // stated as a fact. The error sample is all that is known about them.
+    parts.push(`${untracked} before an update, outcome not recorded`);
+    if (state.processed > untracked) parts.push(`${state.warmed ?? 0} warmed`);
+    if (state.not_cached) parts.push(`${state.not_cached} not cached`);
+    if (state.failed) parts.push(`${state.failed} failed`);
+    else if (state.errors.length > 0) parts.push(`${state.errors.length} error${state.errors.length === 1 ? '' : 's'} logged`);
+  } else {
+    const failed = state.failed ?? state.errors.length;
+    if (state.warmed !== undefined) parts.push(`${state.warmed} warmed`);
+    if (state.not_cached) parts.push(`${state.not_cached} not cached`);
+    if (failed > 0) parts.push(`${failed} failed`);
+  }
+  if (skipped > 0) parts.push(`${skipped} skipped`);
+  if (state.devices?.includes('mobile')) parts.push('desktop and phone copies');
+  return parts.join(' · ');
+}
+
 function StatusCard({
   state,
   enabled,
@@ -216,7 +243,7 @@ function StatusCard({
                 crawlFailed
                   ? sitemapError
                   : hasHistory
-                  ? `${state.processed} / ${state.total} URLs warmed${skipped > 0 ? ` · ${skipped} skipped` : ''}${state.devices?.includes('mobile') ? ' · desktop and phone copies' : ''}${state.errors.length > 0 ? ` · ${state.errors.length} error${state.errors.length === 1 ? '' : 's'}` : ''}`
+                  ? crawlSummary(state, skipped)
                   : enabled
                   ? 'No crawl yet. Hit "Start now" to warm the cache.'
                   : 'Enable below, then start a crawl.'

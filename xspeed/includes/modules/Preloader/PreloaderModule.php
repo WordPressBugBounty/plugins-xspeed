@@ -431,6 +431,23 @@ final class PreloaderModule extends Module {
 				$state = Preloader::status();
 				\WP_CLI::log( 'Running   : ' . ( $state['running'] ? 'yes' : 'no' ) );
 				\WP_CLI::log( 'Processed : ' . $state['processed'] . ' / ' . $state['total'] );
+				// processed = warmed + failed + not cached + untracked; the error
+				// list below is only the last 20. A crawl from before an update
+				// has no outcomes, and 0 warmed, 0 failed beside its errors
+				// would contradict them. (#837)
+				if ( (int) $state['processed'] > (int) $state['untracked'] ) {
+					\WP_CLI::log( 'Warmed    : ' . (int) $state['warmed'] );
+					\WP_CLI::log( 'Failed    : ' . (int) $state['failed'] );
+				}
+				if ( (int) $state['not_cached'] > 0 ) {
+					\WP_CLI::log( 'Not cached: ' . (int) $state['not_cached'] . ' (loaded, but the cache bypassed them)' );
+				}
+				if ( (int) $state['untracked'] > 0 ) {
+					\WP_CLI::log( 'Untracked : ' . (int) $state['untracked'] . ' (crawled before an update; outcome not recorded)' );
+				}
+				if ( ! empty( $state['retried'] ) ) {
+					\WP_CLI::log( 'Retried   : ' . count( (array) $state['retried'] ) );
+				}
 				$skipped = is_array( $state['skipped'] ?? null ) ? $state['skipped'] : array();
 				if ( array_sum( $skipped ) > 0 ) {
 					$parts = array();

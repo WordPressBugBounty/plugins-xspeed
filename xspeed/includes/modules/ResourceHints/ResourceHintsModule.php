@@ -263,6 +263,7 @@ final class ResourceHintsModule extends Module {
 	 */
 	private function processor_opts(): array {
 		$opts = $this->get_settings();
+		$opts['cdn_context'] = \XSpeed\Modules\Cdn\CdnModule::rewrite_context();
 		if ( class_exists( '\XSpeed\Settings_Manager' ) ) {
 			$lazy = Settings_Manager::get( 'lazy' );
 			if ( is_array( $lazy ) && ! empty( $lazy['lazy_images'] ) && ! empty( $lazy['excluded_images'] ) && is_array( $lazy['excluded_images'] ) ) {

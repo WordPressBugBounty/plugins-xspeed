@@ -145,7 +145,7 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'list_modules' ),
 			),
 			'get_site_info'    => array(
-				'description' => 'Get facts about this site and install: whether xSpeed Pro is active and licensed, plugin/WordPress/PHP versions, and the detected web server. Use this rather than inferring the tier from the module list. `addons` maps each separately licensed add-on to `{licensed, status}`. `licensed` says whether the add-on\'s licence is active. `status` is the licence status the site has stored (`valid`, `expired`, `inactive`, and so on), or null when no key is stored. Both are read from stored state, never from the licence server. `addons` is `{}` when no add-on reports. A licensed add-on may still have nothing set up.',
+				'description' => 'Get facts about this site and install: whether xSpeed Pro is active and licensed, plugin/WordPress/PHP versions, and the detected web server. Use this rather than inferring the tier from the module list. `addons` maps each separately licensed add-on to `{licensed, status, verified_at, source, grace_ends_at, expires_at}`. `licensed` says whether the add-on\'s licence is active. `status` is the licence status the site has stored (`valid`, `expired`, `inactive`, and so on), or null when no key is stored. `verified_at` is when the licence server last answered (unix seconds), `source` says where the stored answer came from (`server`, `cache`, `stale` or `local`), `grace_ends_at` is when a local grace period ends, and `expires_at` is when the licence expires (null for lifetime); each is null when the add-on does not say. All are read from stored state, never from the licence server. `addons` is `{}` when no add-on reports. A licensed add-on may still have nothing set up.',
 				'inputSchema' => self::object_schema( array(), array() ),
 				'write'       => false,
 				'handler'     => array( self::class, 'get_site_info' ),
@@ -270,13 +270,22 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'purge_cloudflare' ),
 			),
 			'scan_database'    => array(
-				'description' => 'Preview database bloat — post revisions, auto-drafts, trashed posts, spam comments, expired transients, orphaned meta — with a count per category. Deletes NOTHING. Also returns the confirm_token that clean_database requires, so this is always the first step before any deletion.',
-				'inputSchema' => self::object_schema( array(), array() ),
+				'description' => 'Preview database bloat — post revisions, auto-drafts, trashed posts, spam comments, expired transients, orphaned meta, orphaned term relationships — with a count per category. Deletes NOTHING. Also returns the confirm_token that clean_database requires, so this is always the first step before any deletion. The token covers the categories in `types`, or, when `types` is omitted, the Auto-Cleanup Types set in the Database module. With neither, no token is issued.',
+				'inputSchema' => self::object_schema(
+					array(
+						'types' => array(
+							'type'        => 'array',
+							'description' => 'The categories the confirm_token will allow clean_database to delete, as the category keys the scan reports (for example "post_revisions"). Omit to use the Auto-Cleanup Types setting.',
+							'items'       => array( 'type' => 'string' ),
+						),
+					),
+					array()
+				),
 				'write'       => false,
 				'handler'     => array( self::class, 'scan_database' ),
 			),
 			'clean_database'   => array(
-				'description' => 'PERMANENTLY DELETE database bloat — post revisions, trashed posts, spam comments and the other categories enabled in the Database module settings. This is not a cache purge: it destroys real content and CANNOT be undone. Requires a confirm_token from scan_database, which shows the caller exactly what would be removed, and the site owner\'s approval: the first call is refused with an approval_id, the owner approves or denies it in wp-admin, and the same call with that approval_id then runs once.',
+				'description' => 'PERMANENTLY DELETE database bloat. Deletes exactly the categories the confirm_token was minted for by scan_database, and nothing else. This is not a cache purge: it destroys real content and CANNOT be undone. Requires a confirm_token from scan_database, which shows the caller exactly what would be removed, and the site owner\'s approval: the first call is refused with an approval_id, the owner approves or denies it in wp-admin, and the same call with that approval_id then runs once.',
 				'inputSchema' => self::object_schema(
 					array(
 						'confirm_token' => array(
@@ -1225,7 +1234,8 @@ final class Mcp_Tools {
 		 */
 		$destructive = self::destructive_action( $name, $args );
 		if ( ! empty( $destructive ) ) {
-			$approval = Mcp_Approvals::required();
+			$approval  = Mcp_Approvals::required();
+			$confirmed = null;
 
 			/*
 			 * With approval on, the site owner decides, not the caller. The
@@ -1255,11 +1265,15 @@ final class Mcp_Tools {
 			}
 
 			if ( $approval ) {
-				$claimed = self::verify_approval( $args, $name, $destructive, true );
+				$claimed = self::verify_approval( $args, $name, $destructive, true, is_array( $confirmed ) ? $confirmed : null );
 				if ( is_wp_error( $claimed ) ) {
 					Mcp_Activity_Log::record( $name, $args, false, $claimed->get_error_message(), 'write', self::$channel );
 					return $claimed;
 				}
+			}
+			// Only a call that passed both claims may hand categories to the handler.
+			if ( is_array( $confirmed ) ) {
+				self::$confirmed_types = $confirmed;
 			}
 		}
 		unset( $args['approval_id'] );
@@ -1293,7 +1307,8 @@ final class Mcp_Tools {
 
 			return $result;
 		} finally {
-			self::$dispatching = false;
+			self::$dispatching     = false;
+			self::$confirmed_types = null;
 		}
 	}
 
@@ -1338,6 +1353,14 @@ final class Mcp_Tools {
 
 	/** @var bool True while an MCP tool handler is executing. */
 	private static $dispatching = false;
+
+	/**
+	 * The categories the verified confirm_token covers, handed from invoke()
+	 * to clean_database(). Set on verify, cleared when read.
+	 *
+	 * @var string[]|null
+	 */
+	private static $confirmed_types = null;
 
 	/**
 	 * True while a tool call is being dispatched — lets deeper layers
@@ -1456,6 +1479,14 @@ final class Mcp_Tools {
 	private const MAX_ADDON_STATUS_LENGTH = 40;
 
 	/**
+	 * Where an add-on's stored answer came from (#336). `server`: the licence
+	 * server answered at `verified_at`. `cache`: a stored server answer still
+	 * inside its cache life. `stale`: that cache is gone and only the stored
+	 * status is left. `local`: decided on the site, such as a grace period.
+	 */
+	private const ADDON_SOURCES = array( 'server', 'cache', 'stale', 'local' );
+
+	/**
 	 * The licence state of each separately licensed add-on, keyed by slug.
 	 *
 	 * Free cannot know which add-ons exist, so it asks. An add-on answers from
@@ -1466,7 +1497,7 @@ final class Mcp_Tools {
 	 * as `[]`, and a consumer reading `addons.some_slug` should not have to
 	 * handle a list as well.
 	 *
-	 * @return object Slug => `{licensed: bool, status: ?string}`.
+	 * @return object Slug => `{licensed, status, verified_at, source, grace_ends_at, expires_at}`.
 	 */
 	private static function addon_licences(): object {
 		/**
@@ -1479,9 +1510,15 @@ final class Mcp_Tools {
 		 *     $addons['my_addon'] = array( 'licensed' => true, 'status' => 'valid' );
 		 *
 		 * `licensed` is whether the add-on may run. `status` is the licence
-		 * status as stored, or null when no key is stored. Read stored state
-		 * only, never the licence server. Keys go through sanitize_key(),
-		 * statuses are trimmed to short slugs, and any other field is dropped.
+		 * status as stored, or null when no key is stored. Three optional
+		 * fields say how far to trust that: `verified_at` (unix seconds the
+		 * licence server last answered), `source` (`server`, `cache`, `stale`
+		 * or `local`) and `grace_ends_at` (unix seconds a local grace period
+		 * ends). `expires_at` is when the stored licence expires, null for a
+		 * lifetime licence or when it is not known. Read stored state only, never the licence server. Keys go
+		 * through sanitize_key(), statuses are trimmed to short slugs, an
+		 * unknown source or a non-positive time becomes null, and any other
+		 * field is dropped.
 		 *
 		 * @param array $addons Entries gathered so far, keyed by slug.
 		 */
@@ -1518,15 +1555,28 @@ final class Mcp_Tools {
 				? substr( sanitize_key( $status ), 0, self::MAX_ADDON_STATUS_LENGTH )
 				: '';
 
+			$source = $entry['source'] ?? null;
+
 			$out[ $slug ] = array(
-				'licensed' => (bool) ( $entry['licensed'] ?? false ),
+				'licensed'      => (bool) ( $entry['licensed'] ?? false ),
 				// An empty status says nothing a null does not, and two ways
 				// of saying "none" is one more case for every consumer.
-				'status'   => '' === $status ? null : $status,
+				'status'        => '' === $status ? null : $status,
+				// Always present, null when unknown: reporting reads a missing
+				// verification as unknown, never as verified (#336).
+				'verified_at'   => self::addon_time( $entry['verified_at'] ?? null ),
+				'source'        => is_string( $source ) && in_array( $source, self::ADDON_SOURCES, true ) ? $source : null,
+				'grace_ends_at' => self::addon_time( $entry['grace_ends_at'] ?? null ),
+				'expires_at'    => self::addon_time( $entry['expires_at'] ?? null ),
 			);
 		}
 
 		return (object) $out;
+	}
+
+	/** A positive whole number of unix seconds, or null. */
+	private static function addon_time( $value ): ?int {
+		return is_int( $value ) && $value > 0 ? $value : null;
 	}
 
 	/**
@@ -2104,13 +2154,25 @@ final class Mcp_Tools {
 	/**
 	 * Scan the database for bloat (no deletion).
 	 *
-	 * @param array $args Unused.
+	 * @param array $args Optional `types`: the categories the token covers.
 	 * @return array|\WP_Error
 	 */
 	public static function scan_database( array $args ) {
-		unset( $args );
+		$types = self::clean_types( $args['types'] ?? null );
+		if ( is_wp_error( $types ) ) {
+			return $types;
+		}
+
 		$result = Cli_Bridge::run( 'db', array( 'scan' ) );
 		if ( is_wp_error( $result ) || empty( $result['ok'] ) ) {
+			return $result;
+		}
+
+		// Nothing chosen, so there is nothing to authorise. Issuing a token
+		// here would have to pick the categories on the caller's behalf, and
+		// they used to be every category, trashed posts included (#498).
+		if ( empty( $types ) ) {
+			$result['confirm_note'] = __( 'This preview deletes nothing. No confirm_token was issued because no categories were chosen: call scan_database again with types (for example ["post_revisions"]), or set Auto-Cleanup Types in the Database module.', 'xspeed' );
 			return $result;
 		}
 
@@ -2119,31 +2181,89 @@ final class Mcp_Tools {
 		 *
 		 * The scan is the only place the caller can see what is about to be
 		 * destroyed, so it is the only honest place to authorise the delete.
-		 * The token is bound to the CATEGORIES ENABLED and the COUNTS FOUND at
-		 * this moment: if either moves before the delete lands, the token no
-		 * longer describes reality and clean_database refuses. That closes the
-		 * window where a scan is shown to a human, something changes, and the
-		 * delete removes more than was agreed to. (#184)
+		 * The token is bound to the CATEGORIES CHOSEN and the COUNTS FOUND in
+		 * them at this moment: if a count moves before the delete lands, the
+		 * token no longer describes reality and clean_database refuses. That
+		 * closes the window where a scan is shown to a human, something
+		 * changes, and the delete removes more than was agreed to. (#184)
 		 */
-		$result['confirm_token'] = self::mint_confirm_token( self::clean_fingerprint() );
-		$result['confirm_note']  = __( 'This preview deletes nothing. To delete what is listed, call clean_database with this confirm_token. It expires in 5 minutes and stops working if the database changes.', 'xspeed' );
+		$result['confirm_token'] = self::mint_confirm_token( self::clean_fingerprint( $types ), $types );
+		$result['confirm_types'] = $types;
+		$result['confirm_note']  = sprintf(
+			/* translators: %s: comma-separated category keys. */
+			__( 'This preview deletes nothing. The confirm_token lets clean_database delete these categories only: %s. It expires in 5 minutes and stops working if their counts change.', 'xspeed' ),
+			implode( ', ', $types )
+		);
 
 		return $result;
 	}
 
-	/** Categories currently enabled for deletion, with what a scan found in each. */
-	private static function clean_scope(): array {
-		$enabled = array_keys( array_filter( Settings_Manager::get( 'database' ), static fn( $v ) => true === $v ) );
-		sort( $enabled );
+	/**
+	 * The categories a confirm_token will cover.
+	 *
+	 * The caller's `types` when given, else the Database module's
+	 * Auto-Cleanup Types. Either way, only keys the cleaner knows, sorted
+	 * and unique, so the same choice always yields the same fingerprint.
+	 *
+	 * The categories used to come from settings whose value was exactly
+	 * `true`. The Database module has none (a dropdown and a list), so the
+	 * list was always empty and the clean that followed deleted every
+	 * category (#498).
+	 *
+	 * @param mixed $requested The caller's `types` argument, or null.
+	 * @return string[]|\WP_Error Sorted category keys; empty when nothing was chosen.
+	 */
+	private static function clean_types( $requested ) {
+		$known = array_keys( Database_Cleaner::type_labels() );
 
+		if ( null !== $requested ) {
+			$list = is_array( $requested ) ? $requested : explode( ',', (string) $requested );
+			$list = array_values( array_filter( array_map( 'trim', array_map( 'strval', $list ) ), 'strlen' ) );
+
+			$unknown = array_diff( $list, $known );
+			if ( ! empty( $unknown ) ) {
+				return new \WP_Error(
+					'xspeed_mcp_unknown_types',
+					sprintf(
+						/* translators: 1: unknown keys, 2: valid keys. */
+						__( 'Unknown database cleanup categories: %1$s. Valid categories: %2$s.', 'xspeed' ),
+						implode( ', ', $unknown ),
+						implode( ', ', $known )
+					),
+					array( 'status' => 400 )
+				);
+			}
+		} else {
+			$settings = Settings_Manager::get( 'database' );
+			$list     = isset( $settings['included_types'] ) && is_array( $settings['included_types'] ) ? $settings['included_types'] : array();
+			$list     = array_intersect( array_map( 'strval', $list ), $known );
+		}
+
+		$list = array_values( array_unique( $list ) );
+		sort( $list );
+		return $list;
+	}
+
+	/**
+	 * The categories a token covers, with what a scan finds in each of them.
+	 *
+	 * Counts cover only those categories, so a change in one the caller did
+	 * not choose (expired transients come and go on their own) does not make
+	 * the token stale.
+	 *
+	 * @param string[] $types Sorted category keys.
+	 */
+	private static function clean_scope( array $types ): array {
 		$counts = array();
 		foreach ( Database_Cleaner::scan() as $key => $row ) {
-			$counts[ $key ] = is_array( $row ) ? (int) ( $row['count'] ?? 0 ) : (int) $row;
+			if ( in_array( $key, $types, true ) ) {
+				$counts[ $key ] = is_array( $row ) ? (int) ( $row['count'] ?? 0 ) : (int) $row;
+			}
 		}
 		ksort( $counts );
 
 		return array(
-			'enabled' => $enabled,
+			'enabled' => $types,
 			'counts'  => $counts,
 		);
 	}
@@ -2633,13 +2753,29 @@ final class Mcp_Tools {
 	 * and where the owner decides. The id travels in the MESSAGE, because
 	 * Mcp_Server::call_tool() renders a WP_Error as its message alone.
 	 *
-	 * @param array  $args    Decoded tool arguments.
-	 * @param string $tool    Tool name the call arrived on.
-	 * @param array  $action  Classified pair from destructive_action().
-	 * @param bool   $consume Claim the approval (the last check before running).
+	 * @param array         $args    Decoded tool arguments.
+	 * @param string        $tool    Tool name the call arrived on.
+	 * @param array         $action  Classified pair from destructive_action().
+	 * @param bool          $consume Claim the approval (the last check before running).
+	 * @param string[]|null $types   Categories from the token already consumed by invoke().
 	 * @return true|\WP_Error
 	 */
-	private static function verify_approval( array $args, string $tool, array $action, bool $consume ) {
+	private static function verify_approval( array $args, string $tool, array $action, bool $consume, ?array $types = null ) {
+		if ( self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action ) ) {
+			// The owner approves deletion categories, not the bytes of a renewable token.
+			if ( null === $types ) {
+				$types = self::verify_confirm_token( $args, $tool, $action, false );
+				if ( is_wp_error( $types ) ) {
+					return $types;
+				}
+			}
+			if ( 'run_command' === $tool ) {
+				$args['options']['types'] = $types;
+			} else {
+				$args['types'] = $types;
+			}
+		}
+
 		$id = isset( $args['approval_id'] ) && is_scalar( $args['approval_id'] )
 			? strtolower( trim( (string) $args['approval_id'] ) )
 			: '';
@@ -2677,23 +2813,21 @@ final class Mcp_Tools {
 	 * @param array  $args   Decoded tool arguments.
 	 * @param string $tool   Tool name the call arrived on.
 	 * @param array  $action Classified pair from destructive_action().
-	 * @return true|\WP_Error
+	 * @param bool   $consume Claim the token only after the owner has approved.
+	 * @return true|string[]|\WP_Error The database clean's categories, true for any other action.
 	 */
-	private static function verify_confirm_token( array $args, string $tool, array $action ) {
+	private static function verify_confirm_token( array $args, string $tool, array $action, bool $consume = true ) {
 		$token = isset( $args['confirm_token'] ) ? (string) $args['confirm_token'] : '';
 		if ( '' === $token ) {
 			return self::confirm_required( $tool, $action );
 		}
 
-		// Computed only now: for the database clean the fingerprint is a full
-		// bloat scan, and a call refused for having no token at all should not
-		// pay for one.
-		$expected = self::confirm_fingerprint( $action );
+		$is_clean = self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action );
 
-		// Single use: consumed whether or not the action goes ahead, so one
-		// approval can never authorise a second, different call.
-		$sealed = self::consume_confirm_token( $token );
-		if ( '' === $sealed ) {
+		// Inspect the preview while waiting for its owner; the execution path
+		// still requires the atomic single-use claim.
+		$sealed = $consume ? self::consume_confirm_token( $token ) : self::read_confirm_token( $token );
+		if ( null === $sealed ) {
 			return new \WP_Error(
 				'xspeed_mcp_confirm_invalid',
 				__( 'That confirm_token is unknown or has expired (they last 5 minutes). Ask for a fresh one by making the same call without a confirm_token.', 'xspeed' ),
@@ -2701,17 +2835,58 @@ final class Mcp_Tools {
 			);
 		}
 
-		if ( ! hash_equals( $sealed, $expected ) ) {
+		// Computed only now: for the database clean the fingerprint is a scan
+		// of the token's categories, and a call refused for having no token
+		// at all should not pay for one. A clean token minted before tokens
+		// carried their categories has none to hold the delete to, so it
+		// never matches and is treated as stale.
+		$types    = $sealed['types'];
+		$expected = $is_clean
+			? ( empty( $types ) ? '' : self::clean_fingerprint( $types ) )
+			: self::confirm_fingerprint( $action );
+
+		if ( '' === $expected || ! hash_equals( $sealed['fingerprint'], $expected ) ) {
 			return new \WP_Error(
 				'xspeed_mcp_confirm_stale',
-				self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action )
+				$is_clean
 					? __( 'The database changed since that scan, so the preview no longer describes what would be deleted. Run scan_database again and confirm against the new result.', 'xspeed' )
 					: __( 'That confirm_token was issued for a different action, so it does not authorise this one. Repeat this exact call without a confirm_token to get one that does.', 'xspeed' ),
 				array( 'status' => 409 )
 			);
 		}
 
-		return true;
+		if ( ! $is_clean ) {
+			return true;
+		}
+
+		/*
+		 * The categories travel as the caller's own `types` option through
+		 * run_command, and as the `types` argument of the generated xspeed_db
+		 * tool. Either way the CLI cleans every category when it is left out,
+		 * so it must name exactly what the token covers. clean_database takes
+		 * them from the token itself.
+		 */
+		if ( 'clean_database' !== $tool ) {
+			if ( 'run_command' === $tool ) {
+				$given = isset( $args['options'] ) && is_array( $args['options'] ) ? ( $args['options']['types'] ?? '' ) : '';
+			} else {
+				$given = $args['types'] ?? '';
+			}
+			$asked = self::clean_types( $given );
+			if ( is_wp_error( $asked ) || $asked !== $types ) {
+				return new \WP_Error(
+					'xspeed_mcp_confirm_categories',
+					sprintf(
+						/* translators: %s: comma-separated category keys. */
+						__( 'That confirm_token covers these categories only: %s. Pass exactly those as the "types" option, or use clean_database.', 'xspeed' ),
+						implode( ',', $types )
+					),
+					array( 'status' => 409 )
+				);
+			}
+		}
+
+		return $types;
 	}
 
 	/**
@@ -2827,9 +3002,9 @@ final class Mcp_Tools {
 	/**
 	 * The scope a confirm_token for this action is sealed to.
 	 *
-	 * `xspeed db clean` is sealed to the preview: the categories enabled and
-	 * the counts found, so the token dies the moment the database stops
-	 * matching what the operator was shown.
+	 * `xspeed db clean` is not sealed here: its token comes from
+	 * scan_database, sealed to the categories chosen and the counts found in
+	 * them (clean_fingerprint()), and nothing else mints one.
 	 *
 	 * Every other action is sealed to itself — the (command, action) pair —
 	 * because there is nothing else to bind to and binding to the database
@@ -2841,10 +3016,6 @@ final class Mcp_Tools {
 	 * @return string
 	 */
 	private static function confirm_fingerprint( array $action ): string {
-		if ( self::PREVIEW_CONFIRMED_ACTION === self::canonical_action( $action ) ) {
-			return self::clean_fingerprint();
-		}
-
 		return hash(
 			'sha256',
 			(string) wp_json_encode(
@@ -2856,9 +3027,14 @@ final class Mcp_Tools {
 		);
 	}
 
-	/** Fingerprint of the scan scope, so a token cannot outlive what it described. */
-	private static function clean_fingerprint(): string {
-		return hash( 'sha256', (string) wp_json_encode( self::clean_scope() ) );
+	/**
+	 * Fingerprint of the covered categories and their counts, so a token
+	 * cannot outlive what it described.
+	 *
+	 * @param string[] $types Sorted category keys.
+	 */
+	private static function clean_fingerprint( array $types ): string {
+		return hash( 'sha256', (string) wp_json_encode( self::clean_scope( $types ) ) );
 	}
 
 	/** Lifetime of a confirm_token, from mint to refusal. */
@@ -2903,10 +3079,11 @@ final class Mcp_Tools {
 	/**
 	 * Mint a single-use token sealed to a scope fingerprint.
 	 *
-	 * @param string $fingerprint Scope the token confirms — see confirm_fingerprint().
+	 * @param string   $fingerprint Scope the token confirms — see confirm_fingerprint().
+	 * @param string[] $types       The database clean's categories; empty for any other action.
 	 * @return string
 	 */
-	private static function mint_confirm_token( string $fingerprint ): string {
+	private static function mint_confirm_token( string $fingerprint, array $types = array() ): string {
 		$token = wp_generate_password( 32, false );
 
 		// autoload=no: this is read once, by one request, minutes from now.
@@ -2915,6 +3092,7 @@ final class Mcp_Tools {
 			wp_json_encode(
 				array(
 					'fingerprint' => $fingerprint,
+					'types'       => $types,
 					'expires'     => time() + self::CONFIRM_TOKEN_TTL,
 				)
 			),
@@ -2927,19 +3105,41 @@ final class Mcp_Tools {
 		return $token;
 	}
 
+	/** Read preview intent without claiming it while the owner decides. */
+	private static function read_confirm_token( string $token ): ?array {
+		$stored = get_option( self::confirm_token_key( $token ) );
+		return self::confirm_token_data( $stored );
+	}
+
+	/** Decode the same scope for inspection and after an atomic claim. */
+	private static function confirm_token_data( $stored ): ?array {
+		$data = is_string( $stored ) ? json_decode( $stored, true ) : null;
+		if ( ! is_array( $data ) || empty( $data['fingerprint'] ) || ! isset( $data['expires'] ) || time() > (int) $data['expires'] ) {
+			return null;
+		}
+		return array(
+			'fingerprint' => (string) $data['fingerprint'],
+			'types'       => isset( $data['types'] ) && is_array( $data['types'] ) ? array_values( array_map( 'strval', $data['types'] ) ) : array(),
+		);
+	}
+
 	/**
-	 * Read a minted token's sealed fingerprint, or '' if unknown/expired.
+	 * Read a minted token's sealed fingerprint and categories, or null if
+	 * unknown/expired. A token minted before tokens carried categories comes
+	 * back with an empty list.
 	 *
 	 * Consumes the record either way: a token is single use, so one approval
 	 * can never authorise a second, different deletion.
+	 *
+	 * @return array{fingerprint:string,types:string[]}|null
 	 */
-	private static function consume_confirm_token( string $token ): string {
+	private static function consume_confirm_token( string $token ): ?array {
 		global $wpdb;
 
 		$key    = self::confirm_token_key( $token );
 		$stored = get_option( $key );
 		if ( ! is_string( $stored ) || '' === $stored ) {
-			return '';
+			return null;
 		}
 
 		/*
@@ -2970,7 +3170,7 @@ final class Mcp_Tools {
 		// caller one retry; the alternative is granting permission on the
 		// strength of a read that was never proof of anything.
 		if ( ! $wpdb instanceof \wpdb && ! is_object( $wpdb ) ) {
-			return '';
+			return null;
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the atomic claim needs rows_affected from the server; the cache entry is dropped right after.
@@ -2983,18 +3183,10 @@ final class Mcp_Tools {
 		wp_cache_delete( $key, 'options' );
 
 		if ( 1 !== (int) $claimed ) {
-			return '';
+			return null;
 		}
 
-		$data = json_decode( $stored, true );
-		if ( ! is_array( $data ) || empty( $data['fingerprint'] ) ) {
-			return '';
-		}
-		if ( ! isset( $data['expires'] ) || time() > (int) $data['expires'] ) {
-			return '';
-		}
-
-		return (string) $data['fingerprint'];
+		return self::confirm_token_data( $stored );
 	}
 
 	/**
@@ -3042,9 +3234,22 @@ final class Mcp_Tools {
 		 *
 		 * Reaching this line means the dispatcher already verified a token
 		 * bound to a scan of the current database state. (#184)
+		 *
+		 * The categories come from that token, and nowhere else. Without
+		 * --types the CLI cleans every category, which is how a site that
+		 * had chosen only revisions lost its trashed posts (#498).
 		 */
 		unset( $args );
-		return Cli_Bridge::run( 'db', array( 'clean' ) );
+		$types                 = self::$confirmed_types;
+		self::$confirmed_types = null;
+		if ( empty( $types ) ) {
+			return new \WP_Error(
+				'xspeed_mcp_confirm_required',
+				__( 'This permanently deletes content and cannot be undone. Call scan_database first to see exactly what would be removed, then pass the confirm_token it returns.', 'xspeed' ),
+				array( 'status' => 400 )
+			);
+		}
+		return Cli_Bridge::run( 'db', array( 'clean' ), array( 'types' => implode( ',', $types ) ) );
 	}
 
 	/**

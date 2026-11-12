@@ -88,6 +88,11 @@ class Builder_Editor {
 		'tve',
 		// WPBakery frontend editor.
 		'vc_action',
+		// Bricks: the canvas iframe inside the builder, and template
+		// previews. The builder itself is `?bricks=run`, matched by value
+		// in detect(), because a bare `bricks` argument is too generic. (#843)
+		'brickspreview',
+		'bricks_preview',
 	);
 
 	/**
@@ -144,6 +149,13 @@ class Builder_Editor {
 			}
 		}
 
+		// Bricks opens its builder at `?bricks=run`. Only that value counts:
+		// `?bricks=` on its own could be any site's own query argument. (#843)
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only request-shape detection; the value is compared, never used.
+		if ( isset( $_GET['bricks'] ) && 'run' === $_GET['bricks'] ) {
+			return true;
+		}
+
 		// Elementor's editor frame itself, which posts `action=elementor`.
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only request-shape detection; the value is compared, never used.
 		if ( isset( $_REQUEST['action'] ) && 'elementor' === $_REQUEST['action'] ) {
@@ -154,6 +166,12 @@ class Builder_Editor {
 		// reliable than a query argument when available, and cover editor
 		// sub-requests that carry no argument of their own.
 		if ( class_exists( '\FLBuilderModel' ) && method_exists( '\FLBuilderModel', 'is_builder_active' ) && \FLBuilderModel::is_builder_active() ) {
+			return true;
+		}
+
+		// Bricks is a theme, so this exists only once the theme has loaded.
+		// An earlier call still sees the query arguments above.
+		if ( function_exists( 'bricks_is_builder' ) && bricks_is_builder() ) {
 			return true;
 		}
 

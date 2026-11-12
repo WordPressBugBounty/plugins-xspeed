@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.7
+Stable tag: 1.4.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -256,7 +256,7 @@ Usage analytics is off by default. The setup wizard shows it as an unticked swit
 = Usage analytics and deactivation survey (send.wpinsight.com) =
 
 * **What it does:** Tells WPDeveloper which WordPress setups and xSpeed features are in use, so we can fix what breaks.
-* **When it runs:** Only after an administrator turns on "Share usage data" in the setup wizard or in Settings → Privacy & usage data. It sends once a day, and once more when the plugin is deactivated.
+* **When it runs:** Only after an administrator turns on "Share usage data" in the setup wizard or in Settings → Privacy & usage data. It checks once a day and sends only what changed since the last send, and sends once more when the plugin is deactivated.
 * **What is sent:** The site URL and name, WordPress and PHP versions, site language, charset, text direction, multisite status, server software, active and inactive plugins, theme name and version, the xSpeed version and xSpeed's own settings. The send when you turn the switch on, and the one at deactivation, also include the email address and display name of the administrator who did it. The daily send runs without a logged-in user, so it has no email or name. Page content is never sent.
 * **Deactivation survey:** If you pick a reason and click Submit when deactivating, the reason and any text you typed are sent. With analytics off, the survey sends only the reason, your text, the site URL, the WordPress, PHP and xSpeed versions, and the date. Skip & Deactivate sends nothing.
 * **Where the request goes:** send.wpinsight.com, operated by WPDeveloper. [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
@@ -342,6 +342,33 @@ Used for admin interface icons.
 
 == Changelog ==
 
+= [1.4.8] – 2026-11-12 =
+
+**Cached pages no longer go out blank, login captchas work with Delay JS, and flushing a Redis object cache takes the same time at any size.**
+
+Caching:
+- Fixed: A page purged at the moment the PHP serve path sends it from cache no longer goes out as a cached hit with an empty body.
+- Fixed: On nginx, requests over HTTP/3, or with an upper-case host or `:443` in the host, now get the cached file instead of going to PHP. Copy the updated nginx snippet to apply it.
+- Fixed: The preloader tries a slow page once more before counting it as failed, and its report counts warmed, failed and not-cached pages separately. The page-warm timeout can be changed with `xspeed_preloader_request_timeout`.
+
+Object Cache:
+- Improved: Flushing a Redis object cache takes the same time at any size: Purge All went from about 340 ms to 25 ms with 155,000 keys. Old values are deleted in the background, and `wp xspeed objcache status` reports how that went.
+- Improved: Multi-key object-cache calls use batched reads and Redis write pipelines.
+- Fixed: Automatic page purges keep the object cache warm. Explicit purges and plugin activation or deactivation still flush it.
+- Fixed: Fetching or refreshing third-party files no longer flushes the object cache.
+- Fixed: A flush that Redis refuses or that fails now shows as an error.
+
+Optimization:
+- Improved: When Load CSS without blocking leaves a page alone, it says why.
+- Fixed: Defer JS and Delay JS leave the login page alone, so login captchas such as Cloudflare Turnstile load and the login goes through. This includes custom login URLs.
+- Fixed: xSpeed no longer optimizes the Bricks builder or its previews, so elements no longer disappear in the editor.
+- Fixed: A long unquoted attribute, such as a base64 image, no longer blanks the page.
+- Fixed: A document-relative image is no longer preloaded from a broken address, and an image the theme already preloads is no longer preloaded twice.
+
+AI / MCP:
+- Improved: An add-on can report when its licence expires, and when and where its licence was last checked.
+- Fixed: An owner's approval for a database clean covers only the categories the owner was shown, and an MCP token cleans only the categories it covers.
+
 = [1.4.7] – 2026-11-08 =
 
 **WooCommerce shoppers with a cart can get cached pages, you can choose each page's main (LCP) image, and Slider Revolution works with Delay JS.**
@@ -370,34 +397,5 @@ Optimization:
 
 Dashboard & Admin UX:
 - Fixed: An add-on's settings on an unlicensed site now show the licence card, instead of switches that Pro refuses to save.
-
-= [1.4.5] – 2026-10-27 =
-
-**Purge all can clear one cache type at a time, cached pages keep changes other plugins make to the page, and saving a Divi layout clears the cache.**
-
-Dashboard & Admin UX:
-- New: Purge all is a split button. Its menu clears one cache type: page cache, CSS and JS files, object cache, REST API cache, or a type an add-on adds.
-- New: An add-on can hold a setting at a fixed value while one of its own settings needs it. The field is read-only and says what set it, and a different value is refused from REST, the command line and MCP.
-- Fixed: The Cache page no longer asks you to install the .htaccess or nginx rules again when the rewrite check has only expired or could not decide.
-
-Caching:
-- Fixed: A page that another plugin rewrites from its own output buffer, such as ShortPixel's WebP delivery, is cached the way visitors receive it, so cache hits keep the change.
-- Fixed: Saving a Divi Theme Builder layout or Divi Theme Options clears the whole site, so cached pages no longer link stylesheets Divi has deleted.
-- Fixed: Cache cleanup removes cached pages that link a Divi static CSS file that no longer exists.
-- Fixed: Purging the cache no longer stops with an error when the object cache is broken.
-
-Optimization:
-- Fixed: Preload hints go ahead of inline Critical CSS in the head, so the hero image starts loading sooner.
-- Fixed: On right-to-left sites, Minify CSS no longer drops stylesheets that have their own -rtl.css file.
-- Fixed: REST API for logged-in users only refuses visitors with WordPress's own error code, so plugins that check for a login-only REST API recognise it.
-
-Health:
-- Fixed: The edge cache row reports when code running after xSpeed replaces the headers that keep a page out of a shared cache, instead of always showing OK.
-
-AI / MCP:
-- Fixed: xSpeed no longer answers another MCP plugin's OAuth discovery address at the site root, so that plugin's clients sign in to the right server.
-
-Reliability:
-- Fixed: A site no longer shows a fatal error when another plugin asks Composer which package versions are installed.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

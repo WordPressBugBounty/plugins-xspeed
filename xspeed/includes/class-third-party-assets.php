@@ -790,7 +790,7 @@ final class Third_Party_Assets {
 			self::merge_save( $changes, array() );
 		}
 		if ( $done > 0 ) {
-			Cache::purge_all( 'third-party-assets' );
+			self::purge_pages();
 		}
 		if ( $more ) {
 			self::schedule_fetch( 30 );
@@ -843,7 +843,7 @@ final class Third_Party_Assets {
 		$saved = self::merge_save( $changes, $removed );
 		self::sweep( $saved );
 		if ( $changed > 0 ) {
-			Cache::purge_all( 'third-party-assets' );
+			self::purge_pages();
 		}
 		return array(
 			'changed' => $changed,
@@ -970,6 +970,22 @@ final class Third_Party_Assets {
 			}
 			wp_delete_file( $dir . '/' . $file );
 		}
+	}
+
+	/**
+	 * Purge cached pages so they link a new or changed copy. Only page output
+	 * changed, so the object cache is kept (#799).
+	 */
+	private static function purge_pages(): void {
+		Cache::purge_all(
+			'third-party-assets',
+			null,
+			array(
+				'scope'  => 'site',
+				'intent' => 'presentation',
+				'urls'   => array(),
+			)
+		);
 	}
 
 	/** Delete every copy and the index, and clear the page cache. */

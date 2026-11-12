@@ -2,6 +2,33 @@
 
 The three most recent releases are listed in readme.txt. Everything since 1.0.0 is below.
 
+= [1.4.8] – 2026-11-12 =
+
+**Cached pages no longer go out blank, login captchas work with Delay JS, and flushing a Redis object cache takes the same time at any size.**
+
+Caching:
+- Fixed: A page purged at the moment the PHP serve path sends it from cache no longer goes out as a cached hit with an empty body.
+- Fixed: On nginx, requests over HTTP/3, or with an upper-case host or `:443` in the host, now get the cached file instead of going to PHP. Copy the updated nginx snippet to apply it.
+- Fixed: The preloader tries a slow page once more before counting it as failed, and its report counts warmed, failed and not-cached pages separately. The page-warm timeout can be changed with `xspeed_preloader_request_timeout`.
+
+Object Cache:
+- Improved: Flushing a Redis object cache takes the same time at any size: Purge All went from about 340 ms to 25 ms with 155,000 keys. Old values are deleted in the background, and `wp xspeed objcache status` reports how that went.
+- Improved: Multi-key object-cache calls use batched reads and Redis write pipelines.
+- Fixed: Automatic page purges keep the object cache warm. Explicit purges and plugin activation or deactivation still flush it.
+- Fixed: Fetching or refreshing third-party files no longer flushes the object cache.
+- Fixed: A flush that Redis refuses or that fails now shows as an error.
+
+Optimization:
+- Improved: When Load CSS without blocking leaves a page alone, it says why.
+- Fixed: Defer JS and Delay JS leave the login page alone, so login captchas such as Cloudflare Turnstile load and the login goes through. This includes custom login URLs.
+- Fixed: xSpeed no longer optimizes the Bricks builder or its previews, so elements no longer disappear in the editor.
+- Fixed: A long unquoted attribute, such as a base64 image, no longer blanks the page.
+- Fixed: A document-relative image is no longer preloaded from a broken address, and an image the theme already preloads is no longer preloaded twice.
+
+AI / MCP:
+- Improved: An add-on can report when its licence expires, and when and where its licence was last checked.
+- Fixed: An owner's approval for a database clean covers only the categories the owner was shown, and an MCP token cleans only the categories it covers.
+
 = [1.4.7] – 2026-11-08 =
 
 **WooCommerce shoppers with a cart can get cached pages, you can choose each page's main (LCP) image, and Slider Revolution works with Delay JS.**

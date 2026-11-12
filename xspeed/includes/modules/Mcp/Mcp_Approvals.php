@@ -112,11 +112,13 @@ final class Mcp_Approvals {
 	}
 
 	/**
-	 * The arguments as the owner will read them: secrets redacted, short.
+	 * The arguments as the owner will read them, with secrets redacted.
 	 *
-	 * @param array $args Decoded arguments.
+	 * @param array  $args      Decoded arguments.
+	 * @param string $tool      Tool name.
+	 * @param string $canonical Classified action.
 	 */
-	private static function display_args( array $args ): string {
+	private static function display_args( array $args, string $tool, string $canonical ): string {
 		$redact = static function ( $value ) use ( &$redact ) {
 			if ( ! is_array( $value ) ) {
 				return $value;
@@ -126,12 +128,26 @@ final class Mcp_Approvals {
 			}
 			return $value;
 		};
+		$scope = '';
+		if ( 'xspeed db clean' === $canonical ) {
+			$types = 'run_command' === $tool ? ( $args['options']['types'] ?? null ) : ( $args['types'] ?? null );
+			if ( is_array( $types ) ) {
+				// Other long arguments must not hide any category the owner approves.
+				$scope = (string) wp_json_encode( array( 'types' => $types ), JSON_UNESCAPED_SLASHES );
+				if ( 'run_command' === $tool ) {
+					unset( $args['options']['types'] );
+				} else {
+					unset( $args['types'] );
+				}
+			}
+		}
 		$args = $redact( self::canonical_args( $args ) );
 		if ( empty( $args ) ) {
-			return '';
+			return $scope;
 		}
 		$text = (string) wp_json_encode( $args, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
-		return strlen( $text ) > 300 ? substr( $text, 0, 297 ) . '...' : $text;
+		$text = strlen( $text ) > 300 ? substr( $text, 0, 297 ) . '...' : $text;
+		return '' === $scope ? $text : $scope . ' ' . $text;
 	}
 
 	/**
@@ -184,7 +200,7 @@ final class Mcp_Approvals {
 			'id'          => $id,
 			'tool'        => $tool,
 			'action'      => $canonical,
-			'args'        => self::display_args( $args ),
+			'args'        => self::display_args( $args, $tool, $canonical ),
 			'fingerprint' => $fingerprint,
 			'channel'     => sanitize_key( $channel ),
 			'status'      => 'pending',

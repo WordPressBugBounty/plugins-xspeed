@@ -30,6 +30,9 @@ class Redis_Client {
 	/** @var resource|null Socket handle. */
 	private $sock = null;
 
+	/** @var string Last Redis error reply, cleared before each command. */
+	private $last_error = '';
+
 	/** @var string */
 	private $host;
 
@@ -147,6 +150,11 @@ class Redis_Client {
 		return null === $r ? false : $r;
 	}
 
+	/** @return int|false Whether the key exists, or false on failure. */
+	public function exists( string $key ) {
+		return $this->command( array( 'EXISTS', $key ) );
+	}
+
 	public function set( string $key, string $value ): bool {
 		$r = $this->command( array( 'SET', $key, $value ) );
 		return '+OK' === $r || 'OK' === $r;
@@ -180,6 +188,98 @@ class Redis_Client {
 		return (int) $this->command( array( 'DEL', $key ) );
 	}
 
+	/**
+	 * Read several keys in one round trip (MGET).
+	 *
+	 * @param string[] $keys Keys to read.
+	 * @return array|false Values in the order of $keys, false for a missing
+	 *                     key; false for the whole call on a socket error.
+	 */
+	public function mget( array $keys ) {
+		if ( empty( $keys ) ) {
+			return array();
+		}
+		$r = $this->command( array_merge( array( 'MGET' ), array_map( 'strval', array_values( $keys ) ) ) );
+		if ( ! is_array( $r ) || count( $r ) !== count( $keys ) ) {
+			return false;
+		}
+		return array_map(
+			static function ( $v ) {
+				return null === $v ? false : $v;
+			},
+			$r
+		);
+	}
+
+	/**
+	 * Remove keys, freeing their memory off Redis's main thread (UNLINK).
+	 * Falls back to DEL on servers older than Redis 4, which reject UNLINK.
+	 *
+	 * @param string[] $keys Keys to remove.
+	 * @return int|false Number of keys removed, or false on failure.
+	 */
+	public function unlink( array $keys ) {
+		if ( empty( $keys ) ) {
+			return 0;
+		}
+		$keys = array_map( 'strval', array_values( $keys ) );
+		$n    = $this->command( array_merge( array( 'UNLINK' ), $keys ) );
+		if ( false === $n && 0 === strpos( $this->last_error, 'ERR unknown command' ) ) {
+			$n = $this->command( array_merge( array( 'DEL' ), $keys ) );
+		}
+		return is_int( $n ) ? $n : false;
+	}
+
+	/**
+	 * One SCAN step.
+	 *
+	 * @param string $cursor  Cursor from the previous step, '0' to start.
+	 * @param string $pattern MATCH pattern.
+	 * @param int    $count   COUNT hint.
+	 * @return array|false array( next_cursor, keys ), or false on error.
+	 */
+	public function scan_step( string $cursor, string $pattern, int $count = 500 ) {
+		$reply = $this->command( array( 'SCAN', $cursor, 'MATCH', $pattern, 'COUNT', (string) $count ) );
+		if ( ! is_array( $reply ) || count( $reply ) !== 2 || ! is_string( $reply[0] ) || ! ctype_digit( $reply[0] ) || ! is_array( $reply[1] ) ) {
+			return false;
+		}
+		foreach ( $reply[1] as $key ) {
+			if ( ! is_string( $key ) ) {
+				return false;
+			}
+		}
+		return $reply;
+	}
+
+	/**
+	 * Send several commands in one write and read all their replies, so a
+	 * batch costs one round trip instead of one per command. Replies come
+	 * back in command order; an error reply reads as false in its slot.
+	 *
+	 * @param array<int,string[]> $commands Each entry is one command's args.
+	 * @return array|false Replies, or false when the socket fails.
+	 */
+	public function pipeline( array $commands ) {
+		if ( empty( $commands ) ) {
+			return array();
+		}
+		if ( ! is_resource( $this->sock ) ) {
+			return false;
+		}
+		$payload = '';
+		foreach ( $commands as $args ) {
+			$payload .= $this->encode( $args );
+		}
+		if ( ! $this->write( $payload ) ) {
+			return false;
+		}
+		$out = array();
+		foreach ( $commands as $unused ) {
+			$out[] = $this->read_reply();
+		}
+		return $out;
+	}
+
 	/** @return int|false New value, or false on error. */
 	public function incrBy( string $key, int $offset ) {
 		return $this->command( array( 'INCRBY', $key, (string) $offset ) );
@@ -198,33 +298,49 @@ class Redis_Client {
 	/**
 	 * Delete every key matching a glob-style pattern, using a non-blocking
 	 * SCAN cursor (never KEYS, which blocks the whole server on large
-	 * datasets). Returns the number of keys deleted. Used for prefix-scoped
-	 * flushes so we only ever touch this site's namespace, never the whole
-	 * Redis DB. (FBS-83119)
+	 * datasets) and UNLINK, which frees the memory off Redis's main thread.
+	 * Returns false if any step fails. Used for prefix-scoped flushes so
+	 * we only ever touch this site's namespace, never the whole Redis DB.
+	 * (FBS-83119)
 	 *
-	 * @param string $pattern e.g. "salt:*" or "salt:*:options:*".
-	 * @param int    $count    SCAN COUNT hint (batch size per round trip).
+	 * @param string      $pattern e.g. "salt:*" or "salt:*:options:*".
+	 * @param int         $count   SCAN COUNT hint (batch size per round trip).
+	 * @param string|null $filter  Optional regex a key must also match. A glob
+	 *                             cannot say "digits only", so callers that
+	 *                             need an exact shape filter here.
+	 * @return int|false Number deleted, or false on failure.
 	 */
-	public function delete_by_pattern( string $pattern, int $count = 500 ): int {
+	public function delete_by_pattern( string $pattern, int $count = 500, ?string $filter = null ) {
 		$deleted = 0;
 		$cursor  = '0';
 		do {
-			$reply = $this->command( array( 'SCAN', $cursor, 'MATCH', $pattern, 'COUNT', (string) $count ) );
-			// Expected: [ next_cursor, [ key, key, ... ] ]. Anything else
-			// (false on socket error, malformed) ends the loop safely.
-			if ( ! is_array( $reply ) || count( $reply ) < 2 || ! is_array( $reply[1] ) ) {
-				break;
+			$step = $this->scan_step( $cursor, $pattern, $count );
+			if ( false === $step ) {
+				return false;
 			}
-			$cursor = (string) $reply[0];
-			$keys   = $reply[1];
+			list( $cursor, $keys ) = $step;
+			if ( null !== $filter ) {
+				$keys = preg_grep( $filter, $keys );
+			}
 			if ( ! empty( $keys ) ) {
-				// DEL accepts variadic keys — one round trip per batch.
-				$args     = array_merge( array( 'DEL' ), array_map( 'strval', $keys ) );
-				$n        = $this->command( $args );
-				$deleted += is_int( $n ) ? $n : 0;
+				$n = $this->unlink( $keys );
+				if ( false === $n ) {
+					return false;
+				}
+				$deleted += $n;
 			}
 		} while ( '0' !== $cursor );
 		return $deleted;
+	}
+
+	/** The last error reply, '' when the last command succeeded. */
+	public function last_error(): string {
+		return $this->last_error;
+	}
+
+	/** Backend errors stay in this request; callers expose only normalized reasons. */
+	public function getLastError(): string {
+		return $this->last_error;
 	}
 
 	public function close(): void {
@@ -245,23 +361,70 @@ class Redis_Client {
 	 * @return mixed
 	 */
 	private function command( array $args ) {
+		$this->last_error = '';
 		if ( ! is_resource( $this->sock ) ) {
 			return false;
 		}
 
+		$payload = $this->encode( $args );
+
+		if ( ! $this->write( $payload ) ) {
+			return false;
+		}
+
+		return $this->read_reply();
+	}
+
+	/**
+	 * Write the whole payload. A socket write can be partial, and a command
+	 * sent in part leaves the server waiting for the rest of it.
+	 */
+	private function write( string $payload ): bool {
+		$sent = 0;
+		$len  = strlen( $payload );
+		while ( $sent < $len ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.PHP.NoSilencedErrors.Discouraged -- Writing to the Redis TCP socket; WP_Filesystem has no socket transport. Failure returns false and the cache degrades.
+			$n = @fwrite( $this->sock, 0 === $sent ? $payload : substr( $payload, $sent ) );
+			if ( false === $n || 0 === $n ) {
+				return $this->drop();
+			}
+			$sent += $n;
+		}
+		return true;
+	}
+
+	/**
+	 * Close the socket after a transport failure and return false.
+	 *
+	 * After a timeout or a cut-off reply the stream is out of step: the next
+	 * read would return the answer to an earlier command. Nothing on it can
+	 * be trusted again, and a persistent socket would carry that into the
+	 * next request, so it is closed even when persistent.
+	 *
+	 * @return false
+	 */
+	private function drop(): bool {
+		$this->last_error = '';
+		if ( is_resource( $this->sock ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose, WordPress.PHP.NoSilencedErrors.Discouraged -- Closing a raw socket that failed mid-reply.
+			@fclose( $this->sock );
+		}
+		$this->sock = null;
+		return false;
+	}
+
+	/**
+	 * Encode one command as a RESP array of bulk strings.
+	 *
+	 * @param string[] $args
+	 */
+	private function encode( array $args ): string {
 		$payload = '*' . count( $args ) . "\r\n";
 		foreach ( $args as $a ) {
 			$a        = (string) $a;
 			$payload .= '$' . strlen( $a ) . "\r\n" . $a . "\r\n";
 		}
-
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.PHP.NoSilencedErrors.Discouraged -- Writing to the Redis TCP socket; WP_Filesystem has no socket transport. Failure returns false and the cache degrades.
-		if ( false === @fwrite( $this->sock, $payload ) ) {
-			$this->sock = null;
-			return false;
-		}
-
-		return $this->read_reply();
+		return $payload;
 	}
 
 	/**
@@ -272,7 +435,7 @@ class Redis_Client {
 	private function read_reply() {
 		$line = $this->read_line();
 		if ( false === $line || '' === $line ) {
-			return false;
+			return $this->drop();
 		}
 
 		$type = $line[0];
@@ -282,6 +445,7 @@ class Redis_Client {
 			case '+': // Simple string.
 				return $body;
 			case '-': // Error.
+				$this->last_error = $body;
 				return false;
 			case ':': // Integer.
 				return (int) $body;
@@ -303,7 +467,7 @@ class Redis_Client {
 				}
 				return $out;
 			default:
-				return false;
+				return $this->drop();
 		}
 	}
 
@@ -314,8 +478,8 @@ class Redis_Client {
 		}
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fgets, WordPress.PHP.NoSilencedErrors.Discouraged -- Reading a line from the Redis TCP socket.
 		$line = @fgets( $this->sock );
-		if ( false === $line ) {
-			return false;
+		if ( false === $line || "\n" !== substr( $line, -1 ) ) {
+			return $this->drop();
 		}
 		return rtrim( $line, "\r\n" );
 	}
@@ -330,11 +494,8 @@ class Redis_Client {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread, WordPress.PHP.NoSilencedErrors.Discouraged -- Reading the bulk-string body from the Redis TCP socket.
 			$chunk = @fread( $this->sock, $n - strlen( $buf ) );
 			if ( false === $chunk || '' === $chunk ) {
-				$meta = stream_get_meta_data( $this->sock );
-				if ( ! empty( $meta['timed_out'] ) ) {
-					return false;
-				}
-				break;
+				// Timed out or closed mid-value: a short value is not a hit.
+				return $this->drop();
 			}
 			$buf .= $chunk;
 		}

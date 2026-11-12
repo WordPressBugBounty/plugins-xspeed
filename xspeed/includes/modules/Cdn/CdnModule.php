@@ -23,6 +23,41 @@ final class CdnModule extends Module {
 	public const TIER    = self::TIER_FREE;
 	public const VERSION = '1.0.0';
 
+	/**
+	 * Return the memoized CDN decision for this request.
+	 *
+	 * The returned options are shared by the resource-hints pass and the CDN
+	 * HTML pass. Cache-off requests get a snapshot only after this module has
+	 * opened its output buffer.
+	 *
+	 * @return array|null CDN options for an eligible request, otherwise null.
+	 */
+	public static function rewrite_context(): ?array {
+		if ( ! self::$rewrite_booted ) {
+			return null;
+		}
+		if ( self::$cache_off ) {
+			return self::$buffer_opened ? self::$buffer_context : null;
+		}
+		if ( self::$context_resolved ) {
+			return self::$request_context;
+		}
+		self::$context_resolved = true;
+		self::$request_context  = self::resolve_context( true );
+		return self::$request_context;
+	}
+
+	/** Clear the request snapshot so unit tests can exercise another request. */
+	public static function reset_rewrite_context(): void {
+		self::$rewrite_booted   = false;
+		self::$cache_off        = false;
+		self::$context_resolved = false;
+		self::$request_context  = null;
+		self::$buffer_opened    = false;
+		self::$buffer_context   = null;
+		self::$buffering        = false;
+	}
+
 	public function ui_metadata(): array {
 		return array(
 			'label'       => __( 'CDN', 'xspeed' ),
@@ -126,6 +161,8 @@ final class CdnModule extends Module {
 		if ( null !== $this->blocked_by() ) {
 			return;
 		}
+		self::$rewrite_booted = true;
+		self::$cache_off      = ! $this->cache_enabled();
 		Cdn_Rewriter::reset_state();
 
 		// Attachment URLs still go through their own filter: media-library
@@ -165,10 +202,11 @@ final class CdnModule extends Module {
 		add_filter(
 			'xspeed_cache_final_html',
 			static function ( $html ) {
-				if ( ! self::should_rewrite_request() ) {
+				$context = self::rewrite_context();
+				if ( null === $context ) {
 					return $html;
 				}
-				return Cdn_Rewriter::process_html( (string) $html );
+				return Cdn_Rewriter::process_html( (string) $html, $context );
 			},
 			// After Resource Hints (10) so any preload/preconnect tag it
 			// injects gets its URL rewritten too.
@@ -179,22 +217,30 @@ final class CdnModule extends Module {
 		// Cache-off path: the filter above never fires, so buffer the page
 		// ourselves. Guarded so we never double-buffer when the cache engine
 		// is running.
-		if ( ! $this->cache_enabled() ) {
+		if ( self::$cache_off ) {
 			add_action(
 				'template_redirect',
 				static function () {
 					if ( self::$buffering || ! self::should_rewrite_request() ) {
 						return;
 					}
-					self::$buffering = true;
-					ob_start(
-						static function ( $buffer ) {
+					$context = self::resolve_context( false );
+					if ( null === $context ) {
+						return;
+					}
+					$opened = ob_start(
+						static function ( $buffer ) use ( $context ) {
 							if ( strlen( (string) $buffer ) < 255 ) {
 								return $buffer;
 							}
-							return Cdn_Rewriter::process_html( (string) $buffer );
+							return Cdn_Rewriter::process_html( (string) $buffer, $context );
 						}
 					);
+					if ( $opened ) {
+						self::$buffer_opened  = true;
+						self::$buffer_context = $context;
+						self::$buffering      = true;
+					}
 				},
 				9
 			);
@@ -207,6 +253,30 @@ final class CdnModule extends Module {
 	 * @var bool
 	 */
 	private static $buffering = false;
+	/** @var bool Whether boot_on_init passed module-level gates. */
+	private static $rewrite_booted = false;
+	/** @var bool Whether this request uses the cache-off output buffer. */
+	private static $cache_off = false;
+	/** @var bool Whether the cache-write request decision has been resolved. */
+	private static $context_resolved = false;
+	/** @var array|null */
+	private static $request_context = null;
+	/** @var bool Whether the cache-off buffer really opened. */
+	private static $buffer_opened = false;
+	/** @var array|null */
+	private static $buffer_context = null;
+
+	/** Resolve the request gate and settings once for the active HTML path. */
+	private static function resolve_context( bool $check_request ): ?array {
+		if ( $check_request && ! self::should_rewrite_request() ) {
+			return null;
+		}
+		$opts = \XSpeed\Settings_Manager::get( self::SLUG );
+		if ( empty( $opts['enabled'] ) || empty( $opts['cdn_url'] ) || Cdn_Rewriter::is_dev_host() ) {
+			return null;
+		}
+		return $opts;
+	}
 
 	/**
 	 * Should this request have its asset URLs rewritten at all?
