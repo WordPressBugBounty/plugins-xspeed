@@ -744,7 +744,10 @@ class Admin {
 				// constants today. (#398)
 				'setting_origins' => Settings_Manager::origins( $slug ),
 				'schema'       => $schema,
-				'notices'      => $module->ui_notices(),
+				// A `warn` conflict on the whole module (Conflict_Registry) comes
+				// first: switching it on works, and this callout is how the
+				// admin learns the other plugin does some of the same work.
+				'notices'      => array_merge( Conflict_Registry::warning_notices( $slug ), $module->ui_notices() ),
 				'custom_panel' => $meta['custom_panel'] ?? null,
 				// Why this module may not be switched on, when something else
 				// on the site has taken over from it. Null for almost every

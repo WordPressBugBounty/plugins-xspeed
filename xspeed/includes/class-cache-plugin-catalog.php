@@ -87,6 +87,10 @@ final class Cache_Plugin_Catalog {
 					'preload.crawler' => Conflict_Registry::STRATEGY_REFUSE,
 					'cdn.rewrite'     => Conflict_Registry::STRATEGY_REFUSE,
 					'images.lazyload' => Conflict_Registry::STRATEGY_REFUSE,
+					// Its Automatic Lazy Rendering has no setting and defers
+					// the same section-level elements. Turbo Render's default
+					// stands down beside it; a site may still switch it on.
+					'turbo-render'    => Conflict_Registry::STRATEGY_WARN,
 				),
 				'signals'      => array(
 					'constants'     => array( 'WP_ROCKET_VERSION' ),

@@ -2,21 +2,21 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: xSpeed Cache 1.4.8\n"
+"Project-Id-Version: xSpeed Cache 1.4.9\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/xspeed\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-11-12T13:24:32+00:00\n"
+"POT-Creation-Date: 2026-11-19T10:43:58+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: xspeed\n"
 
 #. Plugin Name of the plugin
 #: xspeed.php
-#: includes/class-cache.php:13436
+#: includes/class-cache.php:13458
 #: includes/class-deactivation-feedback.php:189
 msgid "xSpeed Cache"
 msgstr ""
@@ -38,7 +38,7 @@ msgstr ""
 
 #: includes/class-admin.php:160
 #: includes/class-admin.php:258
-#: includes/class-cache.php:13450
+#: includes/class-cache.php:13472
 #: assets/admin.js
 msgid "Settings"
 msgstr ""
@@ -207,26 +207,26 @@ msgid "Cached %1$s before its optimized version was ready: it was not ready afte
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed.
-#: includes/class-cache.php:7333
-#: includes/class-cache.php:7543
+#: includes/class-cache.php:7355
+#: includes/class-cache.php:7565
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: number of files removed, 4: caches the purge was sent to.
-#: includes/class-cache.php:7550
+#: includes/class-cache.php:7572
 #, php-format
 msgid "Purged one URL (%1$s) — %2$s, %3$d file(s) removed, sent to %4$s"
 msgstr ""
 
 #. translators: 1: cause of the purge, 2: URL or path, 3: caches the purge was sent to.
-#: includes/class-cache.php:7562
+#: includes/class-cache.php:7584
 #, php-format
 msgid "Purged one URL (%1$s): %2$s, 0 file(s) removed here, sent to %3$s"
 msgstr ""
 
 #. translators: 1: number of pages, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:7640
+#: includes/class-cache.php:7662
 #, php-format
 msgid "Purged %1$d page (%2$s), %3$d file(s) removed"
 msgid_plural "Purged %1$d pages (%2$s), %3$d file(s) removed"
@@ -234,210 +234,216 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %s: object cache exception message.
-#: includes/class-cache.php:7923
+#: includes/class-cache.php:7945
 #, php-format
 msgid "Object cache flush failed: %s"
 msgstr ""
 
-#: includes/class-cache.php:8837
+#: includes/class-cache.php:8859
 msgid "Purge All"
 msgstr ""
 
-#: includes/class-cache.php:8841
+#: includes/class-cache.php:8863
 msgid "Purge Page / Static Cache"
 msgstr ""
 
-#: includes/class-cache.php:8845
+#: includes/class-cache.php:8867
 msgid "Purge CSS / JS Cache"
 msgstr ""
 
-#: includes/class-cache.php:8849
+#: includes/class-cache.php:8871
 msgid "Purge Object Cache"
 msgstr ""
 
-#: includes/class-cache.php:8853
+#: includes/class-cache.php:8875
 msgid "Purge REST Cache"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge.
-#: includes/class-cache.php:9324
+#: includes/class-cache.php:9346
 #, php-format
 msgid "Purged %1$s (%2$s)"
 msgstr ""
 
 #. translators: 1: what was purged, 2: cause of the purge, 3: number of files removed.
-#: includes/class-cache.php:9330
+#: includes/class-cache.php:9352
 #, php-format
 msgid "Purged %1$s (%2$s) — %3$d file(s) removed"
 msgstr ""
 
-#: includes/class-cache.php:9677
+#: includes/class-cache.php:9699
 msgid "advanced-cache.php cannot be read, so xSpeed cannot tell whose page cache is installed."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9684
+#: includes/class-cache.php:9706
 #, php-format
 msgid "%s is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9687
+#: includes/class-cache.php:9709
 msgid "Another plugin is serving the page cache. Turn the xSpeed cache off and on again to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9762
+#: includes/class-cache.php:9784
 msgid "Could not lock page-cache ownership. Try again."
 msgstr ""
 
-#: includes/class-cache.php:9769
+#: includes/class-cache.php:9791
 msgid "Page-cache ownership changed while xSpeed was checking it. Nothing was changed; try again."
 msgstr ""
 
 #. translators: %s: the page-caching plugin that owns advanced-cache.php.
-#: includes/class-cache.php:9912
+#: includes/class-cache.php:9934
 #, php-format
 msgid "%s owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9915
+#: includes/class-cache.php:9937
 msgid "Another plugin owns advanced-cache.php, so xSpeed left it alone. Enable the cache from the xSpeed dashboard to take it over."
 msgstr ""
 
-#: includes/class-cache.php:9945
+#: includes/class-cache.php:9967
 msgid "Could not write wp-content/advanced-cache.php. Check filesystem permissions."
 msgstr ""
 
-#: includes/class-cache.php:10002
+#: includes/class-cache.php:10024
 msgid "wp-config.php is not writable and already contains define( 'WP_CACHE', false ). Change that line to true — adding a second one would leave the cache off and block xSpeed from changing it again."
 msgstr ""
 
-#: includes/class-cache.php:10003
+#: includes/class-cache.php:10025
 msgid "xSpeed could not verify the complete page-cache write, and wp-config.php is not writable. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:10005
+#: includes/class-cache.php:10027
 msgid "xSpeed could not verify the complete page-cache write. Its changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:10021
+#: includes/class-cache.php:10043
 msgid "xSpeed could not save the page-cache setting. Its file changes were rolled back."
 msgstr ""
 
-#: includes/class-cache.php:10113
+#: includes/class-cache.php:10135
 msgid "xSpeed could not safely remove its WP_CACHE setting. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:10128
+#: includes/class-cache.php:10150
 msgid "xSpeed could not remove its page-cache drop-in. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:10129
+#: includes/class-cache.php:10151
 msgid "xSpeed could not remove its page-cache drop-in, and could not put WP_CACHE back. The cache is not serving; check wp-config.php before changing the page cache again."
 msgstr ""
 
-#: includes/class-cache.php:10146
+#: includes/class-cache.php:10168
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. Remove the xSpeed block from .htaccess by hand before turning the page cache off."
 msgstr ""
 
-#: includes/class-cache.php:10164
+#: includes/class-cache.php:10186
 msgid "xSpeed could not remove its rewrite rules from .htaccess, which would keep serving cached pages. The cache remains enabled."
 msgstr ""
 
-#: includes/class-cache.php:10165
+#: includes/class-cache.php:10187
 msgid "xSpeed could not remove its rewrite rules from .htaccess, and could not restore the drop-in it had just removed. The cache is not serving, and the site may still return stale cached pages until the xSpeed block is removed from .htaccess by hand."
 msgstr ""
 
-#: includes/class-cache.php:10177
+#: includes/class-cache.php:10199
 msgid "xSpeed could not save the disabled state."
 msgstr ""
 
-#: includes/class-cache.php:10181
+#: includes/class-cache.php:10203
 msgid "xSpeed could not save the disabled state. The page cache was restored."
 msgstr ""
 
 #. translators: 1: running drop-in version, 2: bundled drop-in version.
-#: includes/class-cache.php:12449
+#: includes/class-cache.php:12471
 #, php-format
 msgid "The page cache is serving with an older copy of its drop-in (v%1$d; this version of xSpeed ships v%2$d). Loading any wp-admin page replaces it."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: a page-caching plugin's name.
-#: includes/class-cache.php:12803
+#: includes/class-cache.php:12825
 #, php-format
 msgid "%1$s %2$s is also active on this site — deactivate its page cache before enabling xSpeed."
 msgstr ""
 
 #. translators: 1: the refusal reason, 2: comma-separated page-caching plugin names.
-#: includes/class-cache.php:12810
+#: includes/class-cache.php:12832
 #, php-format
 msgid "%1$s These page caches are also active on this site: %2$s. Deactivate them before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: comma-separated list of page-caching plugin names.
-#: includes/class-cache.php:12865
+#: includes/class-cache.php:12887
 #, php-format
 msgid "More than one page cache is active on this site (%s). Turn off the other page caches before enabling xSpeed."
 msgstr ""
 
 #. translators: %s: a page-caching plugin's name, e.g. LiteSpeed Cache.
-#: includes/class-cache.php:12876
+#: includes/class-cache.php:12898
 #, php-format
 msgid "%s's page cache is on. Turn it off in that plugin's settings before enabling xSpeed's page cache. The plugin can stay active."
 msgstr ""
 
-#: includes/class-cache.php:12881
+#: includes/class-cache.php:12903
 #, php-format
 msgid "%s is active or owns advanced-cache.php. Deactivate its page cache before enabling xSpeed."
 msgstr ""
 
-#: includes/class-cache.php:12884
+#: includes/class-cache.php:12906
 msgid "WP_CACHE is true but no page-cache drop-in owner can be proved. xSpeed will not claim it."
 msgstr ""
 
-#: includes/class-cache.php:12885
+#: includes/class-cache.php:12907
 msgid "wp-config.php defines WP_CACHE more than once. Remove the duplicate before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12886
+#: includes/class-cache.php:12908
 msgid "WP_CACHE is set from an expression in wp-config.php. xSpeed will not rewrite it."
 msgstr ""
 
-#: includes/class-cache.php:12887
+#: includes/class-cache.php:12909
 msgid "WP_CACHE is defined inside a conditional in wp-config.php, so xSpeed cannot tell what it will be. Move it to a plain define before enabling the cache."
 msgstr ""
 
-#: includes/class-cache.php:12888
+#: includes/class-cache.php:12910
 msgid "wp-config.php cannot be read, so xSpeed cannot safely change page-cache ownership."
 msgstr ""
 
-#: includes/class-cache.php:12889
+#: includes/class-cache.php:12911
 msgid "advanced-cache.php is occupied but its owner cannot be proved. xSpeed will not replace it."
 msgstr ""
 
-#: includes/class-cache.php:12890
+#: includes/class-cache.php:12912
 msgid "advanced-cache.php cannot be read, so xSpeed cannot prove its owner."
 msgstr ""
 
-#: includes/class-cache.php:12892
+#: includes/class-cache.php:12914
 msgid "The page-cache field is occupied or cannot be verified. xSpeed will not change it."
 msgstr ""
 
-#: includes/class-cache.php:13519
+#: includes/class-cache.php:13541
 #: includes/class-purge-ui.php:280
 #: includes/class-purge-ui.php:682
 msgid "Unauthorized."
 msgstr ""
 
 #. translators: %s: conflicting plugin name
-#: includes/class-conflict-registry.php:164
+#: includes/class-conflict-registry.php:191
 #, php-format
 msgid "%s is active and handles the same feature. Deactivate it before enabling this in xSpeed."
 msgstr ""
 
 #. translators: %s: conflicting plugin name
-#: includes/class-conflict-registry.php:184
+#: includes/class-conflict-registry.php:225
 #, php-format
-msgid "%s is active and may interfere. Test carefully."
+msgid "%s is active"
+msgstr ""
+
+#. translators: %s: conflicting plugin name
+#: includes/class-conflict-registry.php:230
+#, php-format
+msgid "%s does some of the same work. You can still switch this on. If you do, check a few pages to see they look right."
 msgstr ""
 
 #: includes/class-deactivation-feedback.php:63
@@ -633,71 +639,75 @@ msgstr ""
 msgid "handed to xCloud's purge plugin, which sends it when this request ends"
 msgstr ""
 
+#: includes/class-migration.php:337
+msgid "WP Rocket's Defer JS exclusions were not imported, so this import does not turn on Also defer jQuery and inline scripts. If that option is already on, it stays on. Check it against those exclusions."
+msgstr ""
+
 #. translators: 1: source lifetime in seconds, 2: imported lifetime in hours.
-#: includes/class-migration.php:343
+#: includes/class-migration.php:346
 #, php-format
 msgid "Page cache lifetime %1$ds cannot be expressed in whole hours — importing as %2$dh."
 msgstr ""
 
-#: includes/class-migration.php:358
+#: includes/class-migration.php:361
 #: includes/modules/ObjectCache/ObjectCacheModule.php:121
 msgid "Redis password"
 msgstr ""
 
-#: includes/class-migration.php:359
+#: includes/class-migration.php:362
 msgid "Database-cache Redis password"
 msgstr ""
 
-#: includes/class-migration.php:360
+#: includes/class-migration.php:363
 msgid "Page-cache Redis password"
 msgstr ""
 
 #. translators: %s: human label for the secret that could not be read.
-#: includes/class-migration.php:370
+#: includes/class-migration.php:373
 #, php-format
 msgid "%s is encrypted and could not be read — it will not be imported. Enter it again in xSpeed after importing."
 msgstr ""
 
 #. translators: 1: endpoint scheme, e.g. tls. 2: the endpoint as configured in the source plugin.
-#: includes/class-migration.php:402
+#: includes/class-migration.php:405
 #, php-format
 msgid "Object-cache endpoint %2$s uses %1$s, which xSpeed does not support — importing the host and port only. The cache will connect only if the server also accepts a plain connection."
 msgstr ""
 
 #. translators: 1: source plugin name, 2: the value it had, 3: the value xSpeed uses now.
-#: includes/class-migration.php:608
+#: includes/class-migration.php:611
 #, php-format
 msgid "%1$s had %2$s, but xSpeed still uses %3$s after saving."
 msgstr ""
 
-#: includes/class-migration.php:629
+#: includes/class-migration.php:632
 msgid "Page caching could not be switched on."
 msgstr ""
 
 #. translators: %s: constant or global name, e.g. XSPEED_OC_HOST.
-#: includes/class-migration.php:851
+#: includes/class-migration.php:854
 #, php-format
 msgid "Set by %s in wp-config.php, which takes priority over imported settings."
 msgstr ""
 
 #. translators: 1: source plugin name, 2: its value, 3: the value saved.
-#: includes/class-migration.php:866
+#: includes/class-migration.php:869
 #, php-format
 msgid "%1$s had %2$s, above the most xSpeed allows, so %3$s was saved."
 msgstr ""
 
 #. translators: 1: source plugin name, 2: its value, 3: the value saved.
-#: includes/class-migration.php:870
+#: includes/class-migration.php:873
 #, php-format
 msgid "%1$s had %2$s, below the least xSpeed allows, so %3$s was saved."
 msgstr ""
 
-#: includes/class-migration.php:933
+#: includes/class-migration.php:936
 #: assets/admin.js
 msgid "on"
 msgstr ""
 
-#: includes/class-migration.php:933
+#: includes/class-migration.php:936
 msgid "off"
 msgstr ""
 
@@ -711,7 +721,7 @@ msgstr ""
 
 #. translators: %s: module slug.
 #: includes/class-module.php:196
-#: includes/class-module.php:309
+#: includes/class-module.php:377
 #, php-format
 msgid "\"%s\" is a Pro module and this site has no valid license, so its settings cannot be changed."
 msgstr ""
@@ -742,60 +752,60 @@ msgid "Reverted \"%1$s\" on \"%2$s\" to the value set in wp-config.php."
 msgstr ""
 
 #. translators: %s: comma-separated list of "field (CONSTANT_NAME)" pairs.
-#: includes/class-module.php:352
+#: includes/class-module.php:415
 #, php-format
 msgid "These settings are defined in wp-config.php and cannot be changed here: %s. Edit the constant, or remove it to manage the setting from this screen."
 msgstr ""
 
 #. translators: %s: comma-separated list of "field (setting that holds it)" pairs.
-#: includes/class-module.php:375
-#: includes/modules/Mcp/Mcp_Tools.php:1936
+#: includes/class-module.php:437
+#: includes/modules/Mcp/Mcp_Tools.php:2086
 #, php-format
 msgid "These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them."
 msgstr ""
 
 #. translators: %s: comma-separated list of "setting (what it accepts)".
-#: includes/class-module.php:464
+#: includes/class-module.php:496
 #, php-format
 msgid "Nothing was saved. These values are not allowed: %s."
 msgstr ""
 
 #. translators: %s: comma-separated option values.
-#: includes/class-module.php:484
+#: includes/class-module.php:516
 #, php-format
 msgid "one of: %s"
 msgstr ""
 
 #. translators: 1: minimum, 2: maximum.
-#: includes/class-module.php:488
+#: includes/class-module.php:520
 #, php-format
 msgid "a whole number from %1$d to %2$d"
 msgstr ""
 
-#: includes/class-module.php:490
+#: includes/class-module.php:522
 msgid "a whole number"
 msgstr ""
 
-#: includes/class-module.php:492
+#: includes/class-module.php:524
 msgid "true or false"
 msgstr ""
 
-#: includes/class-module.php:494
+#: includes/class-module.php:526
 msgid "a list"
 msgstr ""
 
-#: includes/class-module.php:708
+#: includes/class-module.php:761
 msgid "This module has no single on/off switch. It counts as on when any of its settings is on, and none currently is."
 msgstr ""
 
 #. translators: %s: comma-separated list of setting labels that are switched on.
-#: includes/class-module.php:713
+#: includes/class-module.php:766
 #, php-format
 msgid "This module has no single on/off switch. It counts as on because these settings are on: %s."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/class-module.php:901
+#: includes/class-module.php:954
 #, php-format
 msgid "Refused a settings write to the Pro module \"%s\" — no valid license."
 msgstr ""
@@ -1164,25 +1174,25 @@ msgstr ""
 msgid "The page got measurably slower: median render time %1$dms before, %2$dms after (+%3$d%%), beyond what run-to-run noise explains. The change was undone."
 msgstr ""
 
-#: includes/class-plugin.php:452
+#: includes/class-plugin.php:477
 msgid "After the security update, xSpeed could not delete every cached page, so some pages cached before the update may still be served. It tries again every hour. Check that the web server can delete files in wp-content/cache/xspeed and wp-content/cache/xspeed-static."
 msgstr ""
 
 #. translators: %s: Cloudflare zone ID awaiting a full purge.
-#: includes/class-plugin.php:458
+#: includes/class-plugin.php:483
 #, php-format
 msgid "After the security update, a full Cloudflare purge has not been confirmed for zone %s. Purge everything for this zone through xSpeed or the Cloudflare dashboard. Automatic purge preferences have not been changed."
 msgstr ""
 
-#: includes/class-plugin.php:463
+#: includes/class-plugin.php:488
 msgid "I have purged this zone in Cloudflare"
 msgstr ""
 
-#: includes/class-plugin.php:470
+#: includes/class-plugin.php:495
 msgid "You do not have permission to confirm this purge."
 msgstr ""
 
-#: includes/class-plugin.php:475
+#: includes/class-plugin.php:500
 msgid "This zone is not awaiting purge confirmation."
 msgstr ""
 
@@ -1664,11 +1674,11 @@ msgstr ""
 msgid "Cleared the whole nginx cache: more than %d pages changed in one request, too many to purge one by one"
 msgstr ""
 
-#: includes/class-server.php:749
+#: includes/class-server.php:914
 msgid "an unreadable advanced-cache.php"
 msgstr ""
 
-#: includes/class-server.php:759
+#: includes/class-server.php:924
 msgid "an unidentified advanced-cache.php"
 msgstr ""
 
@@ -2171,19 +2181,19 @@ msgid "Clear the Cloudflare cache each time xSpeed clears its own, for example a
 msgstr ""
 
 #. translators: %s: why the edge could not be purged.
-#: includes/modules/Cloudflare/CloudflareModule.php:321
+#: includes/modules/Cloudflare/CloudflareModule.php:322
 #, php-format
 msgid "Cloudflare edge not purged after a cache purge: %s"
 msgstr ""
 
 #. translators: %d: number of URLs that changed at once.
-#: includes/modules/Cloudflare/CloudflareModule.php:527
+#: includes/modules/Cloudflare/CloudflareModule.php:528
 #, php-format
 msgid "Purging the whole Cloudflare zone: %d URLs changed at once, too many to purge individually"
 msgstr ""
 
 #. translators: %d: number of URLs.
-#: includes/modules/Cloudflare/CloudflareModule.php:588
+#: includes/modules/Cloudflare/CloudflareModule.php:589
 #, php-format
 msgid "Skipped a queued Cloudflare purge of %d URL: the connection is no longer available"
 msgid_plural "Skipped a queued Cloudflare purge of %d URLs: the connection is no longer available"
@@ -2191,7 +2201,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %d: number of URLs purged.
-#: includes/modules/Cloudflare/CloudflareModule.php:619
+#: includes/modules/Cloudflare/CloudflareModule.php:620
 #, php-format
 msgid "Purged %d URL from the Cloudflare edge cache"
 msgid_plural "Purged %d URLs from the Cloudflare edge cache"
@@ -2199,60 +2209,60 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: 1: number of URLs, 2: failure reason.
-#: includes/modules/Cloudflare/CloudflareModule.php:635
+#: includes/modules/Cloudflare/CloudflareModule.php:636
 #, php-format
 msgid "Cloudflare URL purge failed (%1$d URL(s)): %2$s"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:637
-#: includes/modules/Cloudflare/CloudflareModule.php:708
+#: includes/modules/Cloudflare/CloudflareModule.php:638
+#: includes/modules/Cloudflare/CloudflareModule.php:709
 msgid "unknown error"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:653
+#: includes/modules/Cloudflare/CloudflareModule.php:654
 msgid "the Cloudflare integration is switched off"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:660
+#: includes/modules/Cloudflare/CloudflareModule.php:661
 msgid "no zone ID or API credentials are configured"
 msgstr ""
 
 #. translators: %s: what asked for the purge.
-#: includes/modules/Cloudflare/CloudflareModule.php:696
+#: includes/modules/Cloudflare/CloudflareModule.php:697
 #, php-format
 msgid "Purged the Cloudflare edge cache (%s)"
 msgstr ""
 
 #. translators: 1: what asked for the purge, 2: failure reason.
-#: includes/modules/Cloudflare/CloudflareModule.php:706
+#: includes/modules/Cloudflare/CloudflareModule.php:707
 #, php-format
 msgid "Cloudflare purge failed (%1$s): %2$s"
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:780
+#: includes/modules/Cloudflare/CloudflareModule.php:787
 msgid "Cloudflare is not fully configured."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:781
+#: includes/modules/Cloudflare/CloudflareModule.php:788
 msgid "Add your API token (or Global API Key + account email) and the Zone ID, then press Verify. Until then auto-purge does nothing."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:794
+#: includes/modules/Cloudflare/CloudflareModule.php:801
 msgid "Cloudflare purge is failing."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:797
+#: includes/modules/Cloudflare/CloudflareModule.php:804
 #, php-format
 msgid "The last edge purge was rejected by Cloudflare%s. Confirm the API token includes the \"Zone → Cache Purge\" permission for this zone — a token that can read the zone can still lack purge rights."
 msgstr ""
 
-#: includes/modules/Cloudflare/CloudflareModule.php:806
+#: includes/modules/Cloudflare/CloudflareModule.php:813
 msgid "Cloudflare credentials were rejected."
 msgstr ""
 
 #. translators: %s: the Cloudflare API error message, or empty.
-#: includes/modules/Cloudflare/CloudflareModule.php:809
+#: includes/modules/Cloudflare/CloudflareModule.php:816
 #, php-format
 msgid "The saved credentials could not verify this zone%s. Auto-purge will not work until this is fixed."
 msgstr ""
@@ -2311,28 +2321,60 @@ msgstr ""
 msgid "Provide at least one cleanup type."
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:35
+#: includes/modules/Fonts/FontsModule.php:43
 msgid "Fonts"
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:37
+#: includes/modules/Fonts/FontsModule.php:45
 msgid "Shows text right away while web fonts load, and preloads key fonts."
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:47
+#: includes/modules/Fonts/FontsModule.php:55
 msgid "Show text while fonts load"
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:48
+#: includes/modules/Fonts/FontsModule.php:56
 msgid "Text in Google Fonts, and in fonts added to WordPress itself, shows at once in a standard font, then switches when the web font arrives."
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:54
+#: includes/modules/Fonts/FontsModule.php:62
 msgid "Fonts to preload"
 msgstr ""
 
-#: includes/modules/Fonts/FontsModule.php:55
+#: includes/modules/Fonts/FontsModule.php:63
 msgid "One full font file URL per line (woff2, woff, ttf or otf). The browser fetches these first, so list only fonts used at the top of the page."
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:68
+msgid "Load Google Fonts without blocking"
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:69
+msgid "The page no longer waits for the Google Fonts stylesheet (or Bunny Fonts, Adobe Fonts or CDNFonts) before it paints. Text shows in a standard font first, and the font stylesheet loads at low priority. Icon fonts such as Material Icons load as before. Applies to pages the page cache stores."
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:74
+msgid "Show text while theme and plugin fonts load"
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:75
+msgid "Fonts that a theme or plugin declares in its own stylesheets show text at once in a standard font, then switch when the font arrives. Stylesheet files change only with Minify CSS on. Fonts declared in inline styles on the page change only with Minify HTML on. Fonts that already set font-display, and icon fonts, are left as they are."
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:95
+msgid "Theme and plugin fonts are not changed yet"
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:96
+msgid "\"Show text while theme and plugin fonts load\" works on the CSS that Minify CSS or Minify HTML processes, and both are off. Turn one of them on under Minify."
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:103
+msgid "Google Fonts still block the page"
+msgstr ""
+
+#: includes/modules/Fonts/FontsModule.php:104
+msgid "\"Load Google Fonts without blocking\" changes the pages the page cache stores, and the page cache is off. Turn on the page cache to use it."
 msgstr ""
 
 #: includes/modules/Gzip/GzipModule.php:35
@@ -2722,77 +2764,77 @@ msgstr ""
 msgid "Security check failed. Please try connecting again."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1753
-#: includes/modules/Mcp/McpModule.php:1772
+#: includes/modules/Mcp/McpModule.php:1756
+#: includes/modules/Mcp/McpModule.php:1775
 msgid "The MCP tool payload is too large."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1849
+#: includes/modules/Mcp/McpModule.php:1852
 msgid "Read-only — inspect cache status and settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1850
+#: includes/modules/Mcp/McpModule.php:1853
 msgid "Read & write — purge caches, toggle caching, and change settings."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1851
+#: includes/modules/Mcp/McpModule.php:1854
 msgid "An AI agent"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1870
+#: includes/modules/Mcp/McpModule.php:1873
 msgid "Authorize AI access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1872
+#: includes/modules/Mcp/McpModule.php:1875
 msgid "Connect to xSpeed"
 msgstr ""
 
 #. translators: %s: AI client name.
-#: includes/modules/Mcp/McpModule.php:1874
+#: includes/modules/Mcp/McpModule.php:1877
 #, php-format
 msgid "%s wants to manage the cache on this site."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1875
+#: includes/modules/Mcp/McpModule.php:1878
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:205
 msgid "Site"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1876
+#: includes/modules/Mcp/McpModule.php:1879
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:210
 msgid "Signed in as"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1877
+#: includes/modules/Mcp/McpModule.php:1880
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:211
 msgid "Access"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1882
+#: includes/modules/Mcp/McpModule.php:1885
 #: includes/modules/Mcp/Mcp_Approvals.php:469
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:219
 msgid "Deny"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1883
+#: includes/modules/Mcp/McpModule.php:1886
 #: includes/modules/Mcp/Mcp_Approvals.php:468
 #: includes/modules/Mcp/Mcp_Hub_Connect.php:220
 msgid "Approve"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1893
+#: includes/modules/Mcp/McpModule.php:1896
 msgid "Authorization error"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:1896
+#: includes/modules/Mcp/McpModule.php:1899
 msgid "Could not authorize"
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:2139
+#: includes/modules/Mcp/McpModule.php:2142
 msgid "An AI assistant is connected to this site. This module counts as on whenever a connection token exists, rather than having its own on/off setting."
 msgstr ""
 
-#: includes/modules/Mcp/McpModule.php:2140
+#: includes/modules/Mcp/McpModule.php:2143
 msgid "No AI assistant is connected. This module counts as on once you connect one."
 msgstr ""
 
@@ -2917,41 +2959,41 @@ msgstr ""
 msgid "xSpeed Hub lets you and your AI tools manage this site’s cache alongside your other sites."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:261
+#: includes/modules/Mcp/Mcp_OAuth.php:281
 msgid "Too many client registrations. Try again later."
 msgstr ""
 
 #. translators: %d: maximum number of redirect URIs.
-#: includes/modules/Mcp/Mcp_OAuth.php:277
+#: includes/modules/Mcp/Mcp_OAuth.php:297
 #, php-format
 msgid "At most %d redirect_uris are allowed."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:289
+#: includes/modules/Mcp/Mcp_OAuth.php:309
 msgid "At least one valid redirect_uri is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:326
+#: includes/modules/Mcp/Mcp_OAuth.php:362
 msgid "Client registration limit reached."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:345
+#: includes/modules/Mcp/Mcp_OAuth.php:381
 msgid "The client registration could not be stored."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:384
+#: includes/modules/Mcp/Mcp_OAuth.php:420
 msgid "Unknown client_id."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:388
+#: includes/modules/Mcp/Mcp_OAuth.php:424
 msgid "redirect_uri does not match a registered value."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:391
+#: includes/modules/Mcp/Mcp_OAuth.php:427
 msgid "Only response_type=code is supported."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_OAuth.php:395
+#: includes/modules/Mcp/Mcp_OAuth.php:431
 msgid "PKCE with code_challenge_method=S256 is required."
 msgstr ""
 
@@ -2960,205 +3002,221 @@ msgid "No active MCP connection to change. Connect first."
 msgstr ""
 
 #. translators: %s: canonical "<command> <action>".
-#: includes/modules/Mcp/Mcp_Tools.php:1137
+#: includes/modules/Mcp/Mcp_Tools.php:1141
 #, php-format
 msgid "\"%s\" cannot be run from an MCP tool call. The site owner can do it from the xSpeed dashboard or from WP-CLI on the server."
 msgstr ""
 
 #. translators: %s: tool name.
-#: includes/modules/Mcp/Mcp_Tools.php:1152
-#: includes/modules/Mcp/Mcp_Tools.php:1190
+#: includes/modules/Mcp/Mcp_Tools.php:1156
+#: includes/modules/Mcp/Mcp_Tools.php:1194
 #, php-format
 msgid "Unknown tool: %s"
 msgstr ""
 
 #. translators: %s: tool name.
-#: includes/modules/Mcp/Mcp_Tools.php:1211
+#: includes/modules/Mcp/Mcp_Tools.php:1215
 #, php-format
 msgid "This MCP connection is read-only; the \"%s\" tool changes state and is not permitted. Reconnect with write access to use it."
 msgstr ""
 
 #. translators: %s: comma-separated list of valid purge types.
-#: includes/modules/Mcp/Mcp_Tools.php:1665
+#: includes/modules/Mcp/Mcp_Tools.php:1669
 #, php-format
 msgid "Invalid purge type. Expected one of: %s"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1674
-#: includes/modules/Mcp/Mcp_Tools.php:3564
+#: includes/modules/Mcp/Mcp_Tools.php:1678
+#: includes/modules/Mcp/Mcp_Tools.php:3665
 msgid "AI assistant"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1723
+#: includes/modules/Mcp/Mcp_Tools.php:1727
 msgid "The \"enabled\" parameter is required (true or false)."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1803
-#: includes/modules/Mcp/Mcp_Tools.php:1857
+#: includes/modules/Mcp/Mcp_Tools.php:1783
+#: includes/modules/Mcp/Mcp_Tools.php:1842
 msgid "The \"module\" parameter is required."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1812
-#: includes/modules/Mcp/Mcp_Tools.php:1873
+#: includes/modules/Mcp/Mcp_Tools.php:1792
+#: includes/modules/Mcp/Mcp_Tools.php:2031
+#: includes/modules/Settings/SettingsModule.php:189
 #, php-format
 msgid "Unknown module \"%s\"."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:1864
+#: includes/modules/Mcp/Mcp_Tools.php:1849
 msgid "The \"values\" parameter must be an object of setting keys."
 msgstr ""
 
+#: includes/modules/Mcp/Mcp_Tools.php:1873
+msgid "Pass either \"module\" and \"values\", or \"patch\", not both."
+msgstr ""
+
+#: includes/modules/Mcp/Mcp_Tools.php:1881
+msgid "The \"patch\" parameter must be an object of module slugs, each holding an object of setting keys."
+msgstr ""
+
+#. translators: %s: each refused module with its reason.
+#: includes/modules/Mcp/Mcp_Tools.php:1911
+#: includes/modules/Settings/SettingsModule.php:150
+#, php-format
+msgid "Nothing was saved. %s"
+msgstr ""
+
+#. translators: %s: module slug.
+#: includes/modules/Mcp/Mcp_Tools.php:1978
+#, php-format
+msgid "Refused an MCP settings write to the Pro module \"%s\" — no valid license."
+msgstr ""
+
 #. translators: 1: comma-separated field names, 2: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1892
+#: includes/modules/Mcp/Mcp_Tools.php:2052
 #, php-format
 msgid "Writing credential fields (%1$s) on \"%2$s\" needs the \"configure\" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these credentials from the xSpeed dashboard."
 msgstr ""
 
 #. translators: 1: comma-separated field names, 2: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1912
+#: includes/modules/Mcp/Mcp_Tools.php:2067
 #, php-format
 msgid "Turning on %1$s in \"%2$s\" records the site owner's consent, so it can't be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed."
 msgstr ""
 
 #. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1966
-#, php-format
-msgid "Refused an MCP settings write to the Pro module \"%s\" — no valid license."
-msgstr ""
-
-#. translators: %s: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:1976
+#: includes/modules/Mcp/Mcp_Tools.php:2100
 #, php-format
 msgid "\"%s\" is a Pro module and this site has no active license, so the write was refused. Nothing was changed."
 msgstr ""
 
 #. translators: 1: setting key, 2: wp-config.php constant name.
-#: includes/modules/Mcp/Mcp_Tools.php:2045
+#: includes/modules/Mcp/Mcp_Tools.php:2129
 #, php-format
 msgid "\"%1$s\" is defined in wp-config.php as %2$s and cannot be changed here"
 msgstr ""
 
 #. translators: 1: setting key, 2: module slug.
-#: includes/modules/Mcp/Mcp_Tools.php:2053
+#: includes/modules/Mcp/Mcp_Tools.php:2137
 #, php-format
 msgid "\"%1$s\" is not a setting of module \"%2$s\""
 msgstr ""
 
 #. translators: %s: comma-separated setting names.
-#: includes/modules/Mcp/Mcp_Tools.php:2065
+#: includes/modules/Mcp/Mcp_Tools.php:2149
 #, php-format
 msgid " — did you mean: %s?"
 msgstr ""
 
 #. translators: %s: setting key.
-#: includes/modules/Mcp/Mcp_Tools.php:2075
+#: includes/modules/Mcp/Mcp_Tools.php:2159
 #, php-format
 msgid "\"%s\" was rejected by the schema (wrong type, or outside the allowed range/options)"
 msgstr ""
 
 #. translators: 1: module slug, 2: reasons.
-#: includes/modules/Mcp/Mcp_Tools.php:2084
+#: includes/modules/Mcp/Mcp_Tools.php:2185
 #, php-format
 msgid "Refused to update %1$s — nothing was written. %2$s"
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2128
+#: includes/modules/Mcp/Mcp_Tools.php:2229
 msgid "The \"command\" parameter is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2175
+#: includes/modules/Mcp/Mcp_Tools.php:2276
 msgid "This preview deletes nothing. No confirm_token was issued because no categories were chosen: call scan_database again with types (for example [\"post_revisions\"]), or set Auto-Cleanup Types in the Database module."
 msgstr ""
 
 #. translators: %s: comma-separated category keys.
-#: includes/modules/Mcp/Mcp_Tools.php:2194
+#: includes/modules/Mcp/Mcp_Tools.php:2295
 #, php-format
 msgid "This preview deletes nothing. The confirm_token lets clean_database delete these categories only: %s. It expires in 5 minutes and stops working if their counts change."
 msgstr ""
 
 #. translators: 1: unknown keys, 2: valid keys.
-#: includes/modules/Mcp/Mcp_Tools.php:2229
+#: includes/modules/Mcp/Mcp_Tools.php:2330
 #, php-format
 msgid "Unknown database cleanup categories: %1$s. Valid categories: %2$s."
 msgstr ""
 
 #. translators: 1: the action, such as "xspeed migrate apply". 2: wp-admin URL. 3: approval id. 4: minutes until it expires.
-#: includes/modules/Mcp/Mcp_Tools.php:2796
+#: includes/modules/Mcp/Mcp_Tools.php:2897
 #, php-format
 msgid "\"%1$s\" can't be undone, so the site owner has to approve it first. Ask them to approve or deny it in wp-admin: %2$s. After they approve, repeat this exact call with approval_id: %3$s. The request expires in %4$d minutes."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2833
+#: includes/modules/Mcp/Mcp_Tools.php:2934
 msgid "That confirm_token is unknown or has expired (they last 5 minutes). Ask for a fresh one by making the same call without a confirm_token."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2852
+#: includes/modules/Mcp/Mcp_Tools.php:2953
 msgid "The database changed since that scan, so the preview no longer describes what would be deleted. Run scan_database again and confirm against the new result."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2853
+#: includes/modules/Mcp/Mcp_Tools.php:2954
 msgid "That confirm_token was issued for a different action, so it does not authorise this one. Repeat this exact call without a confirm_token to get one that does."
 msgstr ""
 
 #. translators: %s: comma-separated category keys.
-#: includes/modules/Mcp/Mcp_Tools.php:2881
+#: includes/modules/Mcp/Mcp_Tools.php:2982
 #, php-format
 msgid "That confirm_token covers these categories only: %s. Pass exactly those as the \"types\" option, or use clean_database."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:2933
-#: includes/modules/Mcp/Mcp_Tools.php:3248
+#: includes/modules/Mcp/Mcp_Tools.php:3034
+#: includes/modules/Mcp/Mcp_Tools.php:3349
 msgid "This permanently deletes content and cannot be undone. Call scan_database first to see exactly what would be removed, then pass the confirm_token it returns."
 msgstr ""
 
 #. translators: %s: the confirm_token to send back.
-#: includes/modules/Mcp/Mcp_Tools.php:2947
+#: includes/modules/Mcp/Mcp_Tools.php:3048
 #, php-format
 msgid "Call run_command again with the same command plus confirm_token: %s"
 msgstr ""
 
 #. translators: 1: tool name, 2: the confirm_token to send back.
-#: includes/modules/Mcp/Mcp_Tools.php:2953
+#: includes/modules/Mcp/Mcp_Tools.php:3054
 #, php-format
 msgid "Call %1$s again with the same arguments plus confirm_token: %2$s"
 msgstr ""
 
 #. translators: 1: tool name, 2: action value, 3: the confirm_token to send back.
-#: includes/modules/Mcp/Mcp_Tools.php:2959
+#: includes/modules/Mcp/Mcp_Tools.php:3060
 #, php-format
 msgid "Call %1$s again with action: %2$s plus confirm_token: %3$s"
 msgstr ""
 
 #. translators: 1: canonical "<command> <action>", 2: how to repeat the call.
-#: includes/modules/Mcp/Mcp_Tools.php:2969
+#: includes/modules/Mcp/Mcp_Tools.php:3070
 #, php-format
 msgid "\"%1$s\" is destructive and cannot be undone, so it needs a second, deliberate call. %2$s — the token is single use and expires in 5 minutes."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3377
-#: includes/modules/Mcp/Mcp_Tools.php:3417
+#: includes/modules/Mcp/Mcp_Tools.php:3478
+#: includes/modules/Mcp/Mcp_Tools.php:3518
 msgid "The enabled argument is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3381
-#: includes/modules/Mcp/Mcp_Tools.php:3421
+#: includes/modules/Mcp/Mcp_Tools.php:3482
+#: includes/modules/Mcp/Mcp_Tools.php:3522
 msgid "The enabled argument must be true or false."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3442
+#: includes/modules/Mcp/Mcp_Tools.php:3543
 msgid "The action argument must be \"list\" or \"clear\"."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3481
+#: includes/modules/Mcp/Mcp_Tools.php:3582
 msgid "External scores are not available on this site."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3562
+#: includes/modules/Mcp/Mcp_Tools.php:3663
 msgid "The url argument is required."
 msgstr ""
 
-#: includes/modules/Mcp/Mcp_Tools.php:3703
+#: includes/modules/Mcp/Mcp_Tools.php:3804
 msgid "The url argument must be a page on this site, as a full http(s) URL or a path starting with /."
 msgstr ""
 
@@ -3380,7 +3438,7 @@ msgid "Defer JavaScript"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:76
-msgid "Runs scripts after the page has loaded, so content shows sooner. jQuery and scripts that need it are skipped."
+msgid "Runs scripts after the page has been read, so content shows sooner. jQuery still loads first unless you turn on \"Also defer jQuery and inline scripts\" below."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:81
@@ -3392,122 +3450,130 @@ msgid "Loads the consent banner script without holding up the page. The banner s
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:88
-msgid "Delay JavaScript"
+msgid "Also defer jQuery and inline scripts"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:89
-msgid "Scripts load only when the visitor scrolls, taps or types. Pages show much sooner, but test menus and sliders. Cookie consent banners still load first."
-msgstr ""
-
-#: includes/modules/Minify/MinifyModule.php:94
-msgid "Load CSS without blocking"
+msgid "Also defers jQuery and the scripts written into the page, keeping them in their original order. Scripts that are not safe to move stay where they are. If your server or CDN sends a Content-Security-Policy for scripts, leave this off."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:95
-msgid "On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump. Pages with a slider, carousel or masonry grid also load their CSS normally, because those scripts lay the page out before late CSS would arrive."
+msgid "Delay JavaScript"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:100
-msgid "Remove version from file URLs"
+#: includes/modules/Minify/MinifyModule.php:96
+msgid "Scripts load only when the visitor scrolls, taps or types. Pages show much sooner, but test menus and sliders. Cookie consent banners still load first."
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:101
-msgid "Removes ?ver= from CSS and JS links, which some CDNs cache better. After a plugin update, returning visitors may keep old files until their browser cache expires."
+msgid "Load CSS without blocking"
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:102
+msgid "On pages that have critical CSS, the page shows before the rest of its CSS finishes loading. Pages without critical CSS keep loading their CSS normally, because deferring it makes the page show unstyled and then jump. Pages with a slider, carousel or masonry grid also load their CSS normally, because those scripts lay the page out before late CSS would arrive."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:107
+msgid "Remove version from file URLs"
 msgstr ""
 
 #: includes/modules/Minify/MinifyModule.php:108
+msgid "Removes ?ver= from CSS and JS links, which some CDNs cache better. After a plugin update, returning visitors may keep old files until their browser cache expires."
+msgstr ""
+
+#: includes/modules/Minify/MinifyModule.php:115
 msgid "Scripts to never defer or delay"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:109
-msgid "Script handles or parts of script URLs, one per line. jQuery is listed because most themes need it early; cookie consent banners are skipped on their own."
+#: includes/modules/Minify/MinifyModule.php:116
+msgid "Script handles or parts of script URLs, one per line. With \"Also defer jQuery and inline scripts\" on, the default jquery-core and jquery-migrate entries are ignored for deferral; your own entries still apply. Cookie consent banners are protected separately."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:123
+#: includes/modules/Minify/MinifyModule.php:130
 msgid "Delay only these scripts"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:124
+#: includes/modules/Minify/MinifyModule.php:131
 msgid "Script handles or parts of script URLs, one per line. Leave empty to delay all scripts; otherwise only these, plus known trackers and chat widgets, are delayed."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:125
+#: includes/modules/Minify/MinifyModule.php:132
 msgid "Consent banners and Delay JS"
 msgstr ""
 
 #. translators: %s: comma-separated list of consent plugins, each followed by the word to type in parentheses.
-#: includes/modules/Minify/MinifyModule.php:128
+#: includes/modules/Minify/MinifyModule.php:135
 #, php-format
 msgid "These consent banners load straight away, even with Delay JS on: %s. To delay one on purpose, add the word in parentheses, or the script handle, to this list. An entry that only matches part of the address, such as /plugins/ or .js, never delays a banner, and an entry in Scripts to never defer or delay always wins."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:136
+#: includes/modules/Minify/MinifyModule.php:143
 msgid "Smart delay"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:137
+#: includes/modules/Minify/MinifyModule.php:144
 msgid "Also delays scripts that code on the page depends on, which helps page builder sites most. The riskiest setting here, so test menus and sliders."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:145
+#: includes/modules/Minify/MinifyModule.php:152
 msgid "Delay timeout (ms)"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:147
+#: includes/modules/Minify/MinifyModule.php:154
 msgid "Load delayed scripts after this long if the visitor does nothing. Set 0 to wait for a scroll, tap or key press only."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:154
+#: includes/modules/Minify/MinifyModule.php:161
 msgid "Combine CSS files"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:155
+#: includes/modules/Minify/MinifyModule.php:162
 msgid "Joins your site's own CSS files into one. This helps only on old HTTP/1.1 servers, so leave it off on most hosts. Runs for logged-in visitors too, so an admin browsing the site sees the combined page."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:161
+#: includes/modules/Minify/MinifyModule.php:168
 msgid "Combine JavaScript files"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:162
+#: includes/modules/Minify/MinifyModule.php:169
 msgid "Joins your site's own scripts into one file. Turn off if a script stops working after you enable it. Runs for logged-in visitors too, so an admin browsing the site sees the combined page."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:310
+#: includes/modules/Minify/MinifyModule.php:321
 msgid "HTML minification is paused because WP_DEBUG is enabled in wp-config.php. Readable HTML is usually what you want while debugging, so xSpeed leaves the markup alone. Cached pages are served un-minified until WP_DEBUG is turned off."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:311
+#: includes/modules/Minify/MinifyModule.php:322
 msgid "HTML minification is paused because a plugin or theme is returning true from the xspeed_skip_minify filter. Cached pages are served un-minified until that filter stops suppressing it."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:315
+#: includes/modules/Minify/MinifyModule.php:326
 msgid "HTML minification is on but currently paused"
 msgstr ""
 
 #. translators: %s: comma-separated page paths, e.g. "/, /shop/".
-#: includes/modules/Minify/MinifyModule.php:353
+#: includes/modules/Minify/MinifyModule.php:364
 #, php-format
 msgid "Stylesheets stayed render-blocking on %s because those pages have no critical CSS. Without it, deferred CSS makes the page show unstyled and then jump. A theme or plugin that inlines critical CSS for a page can return true from the xspeed_async_css_page_has_critical_css filter."
 msgstr ""
 
 #. translators: 1: comma-separated page paths, 2: comma-separated script handles, e.g. "swiper".
-#: includes/modules/Minify/MinifyModule.php:359
+#: includes/modules/Minify/MinifyModule.php:370
 #, php-format
 msgid "Stylesheets stayed render-blocking on %1$s because a script there lays the page out by measuring it (%2$s). Sliders, carousels and masonry grids stay broken when their CSS arrives after the script has run. If the layout on those pages is pure CSS, return false from the xspeed_async_css_js_measured_layout filter."
 msgstr ""
 
 #. translators: %s: comma-separated page paths, e.g. "/, /shop/".
-#: includes/modules/Minify/MinifyModule.php:366
+#: includes/modules/Minify/MinifyModule.php:377
 #, php-format
 msgid "Stylesheets stayed render-blocking on %s because the xspeed_async_css_js_measured_layout filter reports a layout built by a script there. Return false from that filter if the layout on those pages is pure CSS."
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:374
+#: includes/modules/Minify/MinifyModule.php:385
 msgid "Load CSS without blocking skipped pages without critical CSS"
 msgstr ""
 
-#: includes/modules/Minify/MinifyModule.php:375
+#: includes/modules/Minify/MinifyModule.php:386
 msgid "Load CSS without blocking skipped pages with a slider or grid"
 msgstr ""
 
@@ -3835,51 +3901,59 @@ msgstr ""
 msgid "Finds the largest image at the top of the page and tells the browser to fetch it first. This usually gives the biggest LCP gain."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:101
+#: includes/modules/ResourceHints/ResourceHintsModule.php:99
+msgid "Include early lazy images in size ranking"
+msgstr ""
+
+#: includes/modules/ResourceHints/ResourceHintsModule.php:100
+msgid "Also consider images your theme or page builder loads lazily when picking the main image to preload. Turn this on if your main image is lazy-loaded. Check a few pages afterwards, because it can pick the wrong image."
+msgstr ""
+
+#: includes/modules/ResourceHints/ResourceHintsModule.php:108
 msgid "Images to preload"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:102
+#: includes/modules/ResourceHints/ResourceHintsModule.php:109
 msgid "How many images at the top of the page to preload. 1 suits most sites; raise it only if the top shows a small gallery."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:110
+#: includes/modules/ResourceHints/ResourceHintsModule.php:117
 msgid "Excluded from preload"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:111
+#: includes/modules/ResourceHints/ResourceHintsModule.php:118
 msgid "Images whose tag contains a line here, such as a file name or class, are never picked as the main image. Useful for tracking pixels and spacers."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:118
+#: includes/modules/ResourceHints/ResourceHintsModule.php:125
 msgid "Main image rules"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:119
+#: includes/modules/ResourceHints/ResourceHintsModule.php:126
 msgid "Pick the main image on pages the editor does not cover, one rule per line: where | image. Where is a page type (front_page, blog, archive, category, tag, author, search, 404, shop, singular, page, post, post_type:product) or a path such as /shop/*. Image is an image URL, featured, none, or a file name or class the image tag contains. The first matching rule wins; a choice made on the page itself beats every rule."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:127
+#: includes/modules/ResourceHints/ResourceHintsModule.php:134
 msgid "Always preload these images"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:128
+#: includes/modules/ResourceHints/ResourceHintsModule.php:135
 msgid "Image URLs to fetch first on every page, such as a hero background set in CSS. Keep it to one or two; only the first three are used."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:134
+#: includes/modules/ResourceHints/ResourceHintsModule.php:141
 msgid "Connect early to Google Fonts"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:135
+#: includes/modules/ResourceHints/ResourceHintsModule.php:142
 msgid "When the page uses Google Fonts, the browser connects to Google's servers early, so fonts arrive sooner."
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:142
+#: includes/modules/ResourceHints/ResourceHintsModule.php:149
 msgid "Other domains to connect early"
 msgstr ""
 
-#: includes/modules/ResourceHints/ResourceHintsModule.php:143
+#: includes/modules/ResourceHints/ResourceHintsModule.php:150
 msgid "One address per line, such as https://cdn.example.com. Use for a CDN or other domain that serves files at the top of the page."
 msgstr ""
 
@@ -3956,8 +4030,18 @@ msgstr ""
 msgid "The audit did not produce a result."
 msgstr ""
 
+#: includes/modules/Settings/SettingsModule.php:113
+msgid "The request body must be an object of module slugs, each holding an object of setting keys."
+msgstr ""
+
+#. translators: %s: comma-separated setting keys.
+#: includes/modules/Settings/SettingsModule.php:208
+#, php-format
+msgid "These are not settings of this module: %s."
+msgstr ""
+
 #. translators: %s: module slug.
-#: includes/modules/Settings/SettingsModule.php:341
+#: includes/modules/Settings/SettingsModule.php:530
 #, php-format
 msgid "Refused a CLI settings write to the Pro module \"%s\" — no valid license."
 msgstr ""
@@ -4047,43 +4131,55 @@ msgstr[1] ""
 msgid "Pages keep loading these files from their original host, or from the last good copy. Run \"wp xspeed third-party-assets status\" for the reason on each."
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:114
+#: includes/modules/TurboRender/TurboRenderModule.php:163
 msgid "Turbo Render"
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:116
+#: includes/modules/TurboRender/TurboRenderModule.php:165
 msgid "Shows the top of each page first and the rest as visitors scroll."
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:126
+#. translators: %s: name of the plugin that turned the default off, such as WP Rocket.
+#: includes/modules/TurboRender/TurboRenderModule.php:219
+#, php-format
+msgid "Off by default because %s is active"
+msgstr ""
+
+#. translators: %s: name of the plugin that turned the default off, such as WP Rocket.
+#: includes/modules/TurboRender/TurboRenderModule.php:221
+#, php-format
+msgid "%s already renders sections lazily as visitors scroll, so Turbo Render stays off unless you switch it on."
+msgstr ""
+
+#: includes/modules/TurboRender/TurboRenderModule.php:245
 msgid "Render as visitors scroll"
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:127
+#: includes/modules/TurboRender/TurboRenderModule.php:246
 msgid "The browser draws what visitors see first and draws lower sections just before they scroll to them. Your content does not change."
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:134
+#: includes/modules/TurboRender/TurboRenderModule.php:253
 msgid "Sections to render immediately"
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:135
+#: includes/modules/TurboRender/TurboRenderModule.php:254
 msgid "How many sections at the top are drawn right away. The default of 3 suits most pages; raise it if a section near the top appears late."
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:141
+#: includes/modules/TurboRender/TurboRenderModule.php:260
 msgid "Section classes"
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:142
+#: includes/modules/TurboRender/TurboRenderModule.php:261
 msgid "CSS classes that mark a section. The defaults cover the main page builders, and other themes are detected on their own."
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:149
+#: includes/modules/TurboRender/TurboRenderModule.php:268
 msgid "Excluded classes"
 msgstr ""
 
-#: includes/modules/TurboRender/TurboRenderModule.php:150
+#: includes/modules/TurboRender/TurboRenderModule.php:269
 msgid "Sections with any of these classes are always drawn right away. Add one here if part of a section gets cut off where it overlaps the next."
 msgstr ""
 

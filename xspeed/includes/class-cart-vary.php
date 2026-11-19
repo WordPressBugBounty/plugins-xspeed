@@ -45,6 +45,20 @@ final class Cart_Vary {
 	private static $notice_printed = false;
 
 	/**
+	 * Nonce actions this render bound to one visitor's session, as keys.
+	 *
+	 * @var array<string,true>
+	 */
+	private static $session_nonce_actions = array();
+
+	/**
+	 * The user id the last nonce was made for, read back in may_store().
+	 *
+	 * @var mixed
+	 */
+	private static $last_nonce_user = null;
+
+	/**
 	 * Whether the setting is on. Read from the stored option, as
 	 * mobile_separate is: this runs on the serve path, where the module
 	 * registry may not have run.
@@ -84,7 +98,9 @@ final class Cart_Vary {
 		Cache::purge_cart_copies();
 		$options = get_option( 'xspeed_options', array() );
 		if ( is_array( $options ) && ! empty( $options['cache_enabled'] ) ) {
-			Cache::toggle( true );
+			// Unattended: a WooCommerce setting saved is not a click to take
+			// over another plugin's drop-in. (#895)
+			Cache::toggle( true, false );
 		}
 	}
 
@@ -122,9 +138,79 @@ final class Cart_Vary {
 		self::$notice_printed = true;
 	}
 
-	/** Test seam: forget the notice noted for this render. */
+	/**
+	 * Note a nonce made for a logged-out visitor's own session.
+	 *
+	 * Hooked late to `nonce_user_logged_out`, which core only applies for a
+	 * logged-out visitor and starts at 0. A core anonymous nonce stays 0 and
+	 * is the same for everyone. WooCommerce's session handler swaps in the
+	 * shopper's customer id for its own actions, so its cart, login and
+	 * register nonces belong to one session. Stored as a cart copy, they
+	 * reached the next shopper with the same cart, and that shopper's remove,
+	 * login and register then failed with no message. (#895)
+	 *
+	 * Only the action is noted. WooCommerce makes such nonces on most pages
+	 * without printing them (block themes make `woocommerce-edit_address`
+	 * on every render), so may_store() looks for the value in the markup.
+	 *
+	 * @param mixed $uid    The user id after earlier filters.
+	 * @param mixed $action The nonce action.
+	 * @return mixed $uid unchanged.
+	 */
+	public static function note_nonce_user( $uid, $action = '' ) {
+		self::$last_nonce_user = $uid;
+		if ( ! empty( $uid ) && ( is_string( $action ) || is_int( $action ) ) ) {
+			self::$session_nonce_actions[ (string) $action ] = true;
+		}
+		return $uid;
+	}
+
+	/**
+	 * Whether $html prints a nonce this render bound to the shopper's session.
+	 *
+	 * Each noted action's nonce is made again, for the same session, and
+	 * looked for in the markup. If the session is gone by now and the value
+	 * cannot be made the same way, the answer is yes: a page built fresh
+	 * costs less than one that breaks the next shopper's forms.
+	 *
+	 * The value for the tick before is looked for too. A render that starts
+	 * just before a tick boundary prints the old value, and by the time the
+	 * page is stored wp_create_nonce() gives the new one. (#895)
+	 *
+	 * @param string $html The render about to be stored.
+	 */
+	private static function prints_session_nonce( string $html ): bool {
+		if ( array() === self::$session_nonce_actions ) {
+			return false;
+		}
+		if ( ! function_exists( 'wp_create_nonce' ) || ! function_exists( 'wp_nonce_tick' ) || ! function_exists( 'wp_hash' ) || ! function_exists( 'wp_get_session_token' ) ) {
+			return true;
+		}
+		foreach ( array_keys( self::$session_nonce_actions ) as $action ) {
+			self::$last_nonce_user = null;
+			$action                = (string) $action;
+			$values                = array( wp_create_nonce( $action ) );
+			$uid                   = self::$last_nonce_user;
+			if ( empty( $uid ) ) {
+				return true;
+			}
+			// The same inputs wp_create_nonce() hashes, one tick back.
+			$tick     = (int) wp_nonce_tick( $action ) - 1;
+			$values[] = substr( wp_hash( $tick . '|' . $action . '|' . $uid . '|' . wp_get_session_token(), 'nonce' ), -12, 10 );
+			foreach ( $values as $value ) {
+				if ( is_string( $value ) && '' !== $value && false !== strpos( $html, $value ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** Test seam: forget what was noted for this render. */
 	public static function reset(): void {
-		self::$notice_printed = false;
+		self::$notice_printed        = false;
+		self::$session_nonce_actions = array();
+		self::$last_nonce_user       = null;
 	}
 
 	/**
@@ -202,6 +288,11 @@ final class Cart_Vary {
 			return false;
 		}
 		if ( self::$notice_printed || ( function_exists( 'wc_notice_count' ) && wc_notice_count() > 0 ) ) {
+			return false;
+		}
+		// A nonce tied to this shopper's session would fail for everyone else
+		// with the same cart. (#895)
+		if ( self::prints_session_nonce( $html ) ) {
 			return false;
 		}
 		// The markup as well, for a notice printed some other way. Classic

@@ -62,6 +62,8 @@ const BALANCED_CHOICES: PresetChoices = {
   lazy_images: true,
   browser_cache: true,
   resource_hints: true,
+  async_google_fonts: true,
+  display_swap_in_css: true,
   cache_expiry: 24 * 7,
 };
 
@@ -97,13 +99,15 @@ const PRESETS: Preset[] = [
       lazy_images: false,
       browser_cache: false,
       resource_hints: false,
+      async_google_fonts: false,
+      display_swap_in_css: false,
       cache_expiry: 12,
     } satisfies PresetChoices,
   },
   {
     id: 'balanced',
     label: 'Balanced',
-    description: 'Cache + GZIP + safe minify (HTML/CSS only) + lazy images + browser cache headers + LCP image preload & font preconnect, with a 7-day cache lifetime. Recommended for most sites.',
+    description: 'Cache + GZIP + safe minify (HTML/CSS only) + lazy images + browser cache headers + LCP image preload & font preconnect + Google Fonts without blocking + text shown while theme and plugin fonts load, with a 7-day cache lifetime. Recommended for most sites.',
     icon: Zap,
     choices: BALANCED_CHOICES,
   },
@@ -133,6 +137,8 @@ const TOGGLE_LABELS: Partial<Record<keyof OnboardingChoices, string>> = {
   lazy_images: 'Lazy-load Images',
   browser_cache: 'Browser cache headers',
   resource_hints: 'LCP image preload + preconnect',
+  async_google_fonts: 'Load Google Fonts without blocking',
+  display_swap_in_css: 'Show text while theme and plugin fonts load',
 };
 
 /**
@@ -440,6 +446,18 @@ export function ConfigureStep({
           hint="Preload the largest above-the-fold image and preconnect to font hosts so the main content paints sooner. Safe on every theme — only adds resource hints, never removes anything."
           checked={choices.resource_hints ?? true}
           onChange={(v) => set('resource_hints', v)}
+        />
+        <Row
+          label="Load Google Fonts without blocking"
+          hint="The page paints without waiting for the Google Fonts stylesheet. Text shows in a standard font first, then switches when the font arrives. Icon fonts load as before."
+          checked={choices.async_google_fonts}
+          onChange={(v) => set('async_google_fonts', v)}
+        />
+        <Row
+          label="Show text while theme and plugin fonts load"
+          hint="Fonts declared in theme and plugin stylesheets show text at once in a standard font, then switch when the font arrives. Works on CSS that Minify CSS or Minify HTML processes. Icon fonts are left alone."
+          checked={choices.display_swap_in_css}
+          onChange={(v) => set('display_swap_in_css', v)}
         />
       </div>
 

@@ -50,7 +50,7 @@ final class ResourceHintsModule extends Module {
 
 	public const SLUG    = 'resource-hints';
 	public const TIER    = self::TIER_FREE;
-	public const VERSION = '1.2.0';
+	public const VERSION = '1.3.0';
 
 	/** Guards the cache-off buffer so it processes exactly once per request. */
 	private static $buffering = false;
@@ -92,6 +92,13 @@ final class ResourceHintsModule extends Module {
 				'label'       => __( 'Preload the main image', 'xspeed' ),
 				'description' => __( 'Finds the largest image at the top of the page and tells the browser to fetch it first. This usually gives the biggest LCP gain.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'enabled' ),
+			),
+			'lcp_rank_by_size' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Include early lazy images in size ranking', 'xspeed' ),
+				'description' => __( 'Also consider images your theme or page builder loads lazily when picking the main image to preload. Turn this on if your main image is lazy-loaded. Check a few pages afterwards, because it can pick the wrong image.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'lcp_preload' ),
 			),
 			'lcp_image_count'  => array(
 				'type'        => 'int',
@@ -298,6 +305,9 @@ final class ResourceHintsModule extends Module {
 			'1.2.0' => static function ( array $stored ): array {
 				return $stored + array( 'lcp_rules' => array() );
 			},
+			'1.3.0' => static function ( array $stored ): array {
+				return $stored + array( 'lcp_rank_by_size' => false );
+			},
 		);
 	}
 
@@ -309,8 +319,11 @@ final class ResourceHintsModule extends Module {
 	 * it. Not home_url( REQUEST_URI ): on a site in a subfolder both carry the
 	 * folder, which then appeared twice. And not sanitize_text_field(), which
 	 * drops percent-encoded octets, so `/caf%C3%A9/` lost its é.
+	 *
+	 * Public because Turbo Render's sizes seam passes the same URL: an
+	 * answer keyed by page must see one spelling from both seams.
 	 */
-	private static function current_page_url(): string {
+	public static function current_page_url(): string {
 		if ( ! isset( $_SERVER['REQUEST_URI'] ) || ! function_exists( 'home_url' ) ) {
 			return '';
 		}
@@ -324,7 +337,6 @@ final class ResourceHintsModule extends Module {
 		$port   = isset( $home['port'] ) ? ':' . $home['port'] : '';
 		return '' === $host ? '' : $scheme . '://' . $host . $port . $uri;
 	}
-
 	public function cli_commands(): array {
 		return array(
 			array(
@@ -370,6 +382,7 @@ final class ResourceHintsModule extends Module {
 		$opts = $this->get_settings();
 		\WP_CLI::log( sprintf( '%-20s %s', 'enabled', ! empty( $opts['enabled'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %s', 'lcp_preload', ! empty( $opts['lcp_preload'] ) ? 'on' : 'off' ) );
+		\WP_CLI::log( sprintf( '%-20s %s', 'lcp_rank_by_size', ! empty( $opts['lcp_rank_by_size'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-20s %d', 'lcp_image_count', (int) ( $opts['lcp_image_count'] ?? 1 ) ) );
 		\WP_CLI::log( sprintf( '%-20s %d pattern(s)', 'lcp_exclusions', count( (array) ( $opts['lcp_exclusions'] ?? array() ) ) ) );
 		\WP_CLI::log( sprintf( '%-20s %d rule(s)', 'lcp_rules', count( Lcp_Choice::parse_rules( $opts['lcp_rules'] ?? array() ) ) ) );

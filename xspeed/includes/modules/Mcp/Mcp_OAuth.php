@@ -59,6 +59,23 @@ final class Mcp_OAuth {
 	private const REFRESH_TTL = 2592000;
 
 	/**
+	 * Rotated refresh tokens remembered per grant family. A token presented
+	 * after it was rotated is either a client retrying a refresh whose
+	 * answer it never got, or a copy; without a record of it the two looked
+	 * the same, as an unknown token. (#912)
+	 */
+	private const SPENT_PER_FAMILY = 8;
+
+	/** How long after a rotation a lost answer may be retried, in seconds. */
+	private const RETRY_WINDOW = 86400;
+
+	/** Retries allowed for one rotated refresh token. */
+	private const RETRY_MAX = 5;
+
+	/** Seconds to wait for another request's OAuth write to finish. */
+	private const LOCK_WAIT = 5;
+
+	/**
 	 * Scopes we advertise + honor. `mcp` is the umbrella scope MCP clients
 	 * request (read+write). `configure` is an ADDITIONAL, opt-in scope that a
 	 * client must request explicitly to write credential/secret fields — it is
@@ -126,6 +143,9 @@ final class Mcp_OAuth {
 	 * set this so the read-side write stands down. (QA F1 on #254)
 	 */
 	private static $writing = false;
+
+	/** Nesting depth of locked(), so a write inside a write takes no second lock. */
+	private static $lock_depth = 0;
 
 	// -- URLs ------------------------------------------------------------
 
@@ -313,6 +333,22 @@ final class Mcp_OAuth {
 
 		$client_id = 'xsc_' . bin2hex( random_bytes( 16 ) );
 
+		return self::locked(
+			static function () use ( $client_id, $redirect_uris, $name ) {
+				return self::store_client( $client_id, $redirect_uris, $name );
+			}
+		);
+	}
+
+	/**
+	 * Store a validated registration. Runs under locked().
+	 *
+	 * @param string   $client_id     New client id.
+	 * @param string[] $redirect_uris Validated redirect URIs.
+	 * @param string   $name          Client name.
+	 * @return array<string,mixed>|\WP_Error
+	 */
+	private static function store_client( string $client_id, array $redirect_uris, string $name ) {
 		// state() has already pruned unused/expired clients on load.
 		$state = self::state_for_write();
 
@@ -412,20 +448,34 @@ final class Mcp_OAuth {
 	 *
 	 * @param array<string,string> $req  Output of validate_authorize_request().
 	 * @param int                  $user_id Approving admin user id.
-	 * @return string The authorization code.
+	 * @return string|\WP_Error The authorization code, or a WP_Error when it
+	 *                          could not be stored (lock busy, write refused).
 	 */
-	public static function issue_code( array $req, int $user_id ): string {
-		$code  = bin2hex( random_bytes( 32 ) );
-		$state = self::state_for_write();
-		$state['codes'][ $code ] = array(
-			'client_id'    => $req['client_id'],
-			'redirect_uri' => $req['redirect_uri'],
-			'challenge'    => $req['code_challenge'],
-			'scope'        => $req['scope'],
-			'user_id'      => $user_id,
-			'expires'      => time() + self::CODE_TTL,
+	public static function issue_code( array $req, int $user_id ) {
+		$code   = bin2hex( random_bytes( 32 ) );
+		$stored = self::locked(
+			static function () use ( $code, $req, $user_id ) {
+				$state                   = self::state_for_write();
+				$state['codes'][ $code ] = array(
+					'client_id'    => $req['client_id'],
+					'redirect_uri' => $req['redirect_uri'],
+					'challenge'    => $req['code_challenge'],
+					'scope'        => $req['scope'],
+					'user_id'      => $user_id,
+					'expires'      => time() + self::CODE_TTL,
+				);
+				// A new code always changes the option, so false here is a refused write.
+				if ( ! self::save( $state ) ) {
+					return self::oauth_error( 'temporarily_unavailable', 'The authorization code could not be saved. Try again.' );
+				}
+				return null;
+			}
 		);
-		self::save( $state );
+		// A code that was never stored fails its exchange with "Unknown
+		// authorization code", so the client must not be sent one.
+		if ( is_wp_error( $stored ) ) {
+			return $stored;
+		}
 		return $code;
 	}
 
@@ -443,10 +493,18 @@ final class Mcp_OAuth {
 		$grant = isset( $body['grant_type'] ) ? (string) $body['grant_type'] : '';
 
 		if ( 'authorization_code' === $grant ) {
-			return self::grant_authorization_code( $body );
+			return self::locked(
+				static function () use ( $body ) {
+					return self::grant_authorization_code( $body );
+				}
+			);
 		}
 		if ( 'refresh_token' === $grant ) {
-			return self::grant_refresh_token( $body );
+			return self::locked(
+				static function () use ( $body ) {
+					return self::grant_refresh_token( $body );
+				}
+			);
 		}
 		return self::oauth_error( 'unsupported_grant_type', 'Unsupported grant_type.' );
 	}
@@ -469,30 +527,48 @@ final class Mcp_OAuth {
 		}
 		$entry = $state['codes'][ $code ];
 
-		// Single-use: remove immediately whether or not verification passes.
+		// Single-use: removed whether or not verification passes.
 		unset( $state['codes'][ $code ] );
-		self::save( $state );
 
+		$error = null;
 		if ( $entry['expires'] < time() ) {
-			return self::oauth_error( 'invalid_grant', 'Authorization code expired.' );
+			$error = self::oauth_error( 'invalid_grant', 'Authorization code expired.' );
+		} elseif ( ! hash_equals( (string) $entry['client_id'], $client_id ) ) {
+			$error = self::oauth_error( 'invalid_grant', 'client_id mismatch.' );
+		} elseif ( ! hash_equals( (string) $entry['redirect_uri'], $redirect_uri ) ) {
+			$error = self::oauth_error( 'invalid_grant', 'redirect_uri mismatch.' );
+		} elseif ( '' === $verifier || ! hash_equals( (string) $entry['challenge'], self::s256( $verifier ) ) ) {
+			// PKCE S256: BASE64URL(SHA256(verifier)) must equal the stored challenge.
+			$error = self::oauth_error( 'invalid_grant', 'PKCE verification failed.' );
 		}
-		if ( ! hash_equals( (string) $entry['client_id'], $client_id ) ) {
-			return self::oauth_error( 'invalid_grant', 'client_id mismatch.' );
-		}
-		if ( ! hash_equals( (string) $entry['redirect_uri'], $redirect_uri ) ) {
-			return self::oauth_error( 'invalid_grant', 'redirect_uri mismatch.' );
-		}
-		// PKCE S256: BASE64URL(SHA256(verifier)) must equal the stored challenge.
-		if ( '' === $verifier || ! hash_equals( (string) $entry['challenge'], self::s256( $verifier ) ) ) {
-			return self::oauth_error( 'invalid_grant', 'PKCE verification failed.' );
+		if ( null !== $error ) {
+			self::save( $state );
+			return $error;
 		}
 
-		return self::mint_tokens( $entry['client_id'], $entry['scope'], (int) $entry['user_id'] );
+		// Each consent starts a new family of tokens. (#912)
+		$response = self::mint_tokens( $state, (string) $entry['client_id'], (string) $entry['scope'], (int) $entry['user_id'], self::new_family() );
+		self::save( $state );
+		return $response;
 	}
 
 	/**
-	 * refresh_token grant: rotate the refresh token, issue a fresh access
-	 * token. The old refresh + its access token are revoked.
+	 * refresh_token grant: rotate the refresh token and issue a new pair.
+	 *
+	 * The presented refresh token and its access token are withdrawn, and
+	 * the refresh token is remembered as spent in its grant family. A spent
+	 * token presented again is one of two things (#912):
+	 *
+	 *   - A retry. The client never received the pair that replaced it, so
+	 *     that pair has never been used: its refresh token is still live and
+	 *     no MCP call has been made with its access token. The unused pair is
+	 *     withdrawn and a new one issued. Only for the same client_id, within
+	 *     RETRY_WINDOW of the rotation, RETRY_MAX times.
+	 *   - A copy. Anything else. Every token in the family is revoked, so
+	 *     whoever holds the live pair has to connect again (RFC 9700 4.14.2).
+	 *
+	 * Runs under locked(): two refreshes of one token at the same moment
+	 * would otherwise both find it live and both get a pair.
 	 *
 	 * @param array<string,string> $body POST body.
 	 * @return array<string,mixed>|\WP_Error
@@ -500,49 +576,100 @@ final class Mcp_OAuth {
 	private static function grant_refresh_token( array $body ) {
 		$refresh   = isset( $body['refresh_token'] ) ? (string) $body['refresh_token'] : '';
 		$client_id = isset( $body['client_id'] ) ? (string) $body['client_id'] : '';
+		if ( '' === $refresh ) {
+			return self::oauth_error( 'invalid_grant', 'Unknown refresh token.' );
+		}
 
 		$state = self::state_for_write();
 		$rhash = self::hash( $refresh );
-		if ( '' === $refresh || ! isset( $state['refresh'][ $rhash ] ) ) {
+
+		if ( isset( $state['refresh'][ $rhash ] ) ) {
+			$entry = $state['refresh'][ $rhash ];
+			if ( '' !== $client_id && ! hash_equals( (string) $entry['client_id'], $client_id ) ) {
+				return self::oauth_error( 'invalid_grant', 'client_id mismatch.' );
+			}
+			// A grant made before families existed starts one here.
+			$family = isset( $entry['family'] ) && is_string( $entry['family'] ) && '' !== $entry['family'] ? $entry['family'] : self::new_family();
+
+			unset( $state['refresh'][ $rhash ] );
+			if ( isset( $entry['access_hash'] ) ) {
+				unset( $state['tokens'][ $entry['access_hash'] ] );
+			}
+			$response = self::mint_tokens( $state, (string) $entry['client_id'], (string) $entry['scope'], (int) $entry['user_id'], $family );
+
+			$spent   = $state['spent'][ $family ] ?? array();
+			$spent[] = array(
+				'hash'      => $rhash,
+				'client_id' => (string) $entry['client_id'],
+				'at'        => time(),
+				'next'      => self::hash( $response['refresh_token'] ),
+				'retries'   => 0,
+			);
+			$state['spent'][ $family ] = array_slice( $spent, -self::SPENT_PER_FAMILY );
+			self::save( $state );
+			return $response;
+		}
+
+		$found = self::find_spent( $state, $rhash );
+		if ( null === $found ) {
 			return self::oauth_error( 'invalid_grant', 'Unknown refresh token.' );
 		}
-		$entry = $state['refresh'][ $rhash ];
-		if ( '' !== $client_id && ! hash_equals( (string) $entry['client_id'], $client_id ) ) {
-			return self::oauth_error( 'invalid_grant', 'client_id mismatch.' );
+		list( $family, $index ) = $found;
+		$record                 = $state['spent'][ $family ][ $index ];
+		$next                   = (string) $record['next'];
+
+		$is_retry = '' !== $client_id
+			&& hash_equals( (string) $record['client_id'], $client_id )
+			&& time() - (int) $record['at'] <= self::RETRY_WINDOW
+			&& (int) $record['retries'] < self::RETRY_MAX
+			&& isset( $state['refresh'][ $next ] )
+			&& empty( $state['refresh'][ $next ]['used'] );
+
+		if ( ! $is_retry ) {
+			self::revoke_family( $state, $family );
+			self::save( $state );
+			return self::oauth_error( 'invalid_grant', 'That refresh token was already used.' );
 		}
 
-		// Rotate: drop old refresh + its access token.
-		unset( $state['refresh'][ $rhash ] );
-		if ( isset( $entry['access_hash'] ) ) {
-			unset( $state['tokens'][ $entry['access_hash'] ] );
+		// Withdraw the pair the client never received, and issue another.
+		$replaced = $state['refresh'][ $next ];
+		unset( $state['refresh'][ $next ] );
+		if ( isset( $replaced['access_hash'] ) ) {
+			unset( $state['tokens'][ $replaced['access_hash'] ] );
 		}
+		$response = self::mint_tokens( $state, (string) $replaced['client_id'], (string) $replaced['scope'], (int) $replaced['user_id'], $family );
+
+		$state['spent'][ $family ][ $index ]['next']    = self::hash( $response['refresh_token'] );
+		$state['spent'][ $family ][ $index ]['retries'] = (int) $record['retries'] + 1;
 		self::save( $state );
-
-		return self::mint_tokens( $entry['client_id'], $entry['scope'], (int) $entry['user_id'] );
+		return $response;
 	}
 
 	/**
-	 * Mint an access + refresh token pair, store them hashed, and return
-	 * the RFC 6749 token response with the raw values.
+	 * Add an access + refresh token pair to $state, stored hashed, and return
+	 * the RFC 6749 token response with the raw values. The caller saves
+	 * $state, so a rotation and its new pair land in one write. (#912)
 	 *
-	 * @param string $client_id Client id.
-	 * @param string $scope     Granted scope string.
-	 * @param int    $user_id   Resource-owner user id.
+	 * @param array<string,mixed> $state     State to add the pair to.
+	 * @param string              $client_id Client id.
+	 * @param string              $scope     Granted scope string.
+	 * @param int                 $user_id   Resource-owner user id.
+	 * @param string              $family    Grant family the pair belongs to.
 	 * @return array<string,mixed>
 	 */
-	private static function mint_tokens( string $client_id, string $scope, int $user_id ): array {
+	private static function mint_tokens( array &$state, string $client_id, string $scope, int $user_id, string $family ): array {
 		$access  = bin2hex( random_bytes( 32 ) );
 		$refresh = bin2hex( random_bytes( 32 ) );
 		$ahash   = self::hash( $access );
 		$rhash   = self::hash( $refresh );
 
-		$state                     = self::state_for_write();
-		$state['tokens'][ $ahash ] = array(
+		$state['tokens'][ $ahash ]  = array(
 			'client_id' => $client_id,
 			'scope'     => $scope,
 			'user_id'   => $user_id,
 			'expires'   => time() + self::ACCESS_TTL,
 			'refresh'   => $rhash,
+			'family'    => $family,
 		);
 		$state['refresh'][ $rhash ] = array(
 			'access_hash' => $ahash,
@@ -550,8 +677,8 @@ final class Mcp_OAuth {
 			'scope'       => $scope,
 			'user_id'     => $user_id,
 			'expires'     => time() + self::REFRESH_TTL,
+			'family'      => $family,
 		);
-		self::save( $state );
 
 		return array(
 			'access_token'  => $access,
@@ -560,6 +687,95 @@ final class Mcp_OAuth {
 			'refresh_token' => $refresh,
 			'scope'         => $scope,
 		);
+	}
+
+	/** A new grant family id. */
+	private static function new_family(): string {
+		return bin2hex( random_bytes( 8 ) );
+	}
+
+	/**
+	 * Where a spent refresh token is recorded.
+	 *
+	 * @param array<string,mixed> $state State.
+	 * @param string              $rhash Refresh-token hash.
+	 * @return array{0:string,1:int}|null Family and index, or null.
+	 */
+	private static function find_spent( array $state, string $rhash ): ?array {
+		foreach ( $state['spent'] as $family => $records ) {
+			foreach ( $records as $index => $record ) {
+				if ( isset( $record['hash'] ) && hash_equals( (string) $record['hash'], $rhash ) ) {
+					return array( (string) $family, (int) $index );
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Revoke every access and refresh token in a grant family. Its spent
+	 * records stay, so a later replay is still recognised.
+	 *
+	 * @param array<string,mixed> $state  State to change.
+	 * @param string              $family Grant family.
+	 */
+	private static function revoke_family( array &$state, string $family ): void {
+		foreach ( array( 'tokens', 'refresh' ) as $bucket ) {
+			foreach ( $state[ $bucket ] as $key => $entry ) {
+				if ( isset( $entry['family'] ) && $family === $entry['family'] ) {
+					unset( $state[ $bucket ][ $key ] );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Run $fn with the OAuth state locked, so a read-modify-write cannot be
+	 * overwritten by another request's write made from an older read. The
+	 * refresh grant needs this most: a rotation lost to a concurrent write
+	 * brings the rotated refresh token back. (#912)
+	 *
+	 * Uses MySQL GET_LOCK, named per site table prefix. Where the database
+	 * has no GET_LOCK (SQLite) the write runs unlocked, as it did before.
+	 *
+	 * @param callable $fn Work to do. Its return value is returned.
+	 * @return mixed|\WP_Error The return of $fn, or a WP_Error when the lock is busy.
+	 */
+	private static function locked( callable $fn ) {
+		if ( self::$lock_depth > 0 ) {
+			return $fn();
+		}
+		global $wpdb;
+		$name = null;
+		if ( is_object( $wpdb ) && method_exists( $wpdb, 'get_var' ) && method_exists( $wpdb, 'prepare' ) ) {
+			$name = substr( ( isset( $wpdb->prefix ) ? (string) $wpdb->prefix : '' ) . self::OPTION, 0, 64 );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- a named lock has no WordPress API, and must not be cached.
+			$got = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, self::LOCK_WAIT ) );
+			if ( null === $got ) {
+				$name = null;
+			} elseif ( '1' !== (string) $got ) {
+				return new \WP_Error(
+					'temporarily_unavailable',
+					'The authorization server is busy. Try again.',
+					array(
+						'status'            => 503,
+						'error'             => 'temporarily_unavailable',
+						'error_description' => 'The authorization server is busy. Try again.',
+					)
+				);
+			}
+		}
+
+		++self::$lock_depth;
+		try {
+			return $fn();
+		} finally {
+			--self::$lock_depth;
+			if ( null !== $name ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- releases the lock taken above.
+				$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) );
+			}
+		}
 	}
 
 	// -- Access-token validation (called by Mcp_Server) ------------------
@@ -585,6 +801,29 @@ final class Mcp_OAuth {
 		if ( (int) $entry['expires'] < time() ) {
 			return null;
 		}
+
+		// The first call with a pair marks it used. A rotated refresh token
+		// presented again is then a copy, not a retry. (#912)
+		$rhash = isset( $entry['refresh'] ) ? (string) $entry['refresh'] : '';
+		if ( '' !== $rhash && isset( $state['refresh'][ $rhash ] ) && empty( $state['refresh'][ $rhash ]['used'] ) ) {
+			$marked = self::locked(
+				static function () use ( $rhash ) {
+					$fresh = self::state_for_write();
+					if ( isset( $fresh['refresh'][ $rhash ] ) && empty( $fresh['refresh'][ $rhash ]['used'] ) ) {
+						$fresh['refresh'][ $rhash ]['used'] = true;
+						return self::save( $fresh );
+					}
+					return true;
+				}
+			);
+			// Left unmarked, the pair still counts as never used, and a copied
+			// refresh token would later pass as a retry instead of revoking
+			// the family. Refuse the call; the client can simply try again.
+			if ( true !== $marked ) {
+				return null;
+			}
+		}
+
 		return array(
 			'client_id' => (string) $entry['client_id'],
 			'scope'     => (string) $entry['scope'],
@@ -637,6 +876,7 @@ final class Mcp_OAuth {
 			'codes'   => isset( $stored['codes'] ) && is_array( $stored['codes'] ) ? $stored['codes'] : array(),
 			'tokens'  => isset( $stored['tokens'] ) && is_array( $stored['tokens'] ) ? $stored['tokens'] : array(),
 			'refresh' => isset( $stored['refresh'] ) && is_array( $stored['refresh'] ) ? $stored['refresh'] : array(),
+			'spent'   => isset( $stored['spent'] ) && is_array( $stored['spent'] ) ? $stored['spent'] : array(),
 		);
 
 		$now = time();
@@ -653,6 +893,21 @@ final class Mcp_OAuth {
 		foreach ( $state['refresh'] as $k => $v ) {
 			if ( isset( $v['expires'] ) && $v['expires'] < $now ) {
 				unset( $state['refresh'][ $k ] );
+			}
+		}
+		// A spent record outlives the token it names by the refresh lifetime
+		// at most, which is as long as that token could have been presented.
+		foreach ( $state['spent'] as $family => $records ) {
+			$records = is_array( $records ) ? $records : array();
+			foreach ( $records as $i => $record ) {
+				if ( ! is_array( $record ) || ! isset( $record['at'] ) || (int) $record['at'] + self::REFRESH_TTL < $now ) {
+					unset( $records[ $i ] );
+				}
+			}
+			if ( array() === $records ) {
+				unset( $state['spent'][ $family ] );
+			} else {
+				$state['spent'][ $family ] = array_values( $records );
 			}
 		}
 
@@ -673,7 +928,14 @@ final class Mcp_OAuth {
 		// stays a pure read and adds no write to an OAuth request. $writing
 		// stops a caller that is about to save() anyway from writing twice.
 		if ( ! self::$writing && count( $state['clients'] ) < $before ) {
-			self::save( $state );
+			// Under the lock, from a fresh read, so this cannot write back a
+			// refresh token another request has just rotated. (#912)
+			self::locked(
+				static function () {
+					self::save( self::state_for_write() );
+					return null;
+				}
+			);
 		}
 
 		return $state;

@@ -1660,6 +1660,9 @@ final class McpModule extends Module {
 				$this->redirect_error( $req['redirect_uri'], 'access_denied', 'The user denied the request.', $req['state'] );
 			}
 			$code = Mcp_OAuth::issue_code( $req, get_current_user_id() );
+			if ( is_wp_error( $code ) ) {
+				$this->redirect_error( $req['redirect_uri'], 'temporarily_unavailable', $code->get_error_message(), $req['state'] );
+			}
 			$this->redirect_success( $req['redirect_uri'], $code, $req['state'] );
 		}
 

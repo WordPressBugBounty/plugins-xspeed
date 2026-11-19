@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.8
+Stable tag: 1.4.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -93,6 +93,8 @@ Pages are saved as static HTML files and served before WordPress loads. The cach
 * Adds `font-display: swap` so text is visible immediately while fonts load
 * Preloads above-the-fold font files
 * Removes the blank-text flash caused by slow Google Fonts responses
+* Optionally loads Google Fonts stylesheets without blocking the first paint, leaving icon fonts such as Material Icons as they are
+* Optionally adds `font-display: swap` to the fonts in the CSS xSpeed minifies
 
 **Browser Cache**
 
@@ -342,6 +344,31 @@ Used for admin interface icons.
 
 == Changelog ==
 
+= [1.4.9] – 2026-11-18 =
+
+**Turbo Render is on for every site, and Google Fonts load without blocking.**
+
+Optimization:
+- New: Load Google Fonts without blocking, and Show text while theme and plugin fonts load. The Balanced preset turns both on. Icon fonts, and fonts a plugin keeps out of optimization, stay blocking. The Fonts panel says when a switch is on but the page cache or Minify it works through is off.
+- New: Also defer jQuery and inline scripts, under Defer JavaScript. Inline scripts join the same queue and still run in page order. A page that can't be deferred safely, and the login page, are left as written. It is off by default.
+- New: Include early lazy images in size ranking, under Resource Hints. When a theme or page builder lazy-loads the main image, it can still get the preload. It is off by default.
+- Improved: Turbo Render is on by default for every site that has not turned it off, and the update clears cached pages once so visitors get it. It stays off by default while WP Rocket is active, and the panel says why.
+- Improved: An add-on can give Turbo Render each section's measured height in place of the 800 px estimate.
+- Fixed: With Turbo Render on, same-page links, and a page script's scroll to an element such as a form error, land on their target, including on themes with smooth scrolling. Back, Forward and reload return visitors to where they were.
+
+Caching:
+- Fixed: On hosts that disable `fpassthru`, a cached page served by PHP no longer returns a 500 error.
+- Fixed: With Cache pages for shoppers with a cart on, the mini-cart, login and register forms in a cart copy no longer carry another shopper's nonces.
+
+AI / MCP:
+- Fixed: A refresh answer lost on the network can be retried, and a copied refresh token is caught and revoked.
+- Fixed: A call that arrives while another sign-in holds the lock is refused instead of minting a second token.
+
+Dashboard & Admin UX:
+- Improved: Settings saved from the dashboard, the CLI and MCP go through the same checks, and one call can save several modules.
+- Fixed: The setup wizard's summary lists the main-image preload and both font settings it turns on.
+- Fixed: On hosts with `open_basedir` set, admin pages no longer show PHP warnings from server and log detection.
+
 = [1.4.8] – 2026-11-12 =
 
 **Cached pages no longer go out blank, login captchas work with Delay JS, and flushing a Redis object cache takes the same time at any size.**
@@ -385,17 +412,5 @@ Optimization:
 
 Dashboard & Admin UX:
 - Fixed: A link to a module that lives in another page's tab opens that tab.
-
-= [1.4.6] – 2026-11-01 =
-
-**xSpeed can serve Google Analytics and other allow-listed third-party files from your own site, and audio players below the fold wait until played.**
-
-Optimization:
-- New: Third-party files copies CSS and JavaScript from hosts you allow onto your site and points the page at the copy, so Combine CSS, Delay JavaScript and the CDN can work on them. It is off by default. Once it is on, it copies from nine common library hosts, such as cdnjs and jsDelivr, and you can edit that list.
-- New: Local Analytics serves the Google Analytics script from your site, so PageSpeed no longer flags its short cache lifetime. It is off by default, and turning it off puts Google's address back.
-- Fixed: With Lazy-load your own videos on, audio players with no preload setting no longer download their file on page load. A preload you set yourself, and autoplay players, are left alone.
-
-Dashboard & Admin UX:
-- Fixed: An add-on's settings on an unlicensed site now show the licence card, instead of switches that Pro refuses to save.
 
 Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

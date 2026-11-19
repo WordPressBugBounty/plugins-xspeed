@@ -463,6 +463,8 @@ final class CacheModule extends Module {
 		// page carrying one is never stored as a shared cart copy. (#649)
 		if ( \XSpeed\Cart_Vary::enabled() ) {
 			add_action( 'woocommerce_before_template_part', array( \XSpeed\Cart_Vary::class, 'note_template' ), 10, 4 );
+			// Late, so it sees the id WooCommerce's session handler put in.
+			add_filter( 'nonce_user_logged_out', array( \XSpeed\Cart_Vary::class, 'note_nonce_user' ), PHP_INT_MAX, 2 );
 		}
 		add_action( 'update_option_woocommerce_default_customer_address', array( \XSpeed\Cart_Vary::class, 'on_customer_location_change' ), 10, 2 );
 		// Both write paths matter. On a fresh install `xspeed_module_cache`
@@ -500,10 +502,12 @@ final class CacheModule extends Module {
 			// Through toggle() rather than install_dropin() so the re-bake
 			// gets the same ownership check, lock and rollback as every
 			// other page-cache write. A drop-in that turned out not to be
-			// ours between the save and now is refused here too.
+			// ours between the save and now is refused here too, which
+			// needs $consented = false: saving a setting is not the click
+			// that takes over another plugin's drop-in. (#895)
 			$xspeed_options = get_option( 'xspeed_options', array() );
 			if ( ! empty( $xspeed_options['cache_enabled'] ) ) {
-				\XSpeed\Cache::toggle( true );
+				\XSpeed\Cache::toggle( true, false );
 			}
 			// Same staleness applies to the .htaccess block, which is
 			// written to disk from the same generator. Refresh it only

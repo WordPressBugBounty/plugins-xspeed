@@ -13,7 +13,8 @@
  *      to the <img> itself. Ranking by size rather than document position:
  *      the first images on a real page are usually header chrome, not the
  *      hero (#96). Images inside <footer>/<nav>/<aside>, images the theme
- *      explicitly lazy-loads, and tiny images never compete (FBS-84576).
+ *      explicitly lazy-loads, and tiny images do not compete by default
+ *      (FBS-84576). An opt-in admits early sized lazy images. (#593)
  *   2. Emits <link rel="preconnect"> for detected web-font hosts
  *      (fonts.googleapis.com + fonts.gstatic.com) and any user-supplied
  *      hosts, deduped.
@@ -33,8 +34,11 @@ defined( 'ABSPATH' ) || exit;
 
 final class Resource_Hints_Processor {
 
-	/** @var array<string,mixed>|null Captured CDN options for this transform. */
+	/** @var array<string,mixed>|null CDN options for this transform, never inferred from a hostname. */
 	private static $cdn_context = null;
+
+	/** Experimental admission limit; it counts images, not rendered viewport positions. */
+	private const LAZY_RANK_WINDOW = 5;
 
 	/**
 	 * Transform the page HTML, injecting preload + preconnect hints.
@@ -84,7 +88,7 @@ final class Resource_Hints_Processor {
 		} elseif ( ! empty( $opts['lcp_preload'] ) ) {
 			$count      = max( 0, (int) ( $opts['lcp_image_count'] ?? 1 ) );
 			$exclusions = array_filter( array_map( 'strval', (array) ( $opts['lcp_exclusions'] ?? array() ) ) );
-			[ $html, $preload ] = self::build_lcp_preload( $html, $count, $exclusions, (string) ( $opts['page_url'] ?? '' ) );
+			[ $html, $preload ] = self::build_lcp_preload( $html, $count, $exclusions, (string) ( $opts['page_url'] ?? '' ), ! empty( $opts['lcp_rank_by_size'] ) );
 			$hints .= $preload;
 		}
 
@@ -276,9 +280,10 @@ final class Resource_Hints_Processor {
 	 * @param int      $count      How many top images to preload.
 	 * @param string[] $exclusions Substring patterns that exempt an <img>.
 	 * @param string   $page_url   The page being served, for the candidate seam.
+	 * @param bool $by_size Admit early sized lazy images and omit their priority boosts.
 	 * @return array{0:string,1:string} [rewritten html, preload markup]
 	 */
-	private static function build_lcp_preload( string $html, int $count, array $exclusions, string $page_url = '' ): array {
+	private static function build_lcp_preload( string $html, int $count, array $exclusions, string $page_url = '', bool $by_size = false ): array {
 		if ( $count < 1 ) {
 			return array( $html, '' );
 		}
@@ -326,9 +331,8 @@ final class Resource_Hints_Processor {
 
 		$preload = '';
 
-		// Snapshot of already-present preload markup, for idempotency: a second
-		// pass (e.g. cache-off ob_start over an already-processed body) must not
-		// re-emit a <link> for an image we preloaded before.
+		// Existing links cover only equivalent fetch intents. Reprocessing HTML
+		// whose loading attributes changed can still select a different winner.
 		$existing = $html;
 
 		// PASS 1 — collect every eligible <img> and score it.
@@ -349,59 +353,79 @@ final class Resource_Hints_Processor {
 		// <img> indexes that can't be the LCP however they are marked: chrome,
 		// hidden, or a logo/icon. Only these give up a stray `high`. (#558)
 		$ruled_out = array();
-		if ( preg_match_all( '#<img\b[^>]*>#i', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
-			foreach ( $matches[0] as $index => $match ) {
-				[ $tag, $offset ] = $match;
+		$images = array();
+		if ( $by_size ) {
+			$images = self::real_tags( $html, array( 'img' ) );
+		} elseif ( preg_match_all( '#<img\b[^>]*>#i', $html, $matches, PREG_OFFSET_CAPTURE ) ) {
+			$images = $matches[0];
+		}
+		$visible = 0;
+		$turbo_ranges = $by_size ? self::turbo_ranges( $html ) : array();
+		foreach ( $images as $index => $match ) {
+			[ $tag, $offset ] = $match;
+			$rank_tag = $by_size ? self::quote_image_attributes( $tag ) : $tag;
 
-				// Skip anything the user excluded.
-				if ( self::matches_any( $tag, $exclusions ) ) {
-					continue;
-				}
-
-				// An image inside <footer>/<nav>/<aside> is site chrome by
-				// construction — a footer brand strip or FAQ illustration can
-				// never be the LCP element, whatever size it declares. On the
-				// FBS-84576 repro these decoys outranked the real hero three
-				// times on one layout.
-				if ( self::offset_in_ranges( $offset, $skip_ranges ) || Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
-					$ruled_out[ $index ] = true;
-					continue;
-				}
-
-				// An image the theme explicitly lazy-loads is never the
-				// intended LCP — the author has already said "this can wait".
-				// Preloading it would contradict the markup and steal
-				// bandwidth from the image that matters. (FBS-84576)
-				if ( 'lazy' === strtolower( self::attr( $tag, 'loading' ) ) ) {
-					continue;
-				}
-
-				// Resolve the EFFECTIVE image URL. Page builders + JS lazy
-				// loaders park a placeholder (a data: URI or a 1px spacer) in
-				// `src` and the real URL in `data-src`, so the hero the browser
-				// actually paints is behind data-src. (FBS-83553 H1)
-				[ $src, $srcset, $sizes ] = self::effective_image_src( $tag );
-				if ( '' === $src ) {
-					continue; // no real URL (pure data-URI spacer, no data-src).
-				}
-
-				// Chrome markers / explicit opt-out / obviously-tiny images
-				// never compete. (FBS-83553 H1 "logo before hero".)
-				if ( self::looks_too_small( $tag ) ) {
-					$ruled_out[ $index ] = true;
-					continue;
-				}
-
-				$candidates[] = array(
-					'tag'    => $tag,
-					'src'    => $src,
-					'srcset' => $srcset,
-					'sizes'  => $sizes,
-					'score'  => self::weighted_score( self::lcp_score( $tag, $srcset ), $tag, $index ),
-					'order'  => $index,
-					'offset' => $offset,
-				);
+			// Skip anything the user excluded.
+			$excluded = self::matches_any( $tag, $exclusions );
+			if ( ! $by_size && $excluded ) {
+				continue;
 			}
+
+			// An image inside <footer>/<nav>/<aside> is site chrome by
+			// construction — a footer brand strip or FAQ illustration can
+			// never be the LCP element, whatever size it declares. On the
+			// FBS-84576 repro these decoys outranked the real hero three
+			// times on one layout.
+			if ( self::offset_in_ranges( $offset, $skip_ranges ) || Lazy_Loader::tag_is_hidden( $tag, 'img' ) ) {
+				if ( ! $excluded ) {
+					$ruled_out[ $index ] = true;
+				}
+				continue;
+			}
+			++$visible;
+			if ( $excluded ) {
+				continue;
+			}
+			$width = self::declared_dimension( $rank_tag, 'width' );
+			$height = self::declared_dimension( $rank_tag, 'height' );
+			$declared = $width > 0 && $height > 0;
+
+			// Core can mark a real hero lazy by its position in the content.
+			// The opt-in admits only early, sized images outside deferred
+			// sections; the default retains the lazy exclusion. (#593)
+			if ( 'lazy' === strtolower( self::attr( $rank_tag, 'loading' ) )
+				&& ( ! $by_size || ! $declared || $visible > self::LAZY_RANK_WINDOW || self::offset_in_ranges( $offset, $turbo_ranges ) )
+			) {
+				continue;
+			}
+
+			// Resolve the EFFECTIVE image URL. Page builders + JS lazy
+			// loaders park a placeholder (a data: URI or a 1px spacer) in
+			// `src` and the real URL in `data-src`, so the hero the browser
+			// actually paints is behind data-src. (FBS-83553 H1)
+			[ $src, $srcset, $sizes ] = self::effective_image_src( $rank_tag );
+			if ( '' === $src ) {
+				continue; // no real URL (pure data-URI spacer, no data-src).
+			}
+
+			// Chrome markers / explicit opt-out / obviously-tiny images
+			// never compete. (FBS-83553 H1 "logo before hero".)
+			if ( self::looks_too_small( $rank_tag ) ) {
+				$ruled_out[ $index ] = true;
+				continue;
+			}
+
+			$candidates[] = array(
+				'tag'    => $tag,
+				'src'    => $src,
+				'srcset' => $srcset,
+				'sizes'  => $sizes,
+				'score'  => $by_size && $declared
+					? (float) $width * $height * self::position_weight( $index )
+					: self::weighted_score( self::lcp_score( $rank_tag, $srcset ), $rank_tag, $index ),
+				'order'  => $index,
+				'offset' => $offset,
+			);
 		}
 
 		// PASS 1b — the same for CSS background images.
@@ -453,7 +477,7 @@ final class Resource_Hints_Processor {
 
 		if ( empty( $candidates ) ) {
 			if ( null !== $video_at ) {
-				$html = self::demote_images( $html, $ruled_out );
+				$html = self::demote_images( $html, $ruled_out, $by_size ? $images : null );
 			}
 			return array( $html, '' );
 		}
@@ -532,42 +556,52 @@ final class Resource_Hints_Processor {
 		// declared size is smaller than the winner's. An image with no
 		// declared size keeps its hint, for the reason above.
 		$demote = ! empty( $chosen ) || null !== $video_at ? $ruled_out : array();
-		$winner = self::winner_facts( $html, $chosen );
+		$winner = self::winner_facts( $images, $chosen );
 		$kept   = array();
 		$seen   = -1;
-		$html   = preg_replace_callback(
-			'#<img\b[^>]*>#i',
-			static function ( array $m ) use ( &$seen, &$kept, $chosen, $demote, $winner, $exclusions ) {
-				++$seen;
-				if ( ! isset( $chosen[ $seen ] ) ) {
-					if ( 'high' !== strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
-						return $m[0];
-					}
-					$src  = self::effective_image_src( $m[0] )[0];
-					$key  = html_entity_decode( $src, ENT_QUOTES );
-					$lose = isset( $demote[ $seen ] );
-					// An image the user kept out of the pick keeps its hint.
-					if ( ! $lose && null !== $winner && ! self::matches_any( $m[0], $exclusions ) ) {
-						$lose = ( '' !== $src && ( self::same_url( $src, $winner['src'] ) || isset( $kept[ $key ] ) ) )
-							|| self::provably_smaller( $m[0], $winner );
-					}
-					if ( $lose ) {
-						return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
-					}
-					if ( '' !== $src ) {
-						$kept[ $key ] = true;
-					}
+		$rewrite = static function ( array $m ) use ( &$seen, &$kept, $chosen, $demote, $winner, $exclusions, $by_size ) {
+			++$seen;
+			if ( ! isset( $chosen[ $seen ] ) ) {
+				if ( 'high' !== strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
 					return $m[0];
 				}
-				// Add fetchpriority="high" AND remove any loading="lazy" the
-				// theme / WP core left on the LCP image. fetchpriority="high"
-				// with loading="lazy" is contradictory — the browser can still
-				// defer a lazy image, so preloading it while it stays lazy wins
-				// nothing. Stripping lazy is what actually lets the preload land.
-				return self::promote_lcp_img( $m[0] );
-			},
-			$html
-		);
+				$src  = self::effective_image_src( $m[0] )[0];
+				$key  = html_entity_decode( $src, ENT_QUOTES );
+				$lose = isset( $demote[ $seen ] );
+				// An image the user kept out of the pick keeps its hint.
+				if ( ! $lose && null !== $winner && ! self::matches_any( $m[0], $exclusions ) ) {
+					$lose = ( '' !== $src && ( self::same_url( $src, $winner['src'] ) || isset( $kept[ $key ] ) ) )
+						|| self::provably_smaller( $m[0], $winner );
+				}
+				if ( $lose ) {
+					return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
+				}
+				if ( '' !== $src ) {
+					$kept[ $key ] = true;
+				}
+				return $m[0];
+			}
+			// Add fetchpriority="high" AND remove any loading="lazy" the
+			// theme / WP core left on the LCP image. fetchpriority="high"
+			// with loading="lazy" is contradictory — the browser can still
+			// defer a lazy image, so preloading it while it stays lazy wins
+			// nothing. Stripping lazy is what actually lets the preload land.
+			return self::promote_lcp_img( $by_size ? self::quote_image_attributes( $m[0] ) : $m[0] );
+		};
+		if ( $by_size ) {
+			$edits = array();
+			foreach ( $images as $image ) {
+				$tag = $rewrite( array( $image[0] ) );
+				if ( $tag !== $image[0] ) {
+					$edits[] = array( $image[1], strlen( $image[0] ), $tag );
+				}
+			}
+			foreach ( array_reverse( $edits ) as $edit ) {
+				$html = substr_replace( $html, $edit[2], $edit[0], $edit[1] );
+			}
+		} else {
+			$html = preg_replace_callback( '#<img\b[^>]*>#i', $rewrite, $html );
+		}
 
 		return array( (string) $html, $preload );
 	}
@@ -576,19 +610,19 @@ final class Resource_Hints_Processor {
 	 * The src and declared area of the first winning <img>, or null when no
 	 * <img> won.
 	 *
-	 * @param string            $html   Page HTML.
+	 * @param array<int,array{0:string,1:int}> $images Image tags and offsets.
 	 * @param array<int,bool>   $chosen Winning <img> indexes.
 	 * @return array{src:string,area:int}|null
 	 */
-	private static function winner_facts( string $html, array $chosen ): ?array {
-		if ( empty( $chosen ) || ! preg_match_all( '#<img\b[^>]*>#i', $html, $imgs ) ) {
+	private static function winner_facts( array $images, array $chosen ): ?array {
+		if ( empty( $chosen ) ) {
 			return null;
 		}
 		$index = (int) min( array_keys( $chosen ) );
-		if ( ! isset( $imgs[0][ $index ] ) ) {
+		if ( ! isset( $images[ $index ] ) ) {
 			return null;
 		}
-		$tag = $imgs[0][ $index ];
+		$tag = $images[ $index ][0];
 		return array(
 			'src'    => self::effective_image_src( $tag )[0],
 			'width'  => self::declared_dimension( $tag, 'width' ),
@@ -637,6 +671,21 @@ final class Resource_Hints_Processor {
 		return is_numeric( $value ) && (float) $value > 0 ? (int) $value : 0;
 	}
 
+	/** Let the opt-in read unquoted values without changing the default attribute reader. */
+	private static function quote_image_attributes( string $tag ): string {
+		return (string) preg_replace_callback(
+			'#\s([^\s=/>"\']+)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#',
+			static function ( array $attribute ): string {
+				$value = $attribute[2];
+				if ( '"' === $value[0] || "'" === $value[0] ) {
+					return $attribute[0];
+				}
+				return ' ' . $attribute[1] . '="' . htmlspecialchars( $value, ENT_QUOTES, 'UTF-8', false ) . '"';
+			},
+			$tag
+		);
+	}
+
 	/**
 	 * Byte offset of the first visible background video with no poster, or
 	 * null when the page has none.
@@ -665,9 +714,21 @@ final class Resource_Hints_Processor {
 	 *
 	 * @param string            $html    Page HTML.
 	 * @param array<int,bool>   $indexes <img> indexes, in document order.
+	 * @param array<int,array{0:string,1:int}>|null $images The tags those indexes
+	 *                                                      count, when not every raw `<img>`.
 	 */
-	private static function demote_images( string $html, array $indexes ): string {
+	private static function demote_images( string $html, array $indexes, ?array $images = null ): string {
 		if ( empty( $indexes ) ) {
+			return $html;
+		}
+		if ( null !== $images ) {
+			// Ranking skips comments and other inert markup, so a raw count
+			// here would take `high` from the wrong tag.
+			foreach ( array_reverse( $images, true ) as $index => $image ) {
+				if ( isset( $indexes[ $index ] ) ) {
+					$html = substr_replace( $html, self::without_high( $image[0] ), $image[1], strlen( $image[0] ) );
+				}
+			}
 			return $html;
 		}
 		$seen = -1;
@@ -675,14 +736,24 @@ final class Resource_Hints_Processor {
 			'#<img\b[^>]*>#i',
 			static function ( array $m ) use ( &$seen, $indexes ) {
 				++$seen;
-				if ( isset( $indexes[ $seen ] ) && 'high' === strtolower( self::attr( $m[0], 'fetchpriority' ) ) ) {
-					return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $m[0], 1 );
-				}
-				return $m[0];
+				return isset( $indexes[ $seen ] ) ? self::without_high( $m[0] ) : $m[0];
 			},
 			$html
 		);
 		return null === $out ? $html : $out;
+	}
+
+	/**
+	 * An <img> tag with any `fetchpriority="high"` removed.
+	 *
+	 * @param string $tag The tag.
+	 * @return string
+	 */
+	private static function without_high( string $tag ): string {
+		if ( 'high' !== strtolower( self::attr( $tag, 'fetchpriority' ) ) ) {
+			return $tag;
+		}
+		return (string) preg_replace( '#\s*(?<![-\w])fetchpriority\s*=\s*(["\']?)high\1#i', '', $tag, 1 );
 	}
 
 	/**
@@ -1228,6 +1299,22 @@ final class Resource_Hints_Processor {
 		return false;
 	}
 
+	/** @return array<int,array{0:int,1:int}> Bounded deferred sections, using Turbo's parser. */
+	private static function turbo_ranges( string $html ): array {
+		$masked = Html_Spans::mask( $html );
+		$ranges = array();
+		foreach ( self::real_tags( $html, array() ) as $match ) {
+			if ( ! array_key_exists( 'data-xspeed-turbo', self::tag_attrs( $match[0] ) ) ) {
+				continue;
+			}
+			$end = Html_Spans::element_end( $masked, $match[1] );
+			if ( null !== $end ) {
+				$ranges[] = array( $match[1], $end );
+			}
+		}
+		return $ranges;
+	}
+
 	/**
 	 * Score for an image whose size we can't read at all.
 	 *
@@ -1710,9 +1797,130 @@ final class Resource_Hints_Processor {
 		return (string) preg_replace( '#<img\b#i', '<img loading="lazy"', $tag, 1 );
 	}
 
-	/** Two URLs name the same image: `&amp;` decoded, and a root-relative one compared by path. */
+	/** Match image identity through the active CDN mapping and format siblings. */
 	private static function same_url( string $a, string $b ): bool {
 		return Cdn_Rewriter::same_asset( $a, $b, self::$cdn_context );
+	}
+
+
+
+
+
+	/** Compare final fetches rather than format-sibling image identity. */
+	private static function preload_covered( string $html, string $intent ): bool {
+		$wanted = self::tag_attrs( $intent );
+		$href = Cdn_Rewriter::asset_key( $wanted['href'] ?? '', self::$cdn_context );
+		if ( null === $href ) {
+			return false;
+		}
+		foreach ( self::real_tags( $html, array( 'link' ) ) as $match ) {
+			$attrs = self::tag_attrs( $match[0] );
+			$rels = preg_split( '/\s+/', strtolower( $attrs['rel'] ?? '' ) );
+			if ( ! in_array( 'preload', $rels, true ) || 'image' !== strtolower( $attrs['as'] ?? '' )
+				|| $href !== Cdn_Rewriter::asset_key( $attrs['href'] ?? '', self::$cdn_context )
+				|| ( $attrs['type'] ?? '' ) !== ( $wanted['type'] ?? '' )
+				|| self::normalized_space( strtolower( $attrs['media'] ?? '' ) ) !== self::normalized_space( strtolower( $wanted['media'] ?? '' ) ) ) {
+				continue;
+			}
+			$set = self::fetch_set( $attrs['imagesrcset'] ?? '' );
+			$wanted_set = self::fetch_set( $wanted['imagesrcset'] ?? '' );
+			if ( null !== $set && null !== $wanted_set && $set === $wanted_set
+				&& ( empty( $set ) || self::normalized_space( $attrs['imagesizes'] ?? '' ) === self::normalized_space( $wanted['imagesizes'] ?? '' ) ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static function normalized_space( string $value ): string {
+		return (string) preg_replace( '/\s+/', ' ', trim( html_entity_decode( $value, ENT_QUOTES ) ) );
+	}
+
+	/** @return string[]|null Sorted final URL/descriptor pairs, or null for an unreadable set. */
+	private static function fetch_set( string $srcset ): ?array {
+		if ( '' === trim( $srcset ) ) {
+			return array();
+		}
+		$out = array();
+		$descriptors = array();
+		$kind = null;
+		foreach ( explode( ',', html_entity_decode( $srcset, ENT_QUOTES ) ) as $entry ) {
+			$parts = preg_split( '/\s+/', trim( $entry ) );
+			$url = Cdn_Rewriter::asset_key( $parts[0] ?? '', self::$cdn_context );
+			if ( null === $url || count( $parts ) > 2 ) {
+				return null;
+			}
+			$descriptor = $parts[1] ?? '1x';
+			if ( preg_match( '/^([0-9]+)w$/D', $descriptor, $number ) ) {
+				$unit = 'w';
+			} elseif ( preg_match( '/^((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)x$/D', $descriptor, $number ) ) {
+				$unit = 'x';
+			} else {
+				return null;
+			}
+			$value = (float) $number[1];
+			$key = $unit . ':' . (string) $value;
+			// Invalid or ambiguous sets must not suppress a usable preload.
+			if ( ! is_finite( $value ) || $value <= 0 || isset( $descriptors[ $key ] ) || ( null !== $kind && $kind !== $unit ) ) {
+				return null;
+			}
+			$descriptors[ $key ] = true;
+			$kind = $unit;
+			$out[] = $url . "\n" . $descriptor;
+		}
+		$out = array_values( array_unique( $out ) );
+		sort( $out, SORT_STRING );
+		return $out;
+	}
+
+	/**
+	 * Traverse real opening tags without interpreting quoted text or inert bodies.
+	 *
+	 * @param string[] $names Tags to collect.
+	 * @return array<int,array{0:string,1:int}> Tag and byte offset.
+	 */
+	private static function real_tags( string $html, array $names ): array {
+		$out = array();
+		$i = 0;
+		$inert = 0;
+		while ( false !== ( $lt = strpos( $html, '<', $i ) ) ) {
+			if ( 0 === substr_compare( $html, '<!--', $lt, 4 ) ) {
+				$close = strpos( $html, '-->', $lt + 2 );
+				if ( false === $close ) {
+					break;
+				}
+				$i = $close + 3;
+				continue;
+			}
+			if ( ! preg_match( '#\G<(/?)([a-z][a-z0-9-]*)(?=[\s/>])#i', $html, $token, 0, $lt ) ) {
+				$i = $lt + 1;
+				continue;
+			}
+			$gt = self::tag_end( $html, $lt + strlen( $token[0] ) );
+			if ( null === $gt ) {
+				break;
+			}
+			$i = $gt + 1;
+			$name = strtolower( $token[2] );
+			if ( in_array( $name, array( 'template', 'noscript' ), true ) ) {
+				$inert = '/' === $token[1] ? max( 0, $inert - 1 ) : $inert + 1;
+				continue;
+			}
+			if ( '/' === $token[1] ) {
+				continue;
+			}
+			if ( in_array( $name, array( 'script', 'style', 'textarea', 'title' ), true ) ) {
+				if ( ! preg_match( '#</' . $name . '\s*>#i', $html, $close, PREG_OFFSET_CAPTURE, $i ) ) {
+					break;
+				}
+				$i = $close[0][1] + strlen( $close[0][0] );
+				continue;
+			}
+			if ( 0 === $inert && ( empty( $names ) || in_array( $name, $names, true ) ) ) {
+				$out[] = array( substr( $html, $lt, $gt + 1 - $lt ), $lt );
+			}
+		}
+		return $out;
 	}
 
 	/**
@@ -1943,114 +2151,5 @@ final class Resource_Hints_Processor {
 			}
 		}
 		return null;
-	}
-
-	private static function preload_covered( string $html, string $intent ): bool {
-		$wanted = self::tag_attrs( $intent );
-		$href = Cdn_Rewriter::asset_key( $wanted['href'] ?? '', self::$cdn_context );
-		if ( null === $href ) {
-			return false;
-		}
-		foreach ( self::real_tags( $html, array( 'link' ) ) as $match ) {
-			$attrs = self::tag_attrs( $match[0] );
-			$rels = preg_split( '/\s+/', strtolower( $attrs['rel'] ?? '' ) );
-			if ( ! in_array( 'preload', $rels, true ) || 'image' !== strtolower( $attrs['as'] ?? '' )
-				|| $href !== Cdn_Rewriter::asset_key( $attrs['href'] ?? '', self::$cdn_context )
-				|| ( $attrs['type'] ?? '' ) !== ( $wanted['type'] ?? '' )
-				|| self::normalized_space( strtolower( $attrs['media'] ?? '' ) ) !== self::normalized_space( strtolower( $wanted['media'] ?? '' ) ) ) {
-				continue;
-			}
-			$set = self::fetch_set( $attrs['imagesrcset'] ?? '' );
-			$wanted_set = self::fetch_set( $wanted['imagesrcset'] ?? '' );
-			if ( null !== $set && null !== $wanted_set && $set === $wanted_set
-				&& ( empty( $set ) || self::normalized_space( $attrs['imagesizes'] ?? '' ) === self::normalized_space( $wanted['imagesizes'] ?? '' ) ) ) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static function normalized_space( string $value ): string {
-		return (string) preg_replace( '/\s+/', ' ', trim( html_entity_decode( $value, ENT_QUOTES ) ) );
-	}
-
-	private static function fetch_set( string $srcset ): ?array {
-		if ( '' === trim( $srcset ) ) {
-			return array();
-		}
-		$out = array();
-		$descriptors = array();
-		$kind = null;
-		foreach ( explode( ',', html_entity_decode( $srcset, ENT_QUOTES ) ) as $entry ) {
-			$parts = preg_split( '/\s+/', trim( $entry ) );
-			$url = Cdn_Rewriter::asset_key( $parts[0] ?? '', self::$cdn_context );
-			if ( null === $url || count( $parts ) > 2 ) {
-				return null;
-			}
-			$descriptor = $parts[1] ?? '1x';
-			if ( preg_match( '/^([0-9]+)w$/D', $descriptor, $number ) ) {
-				$unit = 'w';
-			} elseif ( preg_match( '/^((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)x$/D', $descriptor, $number ) ) {
-				$unit = 'x';
-			} else {
-				return null;
-			}
-			$value = (float) $number[1];
-			$key = $unit . ':' . (string) $value;
-			// Invalid or ambiguous sets must not suppress a usable preload.
-			if ( ! is_finite( $value ) || $value <= 0 || isset( $descriptors[ $key ] ) || ( null !== $kind && $kind !== $unit ) ) {
-				return null;
-			}
-			$descriptors[ $key ] = true;
-			$kind = $unit;
-			$out[] = $url . "\n" . $descriptor;
-		}
-		$out = array_values( array_unique( $out ) );
-		sort( $out, SORT_STRING );
-		return $out;
-	}
-
-	private static function real_tags( string $html, array $names ): array {
-		$out = array();
-		$i = 0;
-		$inert = 0;
-		while ( false !== ( $lt = strpos( $html, '<', $i ) ) ) {
-			if ( 0 === substr_compare( $html, '<!--', $lt, 4 ) ) {
-				$close = strpos( $html, '-->', $lt + 2 );
-				if ( false === $close ) {
-					break;
-				}
-				$i = $close + 3;
-				continue;
-			}
-			if ( ! preg_match( '#\G<(/?)([a-z][a-z0-9-]*)(?=[\s/>])#i', $html, $token, 0, $lt ) ) {
-				$i = $lt + 1;
-				continue;
-			}
-			$gt = self::tag_end( $html, $lt + strlen( $token[0] ) );
-			if ( null === $gt ) {
-				break;
-			}
-			$i = $gt + 1;
-			$name = strtolower( $token[2] );
-			if ( in_array( $name, array( 'template', 'noscript' ), true ) ) {
-				$inert = '/' === $token[1] ? max( 0, $inert - 1 ) : $inert + 1;
-				continue;
-			}
-			if ( '/' === $token[1] ) {
-				continue;
-			}
-			if ( in_array( $name, array( 'script', 'style', 'textarea', 'title' ), true ) ) {
-				if ( ! preg_match( '#</' . $name . '\s*>#i', $html, $close, PREG_OFFSET_CAPTURE, $i ) ) {
-					break;
-				}
-				$i = $close[0][1] + strlen( $close[0][0] );
-				continue;
-			}
-			if ( 0 === $inert && ( empty( $names ) || in_array( $name, $names, true ) ) ) {
-				$out[] = array( substr( $html, $lt, $gt + 1 - $lt ), $lt );
-			}
-		}
-		return $out;
 	}
 }

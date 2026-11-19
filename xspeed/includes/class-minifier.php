@@ -112,6 +112,14 @@ class Minifier {
 			if ( ! empty( $opts['defer_consent'] ) ) {
 				add_filter( 'xspeed_cache_final_html', array( Minify_Filters::class, 'defer_raw_consent_tags' ), 19 );
 			}
+			// jQuery and the inline code after it, on the finished page only:
+			// after both Delay JS sweeps (20, 21), before the transition
+			// hold (26) prints its own inline script. Our own buffer covers
+			// the requests the page cache does not buffer.
+			if ( ! empty( $opts['defer_inline_js'] ) ) {
+				add_filter( 'xspeed_cache_final_html', array( Defer_Inline::class, 'process' ), 25 );
+				Defer_Inline::boot();
+			}
 		}
 		if ( ! empty( $opts['delay_js'] ) ) {
 			// Delay applies a transform that's mutually exclusive with
@@ -445,8 +453,14 @@ class Minifier {
 		// bytes under a URL cached for a year, an @import child's edit
 		// changed nothing, and a touch with no change orphaned every cached
 		// page that linked the old name.
-		$key = Asset_Manifest::key_for(
-			$type,
+		//
+		// The swap variant of a stylesheet (Fonts → display_swap_in_css) has
+		// different bytes from the same source, so it gets its own manifest
+		// kind. Sharing 'css' would keep serving the other variant's file
+		// after the setting changed, until the source itself changed.
+		$kind = ( 'css' === $type && self::swap_font_display() ) ? 'css-swap' : $type;
+		$key  = Asset_Manifest::key_for(
+			$kind,
 			$path,
 			static function ( string $source ) use ( $type ): array {
 				return 'css' === $type ? Asset_Manifest::css_dependencies( $source ) : array();
@@ -482,10 +496,34 @@ class Minifier {
 	 */
 	private static $builds = 0;
 
+	/**
+	 * Whether minified CSS gets font-display: swap, asked once per request.
+	 *
+	 * @var bool|null
+	 */
+	private static $swap_font_display = null;
+
 	/** Forget the per-request answers. Tests only. */
 	public static function reset_request_state(): void {
-		self::$writable = null;
-		self::$builds   = 0;
+		self::$writable          = null;
+		self::$builds            = 0;
+		self::$swap_font_display = null;
+	}
+
+	/**
+	 * Fonts → "Show text while theme and plugin fonts load". Read once, so the
+	 * manifest kind and the bytes built under it always agree.
+	 *
+	 * Combined CSS is not processed separately: with Minify CSS on, the
+	 * combiner joins files this class already minified (and swapped), and
+	 * with it off there is nothing minified to add swap to.
+	 */
+	private static function swap_font_display(): bool {
+		if ( null === self::$swap_font_display ) {
+			$fonts                   = Settings_Manager::get( 'fonts' );
+			self::$swap_font_display = ! empty( $fonts['display_swap_in_css'] );
+		}
+		return self::$swap_font_display;
 	}
 
 	/** How many sources this process has minified. Tests and diagnostics. */
@@ -553,7 +591,10 @@ class Minifier {
 				// dir and 404s (missing FontAwesome/eicons/WooCommerce fonts).
 				$minifier = new \MatthiasMullie\Minify\CSS( $source_path );
 				$minified = (string) $minifier->execute( self::min_dir() . '/rebase.css' );
-				return '' !== $minified ? $minified : null;
+				if ( '' === $minified ) {
+					return null;
+				}
+				return self::swap_font_display() ? Font_Display::force_swap( $minified ) : $minified;
 			}
 
 			$minifier = new \MatthiasMullie\Minify\JS( $source_path );
@@ -685,6 +726,12 @@ class Minifier {
 		}
 		if ( ! self::balanced( $body, $minified ) ) {
 			return $block;
+		}
+
+		// After the balance check: the inserted declaration adds no
+		// delimiters, and a body that failed the check ships unchanged.
+		if ( 'style' === $tag && self::swap_font_display() ) {
+			$minified = Font_Display::force_swap( $minified );
 		}
 
 		return $open . $minified . $close;

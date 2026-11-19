@@ -298,10 +298,78 @@ abstract class Module {
 			$params = $request->get_params();
 		}
 
-		// Say so, rather than returning 200 over a write that didn't happen.
-		// update_settings() enforces the gate on every surface; REST is the
-		// one with an error channel, so it reports the reason. (#143)
-		if ( $this->is_license_locked() ) {
+		// In order:
+		// - licence: say so, rather than returning 200 over a write that
+		//   didn't happen. update_settings() enforces the gate on every
+		//   surface; REST is the one with an error channel, so it reports the
+		//   reason. (#143)
+		// - blocked: a write that turns on a module another module has taken
+		//   over from.
+		// - constant: a field pinned by a wp-config.php constant cannot be
+		//   written, and naming the constant tells the caller where to go and
+		//   change it. (#398)
+		// - managed: a field another setting holds, named with that setting.
+		// - inspect: a value the schema rejects is refused by name. (#464)
+		// - module: this module's own settings_refusal(), such as Object
+		//   Cache testing a changed Redis login. (#700)
+		$saved = $this->save_checked_settings( is_array( $params ) ? $params : array(), array( 'license', 'blocked', 'constant', 'managed', 'inspect', 'module' ) );
+		if ( is_wp_error( $saved ) ) {
+			return $saved;
+		}
+
+		// A `warn` conflict lets the save through. When the module ends up on,
+		// the answer says why the admin should check their pages, the same
+		// text the panel's callout carries. Not stored: the save has already
+		// written the row.
+		$warnings = true === $this->is_active() ? Conflict_Registry::warnings_for( static::SLUG ) : array();
+		if ( ! empty( $warnings ) ) {
+			$saved['warnings'] = $warnings;
+		}
+
+		return rest_ensure_response( $saved );
+	}
+
+	/**
+	 * Check and write a save of this module's own settings through
+	 * Settings_Manager::save(), and turn a refusal into the WP_Error the REST
+	 * routes answer with.
+	 *
+	 * @param array<string,mixed> $params The request's settings.
+	 * @param string[]            $checks The checks to run, in order.
+	 * @return array<string,mixed>|\WP_Error The saved settings, or the refusal.
+	 */
+	protected function save_checked_settings( array $params, array $checks ) {
+		$result = Settings_Manager::save(
+			array( static::SLUG => $params ),
+			array(
+				'mode'        => 'lenient',
+				'checks'      => $checks,
+				'refuse'      => array( 'invalid' ),
+				'keep_echoes' => true,
+				'write'       => 'module',
+				'instances'   => array( static::SLUG => $this ),
+			)
+		);
+
+		$entry = $result['modules'][ static::SLUG ];
+		if ( $entry['ok'] ) {
+			return $entry['settings'];
+		}
+		return $this->settings_save_refusal( $entry['code'], $entry['data'] );
+	}
+
+	/**
+	 * The REST error for a save of this module that Settings_Manager::save()
+	 * refused.
+	 *
+	 * @param string              $code save() refusal code.
+	 * @param array<string,mixed> $data save() refusal data.
+	 */
+	public function settings_save_refusal( string $code, array $data ): \WP_Error {
+		if ( 'module_refused' === $code && ( $data['error'] ?? null ) instanceof \WP_Error ) {
+			return $data['error'];
+		}
+		if ( 'license_locked' === $code ) {
 			return new \WP_Error(
 				'xspeed_license_required',
 				sprintf(
@@ -327,22 +395,17 @@ abstract class Module {
 		 * or changing anything else, is exactly what somebody resolving the
 		 * conflict needs to be able to do.
 		 */
-		$blocked = $this->blocked_by();
-		if ( null !== $blocked && ! empty( $params['enabled'] ) ) {
+		if ( 'blocked' === $code ) {
 			return new \WP_Error(
 				'xspeed_module_blocked',
-				$blocked,
+				(string) $data['reason'],
 				array( 'status' => 409 )
 			);
 		}
 
-		// A field pinned by a wp-config.php constant cannot be written. Saying
-		// so beats a 200 over a write that silently did nothing -- and naming
-		// the constant tells the caller where to go and change it. (#398)
-		$locked = Settings_Manager::locked_in_input( static::SLUG, is_array( $params ) ? $params : array() );
-		if ( ! empty( $locked ) ) {
+		if ( 'constant_locked' === $code ) {
 			$pairs = array();
-			foreach ( $locked as $field => $constant ) {
+			foreach ( $data['fields'] as $field => $constant ) {
 				$pairs[] = $field . ' (' . $constant . ')';
 			}
 			return new \WP_Error(
@@ -354,7 +417,7 @@ abstract class Module {
 				),
 				array(
 					'status' => 409,
-					'fields' => $locked,
+					'fields' => $data['fields'],
 				)
 			);
 		}
@@ -362,10 +425,9 @@ abstract class Module {
 		// A field an add-on holds while one of its own settings is on. Same
 		// reasoning as above: say so rather than return 200 over a write that
 		// changed nothing, and name the setting that holds it.
-		$managed = Settings_Manager::managed_in_input( static::SLUG, is_array( $params ) ? $params : array() );
-		if ( ! empty( $managed ) ) {
+		if ( 'managed' === $code ) {
 			$pairs = array();
-			foreach ( $managed as $field => $by ) {
+			foreach ( $data['fields'] as $field => $by ) {
 				$pairs[] = $field . ' (' . $by . ')';
 			}
 			return new \WP_Error(
@@ -377,38 +439,12 @@ abstract class Module {
 				),
 				array(
 					'status' => 409,
-					'fields' => $managed,
+					'fields' => $data['fields'],
 				)
 			);
 		}
 
-		$refusal = $this->settings_refusal( is_array( $params ) ? $params : array() );
-		if ( null !== $refusal ) {
-			return $refusal;
-		}
-
-		return rest_ensure_response( $this->update_settings( $params ) );
-	}
-
-	/**
-	 * Why this module may not be switched on right now, or null.
-	 *
-	 * A seam for one module to stand another down. Free answers null for
-	 * everything and never blocks anything itself — it has no opinion about
-	 * which modules conflict, and an add-on that knows the answer says so.
-	 *
-	 * The reason is shown to the customer, so it says what to do rather than
-	 * naming an internal state.
-	 */
-	final public function blocked_by(): ?string {
-		/**
-		 * Filter: xspeed_module_blocked_by
-		 *
-		 * @param string|null $reason Why this module cannot be enabled.
-		 * @param string      $slug   The module being asked about.
-		 */
-		$reason = apply_filters( 'xspeed_module_blocked_by', null, static::SLUG );
-		return is_string( $reason ) && '' !== $reason ? $reason : null;
+		return $this->invalid_values_error( (array) ( $data['invalid'] ?? array() ) );
 	}
 
 	/**
@@ -427,31 +463,27 @@ abstract class Module {
 	 */
 	public function settings_refusal( array $params ): ?\WP_Error {
 		$report = Settings_Manager::inspect_input( static::SLUG, $params );
-		if ( empty( $report['invalid'] ) ) {
-			return null;
-		}
-
 		// A panel posts its whole settings object back. A value that echoes
 		// what is already in effect asks for no change, so it is never the
-		// reason a save is refused, even if the schema would not accept it as
-		// new input (inspect_input() treats a pinned key the same way).
-		$current = Settings_Manager::get( static::SLUG );
-		$invalid = array();
-		foreach ( $report['invalid'] as $key ) {
-			if ( array_key_exists( $key, $current ) && $params[ $key ] === $current[ $key ] ) {
-				continue;
-			}
-			$invalid[] = $key;
-		}
+		// reason a save is refused (inspect_input() treats a pinned key the
+		// same way).
+		$invalid = Settings_Manager::invalid_changes( static::SLUG, $params, $report['invalid'] );
 		if ( empty( $invalid ) ) {
 			return null;
 		}
-		$report['invalid'] = $invalid;
+		return $this->invalid_values_error( $invalid );
+	}
 
+	/**
+	 * The 400 for values the schema rejects, naming what each one accepts.
+	 *
+	 * @param string[] $invalid Rejected keys.
+	 */
+	private function invalid_values_error( array $invalid ): \WP_Error {
 		$schema  = $this->settings_schema();
 		$parts   = array();
 		$allowed = array();
-		foreach ( $report['invalid'] as $key ) {
+		foreach ( $invalid as $key ) {
 			$spec            = $schema[ $key ] ?? array();
 			$allowed[ $key ] = self::allowed_values( $spec );
 			$parts[]         = '' !== $allowed[ $key ] ? $key . ' (' . $allowed[ $key ] . ')' : $key;
@@ -466,7 +498,7 @@ abstract class Module {
 			),
 			array(
 				'status'  => 400,
-				'invalid' => $report['invalid'],
+				'invalid' => $invalid,
 				'allowed' => $allowed,
 			)
 		);
@@ -495,6 +527,27 @@ abstract class Module {
 			default:
 				return '';
 		}
+	}
+
+	/**
+	 * Why this module may not be switched on right now, or null.
+	 *
+	 * A seam for one module to stand another down. Free answers null for
+	 * everything and never blocks anything itself — it has no opinion about
+	 * which modules conflict, and an add-on that knows the answer says so.
+	 *
+	 * The reason is shown to the customer, so it says what to do rather than
+	 * naming an internal state.
+	 */
+	final public function blocked_by(): ?string {
+		/**
+		 * Filter: xspeed_module_blocked_by
+		 *
+		 * @param string|null $reason Why this module cannot be enabled.
+		 * @param string      $slug   The module being asked about.
+		 */
+		$reason = apply_filters( 'xspeed_module_blocked_by', null, static::SLUG );
+		return is_string( $reason ) && '' !== $reason ? $reason : null;
 	}
 
 	/**

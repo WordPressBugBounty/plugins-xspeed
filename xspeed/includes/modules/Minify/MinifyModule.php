@@ -29,7 +29,7 @@ final class MinifyModule extends Module {
 
 	public const SLUG    = 'minify';
 	public const TIER    = self::TIER_FREE;
-	public const VERSION = '1.2.0';
+	public const VERSION = '1.3.0';
 
 	public function ui_metadata(): array {
 		return array(
@@ -73,13 +73,20 @@ final class MinifyModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Defer JavaScript', 'xspeed' ),
-				'description' => __( 'Runs scripts after the page has loaded, so content shows sooner. jQuery and scripts that need it are skipped.', 'xspeed' ),
+				'description' => __( 'Runs scripts after the page has been read, so content shows sooner. jQuery still loads first unless you turn on "Also defer jQuery and inline scripts" below.', 'xspeed' ),
 			),
 			'defer_consent' => array(
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'Defer the cookie consent banner', 'xspeed' ),
 				'description' => __( 'Loads the consent banner script without holding up the page. The banner still appears as soon as the page loads, and Delay JS never postpones it. Leave this off if your consent tool must block other scripts that run before it.', 'xspeed' ),
+				'dependsOn'   => array( 'field' => 'defer_js' ),
+			),
+			'defer_inline_js' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Also defer jQuery and inline scripts', 'xspeed' ),
+				'description' => __( 'Also defers jQuery and the scripts written into the page, keeping them in their original order. Scripts that are not safe to move stay where they are. If your server or CDN sends a Content-Security-Policy for scripts, leave this off.', 'xspeed' ),
 				'dependsOn'   => array( 'field' => 'defer_js' ),
 			),
 			'delay_js' => array(
@@ -106,7 +113,7 @@ final class MinifyModule extends Module {
 				'default'     => array( 'jquery-core', 'jquery-migrate' ),
 				'item_type'   => 'string',
 				'label'       => __( 'Scripts to never defer or delay', 'xspeed' ),
-				'description' => __( 'Script handles or parts of script URLs, one per line. jQuery is listed because most themes need it early; cookie consent banners are skipped on their own.', 'xspeed' ),
+				'description' => __( 'Script handles or parts of script URLs, one per line. With "Also defer jQuery and inline scripts" on, the default jquery-core and jquery-migrate entries are ignored for deferral; your own entries still apply. Cookie consent banners are protected separately.', 'xspeed' ),
 				// Only relevant once defer OR delay is on — the exclusion list
 				// governs both. Uses the `any` (OR) dependency form. (FBS-82227)
 				'dependsOn'   => array(
@@ -191,6 +198,10 @@ final class MinifyModule extends Module {
 					update_option( 'xspeed_options', $legacy );
 				}
 				return $opts;
+			},
+			'1.3.0' => static function ( array $opts ): array {
+				// Existing sites must opt in, including sites already using Defer JS.
+				return $opts + array( 'defer_inline_js' => false );
 			},
 		);
 	}

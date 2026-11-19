@@ -327,6 +327,21 @@ export interface OnboardingChoices {
    * while the key was optional. (#438)
    */
   resource_hints: boolean;
+  /**
+   * Google Fonts (and the other font-CSS hosts) load without blocking the
+   * first paint: `fonts.async_google_css` in the Fonts module. Icon-font
+   * stylesheets stay blocking. Required for the same reason as
+   * `resource_hints`: a preset that omitted it would keep whatever the
+   * previous preset set.
+   */
+  async_google_fonts: boolean;
+  /**
+   * `font-display: swap` added to the @font-face rules in CSS that xSpeed
+   * minifies: `fonts.display_swap_in_css` in the Fonts module. Icon fonts
+   * and rules with their own font-display are left alone. Required for the
+   * same reason as `resource_hints`.
+   */
+  display_swap_in_css: boolean;
   cache_expiry: number;
   /**
    * Consent to usage analytics, which include the admin's email and name.

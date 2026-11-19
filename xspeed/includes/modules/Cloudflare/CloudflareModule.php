@@ -223,6 +223,7 @@ final class CloudflareModule extends Module {
 		 * one hook later is equivalent.
 		 */
 		add_action( 'init', array( $this, 'boot_on_init' ) );
+		add_action( 'xspeed_rest_settings_patch_saved', array( $this, 'on_rest_settings_patch_saved' ) );
 	}
 
 	/**
@@ -736,6 +737,12 @@ final class CloudflareModule extends Module {
 		}
 		$this->verify_and_record();
 		return $response;
+	}
+
+	public function on_rest_settings_patch_saved( string $slug ): void {
+		if ( self::SLUG === $slug ) {
+			$this->verify_and_record();
+		}
 	}
 
 	public function rest_verify( \WP_REST_Request $request ) {

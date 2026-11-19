@@ -333,6 +333,9 @@ final class Migration {
 	 */
 	public static function preview_notes( string $source_id, array $raw ): array {
 		$notes = array();
+		if ( 'wp-rocket' === $source_id && ! empty( $raw['defer_all_js'] ) && self::has_nonblank_list_entry( $raw['exclude_defer_js'] ?? array() ) ) {
+			$notes[] = __( "WP Rocket's Defer JS exclusions were not imported, so this import does not turn on Also defer jQuery and inline scripts. If that option is already on, it stays on. Check it against those exclusions.", 'xspeed' );
+		}
 
 		if ( 'w3-total-cache' === $source_id && isset( $raw['pgcache.lifetime'] ) ) {
 			$seconds = (int) $raw['pgcache.lifetime'];
@@ -954,7 +957,8 @@ final class Migration {
 	 * @param array $r raw wp_rocket_settings.
 	 */
 	public static function plan_wp_rocket( array $r ): array {
-		$patch = array();
+		$patch    = array();
+		$defer_js = ! empty( $r['defer_all_js'] );
 		// Page caching.
 		// WP Rocket has no master on/off switch — installing and activating it
 		// IS enabling page caching, so a detected settings blob means the
@@ -983,12 +987,13 @@ final class Migration {
 
 		// Minify.
 		$patch['minify'] = array(
-			'minify_html' => ! empty( $r['minify_html'] ),
-			'minify_css'  => ! empty( $r['minify_css'] ),
-			'minify_js'   => ! empty( $r['minify_js'] ),
-			'combine_css' => ! empty( $r['minify_concatenate_css'] ),
-			'combine_js'  => ! empty( $r['minify_concatenate_js'] ),
-			'defer_js'    => ! empty( $r['defer_all_js'] ),
+			'minify_html'     => ! empty( $r['minify_html'] ),
+			'minify_css'      => ! empty( $r['minify_css'] ),
+			'minify_js'       => ! empty( $r['minify_js'] ),
+			'combine_css'     => ! empty( $r['minify_concatenate_css'] ),
+			'combine_js'      => ! empty( $r['minify_concatenate_js'] ),
+			'defer_js'        => $defer_js,
+			'defer_inline_js' => $defer_js && ! self::has_nonblank_list_entry( $r['exclude_defer_js'] ?? array() ),
 		);
 
 		// Lazy load.
@@ -1045,6 +1050,23 @@ final class Migration {
 		}
 
 		return $patch;
+	}
+
+	/**
+	 * Whether a source list contains an exclusion or an unrecognized value.
+	 *
+	 * @param mixed $values Source list.
+	 */
+	private static function has_nonblank_list_entry( $values ): bool {
+		if ( ! is_array( $values ) ) {
+			$values = array( $values );
+		}
+		foreach ( $values as $value ) {
+			if ( ! is_string( $value ) || '' !== trim( $value ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// ─────────────────────────── W3 Total Cache ──────────────────────
@@ -1638,8 +1660,9 @@ final class Migration {
 			// so 2 must set delay_js INSTEAD of defer_js — the old mapping set
 			// both, turning one LiteSpeed choice into two xSpeed transforms
 			// that fight each other. (#217)
-			'defer_js'             => isset( $r['optm-js_defer'] ) && 1 === (int) $r['optm-js_defer'],
-			'delay_js'             => isset( $r['optm-js_defer'] ) && 2 === (int) $r['optm-js_defer'],
+			'defer_js'             => in_array( $r['optm-js_defer'] ?? null, array( 1, '1' ), true ),
+			'defer_inline_js'      => in_array( $r['optm-js_defer'] ?? null, array( 1, '1' ), true ),
+			'delay_js'             => in_array( $r['optm-js_defer'] ?? null, array( 2, '2' ), true ),
 			// Async/“load CSS asynchronously” — LiteSpeed CCSS async.
 			'async_css'            => $on( 'optm-css_async' ),
 			// Remove query strings from static resources.

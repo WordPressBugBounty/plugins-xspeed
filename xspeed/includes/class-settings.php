@@ -494,14 +494,11 @@ class Settings {
 	 * the matrix are checked; compression and browser caching have none.
 	 */
 	private static function seed_is_refused( string $slug, string $setting ): bool {
-		$keys = array(
-			'minify' => array(
-				'minify_html' => 'minify.html',
-				'minify_css'  => 'minify.css',
-			),
-		);
-		$feature = $keys[ $slug ][ $setting ] ?? null;
-		if ( null === $feature || ! class_exists( __NAMESPACE__ . '\\Conflict_Registry' ) ) {
+		if ( ! class_exists( __NAMESPACE__ . '\\Conflict_Registry' ) ) {
+			return false;
+		}
+		$feature = Conflict_Registry::feature_for( $slug, $setting );
+		if ( null === $feature ) {
 			return false;
 		}
 		return Conflict_Registry::STRATEGY_REFUSE === Conflict_Registry::strategy_for( $feature );

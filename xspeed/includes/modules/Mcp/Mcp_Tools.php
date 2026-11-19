@@ -241,19 +241,23 @@ final class Mcp_Tools {
 				'handler'     => array( self::class, 'get_settings' ),
 			),
 			'update_settings'  => array(
-				'description' => 'Update settings for a given xSpeed module. "values" is an object of setting keys to new values; unknown keys are stripped and invalid values rejected by the module schema.',
+				'description' => 'Update settings for a given xSpeed module. "values" is an object of setting keys to new values; unknown keys are stripped and invalid values rejected by the module schema. To change several modules in one call, pass "patch" instead of "module" and "values": every module is checked first, and nothing is written unless all of them pass.',
 				'inputSchema' => self::object_schema(
 					array(
 						'module' => array(
 							'type'        => 'string',
-							'description' => 'The module slug, e.g. "minify".',
+							'description' => 'The module slug, e.g. "minify". Required unless "patch" is given.',
 						),
 						'values' => array(
 							'type'        => 'object',
-							'description' => 'Map of setting keys to new values.',
+							'description' => 'Map of setting keys to new values. Required unless "patch" is given.',
+						),
+						'patch'  => array(
+							'type'        => 'object',
+							'description' => 'Map of module slugs to maps of setting keys to new values, e.g. {"minify":{"minify_css":true},"lazy":{"lazy_images":true}}. Use instead of "module" and "values".',
 						),
 					),
-					array( 'module', 'values' )
+					array()
 				),
 				'write'       => true,
 				'handler'     => array( self::class, 'update_settings' ),
@@ -1762,31 +1766,7 @@ final class Mcp_Tools {
 	 * would remove the only surface that can fix an expired licence.
 	 */
 	private static function settings_module_reachable( string $slug ): bool {
-		$module = \XSpeed\Module_Registry::available()[ $slug ] ?? null;
-		if ( ! $module ) {
-			return false;
-		}
-		if ( \XSpeed\Module::TIER_PRO !== $module->tier() || 'license' === $slug ) {
-			return true;
-		}
-
-		// Ask the SAME question the dashboard asks. `xspeed_pro_licensed` is
-		// only ever APPLIED by Pro as an override hook — nothing registers it
-		// — so calling it here returned the default `true` and gated nothing.
-		// Pro DOES register `xspeed_module_descriptor`, and sets
-		// `locked => 'license'` on every Pro entry when the licence is
-		// inactive. Reusing that keeps one definition of "locked" instead of
-		// a second one in Free that can drift from the panel. (QA M2)
-		$entry = apply_filters(
-			'xspeed_module_descriptor',
-			array(
-				'slug' => $slug,
-				'tier' => $module->tier(),
-			),
-			$module
-		);
-
-		return empty( $entry['locked'] );
+		return Settings_Manager::is_reachable( $slug );
 	}
 
 	/**
@@ -1843,12 +1823,17 @@ final class Mcp_Tools {
 	}
 
 	/**
-	 * Update a module's settings (schema-validated).
+	 * Update a module's settings (schema-validated), or several modules at
+	 * once with a settings patch.
 	 *
-	 * @param array $args { module:string, values:array }.
+	 * @param array $args { module:string, values:array } or { patch:array }.
 	 * @return array|\WP_Error
 	 */
 	public static function update_settings( array $args ) {
+		if ( isset( $args['patch'] ) ) {
+			return self::update_settings_patch( $args );
+		}
+
 		$module = isset( $args['module'] ) ? (string) $args['module'] : '';
 		$values = $args['values'] ?? null;
 		if ( '' === $module ) {
@@ -1865,135 +1850,146 @@ final class Mcp_Tools {
 				array( 'status' => 400 )
 			);
 		}
-		if ( ! self::settings_module_reachable( $module ) ) {
+
+		$result = Settings_Manager::save( array( $module => $values ), self::settings_write_policy() );
+		$entry  = $result['modules'][ $module ];
+		if ( ! $entry['ok'] ) {
+			return self::settings_refusal_error( $module, $entry['code'], $entry['data'] );
+		}
+		return self::settings_payload( $module, $entry['settings'] );
+	}
+
+	/**
+	 * `update_settings` with a settings patch: every module is checked before
+	 * anything is written, and one refusal means nothing is written.
+	 *
+	 * @param array $args { patch:array }.
+	 * @return array|\WP_Error
+	 */
+	private static function update_settings_patch( array $args ) {
+		if ( isset( $args['module'] ) || isset( $args['values'] ) ) {
 			return new \WP_Error(
-				'xspeed_mcp_unknown_module',
-				sprintf(
-					/* translators: %s: module slug. */
-					__( 'Unknown module "%s".', 'xspeed' ),
-					$module
-				),
-				array( 'status' => 404 )
+				'xspeed_mcp_bad_patch',
+				__( 'Pass either "module" and "values", or "patch", not both.', 'xspeed' ),
+				array( 'status' => 400 )
 			);
 		}
-		// Writing credentials over MCP requires the explicit `configure` grant —
-		// off by default even for a write-scoped connection — so an agent can't
-		// silently repoint the Cloudflare/object-cache backend at an attacker
-		// endpoint. Refuse with a message naming exactly which fields need it.
-		// (Settings_Manager::update also strips these as a backstop covering the
-		// run_command → CLI path.) (#116)
-		if ( ! self::can_configure() ) {
-			$secret_fields = Settings_Manager::secret_keys_in( $module, $values );
-			if ( ! empty( $secret_fields ) ) {
-				return new \WP_Error(
-					'xspeed_mcp_configure_required',
-					sprintf(
-						/* translators: 1: comma-separated field names, 2: module slug. */
-						__( 'Writing credential fields (%1$s) on "%2$s" needs the "configure" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these credentials from the xSpeed dashboard.', 'xspeed' ),
-						implode( ', ', $secret_fields ),
-						$module
-					),
-					array(
-						'status'         => 403,
-						'refused_fields' => $secret_fields,
-					)
+		$patch = $args['patch'];
+		if ( ! Settings_Manager::is_patch( $patch ) ) {
+			return new \WP_Error(
+				'xspeed_mcp_bad_patch',
+				__( 'The "patch" parameter must be an object of module slugs, each holding an object of setting keys.', 'xspeed' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$result = Settings_Manager::save( $patch, self::settings_write_policy( true ) );
+		if ( ! $result['ok'] ) {
+			$parts   = array();
+			$modules = array();
+			foreach ( $result['modules'] as $slug => $entry ) {
+				if ( $entry['ok'] ) {
+					continue;
+				}
+				$error            = self::settings_refusal_error( (string) $slug, $entry['code'], $entry['data'] );
+				// The batch message already opens with "Nothing was saved.", so a
+				// module's own "nothing was written" would say it twice (QA on
+				// 1.4.9). A schema refusal gives its reasons alone.
+				$parts[]          = $slug . ': ' . ( self::is_inspect_report( $entry['data'] )
+					? self::inspect_reasons( (string) $slug, $entry['data'] )
+					: preg_replace( '/^Nothing was saved\.\s*/', '', $error->get_error_message() ) );
+				$modules[ $slug ] = array(
+					'code'    => $error->get_error_code(),
+					'message' => $error->get_error_message(),
+					'data'    => $error->get_error_data(),
 				);
 			}
+			return new \WP_Error(
+				'xspeed_settings_refused',
+				sprintf(
+					/* translators: %s: each refused module with its reason. */
+					__( 'Nothing was saved. %s', 'xspeed' ),
+					implode( ' | ', $parts )
+				),
+				array(
+					'status'  => 400,
+					'modules' => $modules,
+				)
+			);
+		}
+
+		$out = array();
+		foreach ( $result['modules'] as $slug => $entry ) {
+			$out[ $slug ] = self::settings_payload( (string) $slug, $entry['settings'] );
+		}
+		return array( 'modules' => $out );
+	}
+
+	/**
+	 * The checks an MCP settings write runs, in the order it has always run
+	 * them.
+	 *
+	 * @param bool $patch Whether this is a multi-module patch.
+	 * @return array<string,mixed> A Settings_Manager::save() policy.
+	 */
+	private static function settings_write_policy( bool $patch = false ): array {
+		$checks = array( 'reachable' );
+		// A patch refuses turning on a feature an active plugin refuses, as
+		// the REST batch does (IMPLEMENTATION.md §6.2). A single-module write
+		// does not check conflicts, as before.
+		if ( $patch ) {
+			$checks[] = 'conflict';
+		}
+		// Writing credentials over MCP requires the explicit `configure` grant,
+		// off by default even for a write-scoped connection, so an agent can't
+		// silently repoint the Cloudflare/object-cache backend at an attacker
+		// endpoint. (Settings_Manager::update also strips these as a backstop
+		// covering the run_command → CLI path.) (#116)
+		if ( ! self::can_configure() ) {
+			$checks[] = 'secrets';
 		}
 		// Consent fields can be withdrawn over MCP but never granted.
 		// Settings_Manager::update() drops them as the backstop; say so here
 		// instead of reporting a save that silently skipped the field.
-		$consent_fields = Settings_Manager::consent_grants_in( $module, $values );
-		if ( ! empty( $consent_fields ) ) {
-			return new \WP_Error(
-				'xspeed_mcp_consent_owner_only',
-				sprintf(
-					/* translators: 1: comma-separated field names, 2: module slug. */
-					__( 'Turning on %1$s in "%2$s" records the site owner\'s consent, so it can\'t be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed.', 'xspeed' ),
-					implode( ', ', $consent_fields ),
-					$module
-				),
-				array(
-					'status'         => 403,
-					'refused_fields' => $consent_fields,
-				)
-			);
-		}
+		$checks[] = 'consent';
 		// A field another setting holds (Settings_Manager::managed()). update()
 		// drops the write as a backstop, which would return success over a
 		// partial save, so refuse the whole request here, as REST and the CLI
 		// do. An echo of the held value is not a change and passes.
-		$held_fields = Settings_Manager::managed_in_input( $module, $values );
-		if ( ! empty( $held_fields ) ) {
-			$pairs = array();
-			foreach ( $held_fields as $field => $by ) {
-				$pairs[] = $field . ' (' . $by . ')';
-			}
-			return new \WP_Error(
-				'xspeed_setting_managed',
-				sprintf(
-					/* translators: %s: comma-separated list of "field (setting that holds it)" pairs. */
-					__( 'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them.', 'xspeed' ),
-					implode( ', ', $pairs )
-				),
-				array(
-					'status'         => 409,
-					'refused_fields' => $held_fields,
-				)
-			);
-		}
-		// The Pro licence WRITE gate. `settings_module_reachable()` above already
-		// hides locked Pro modules, but that is a VISIBILITY check answered by
-		// the `xspeed_module_descriptor` filter — a different question from "may
-		// this be written", and one that drifts the moment Pro changes how it
-		// flags `locked`. Ask the write gate itself, the same one REST consults
-		// via Module::update_settings(), so the two can't disagree.
-		//
-		// This is not theoretical: with the descriptor's `locked` flag removed,
-		// this handler wrote `enabled: false -> true` to a module whose
-		// is_license_locked() was true, because it persists through
-		// Settings_Manager::update() and never reaches Module::update_settings().
-		// (#185)
-		$module_object = \XSpeed\Module_Registry::get( $module );
-		if ( $module_object && $module_object->is_license_locked() ) {
-			// Match the REST path's audit trail — a refused write is a security
-			// event and must be visible in the activity log wherever it came
-			// from. Module::license_write_refusal() records the same type.
-			\XSpeed\Activity_Log::record(
-				'license_write_refused',
-				sprintf(
-					/* translators: %s: module slug. */
-					__( 'Refused an MCP settings write to the Pro module "%s" — no valid license.', 'xspeed' ),
-					$module
-				),
-				\XSpeed\Activity_Log::WARN
-			);
-
-			return new \WP_Error(
-				'xspeed_license_required',
-				sprintf(
-					/* translators: %s: module slug. */
-					__( '"%s" is a Pro module and this site has no active license, so the write was refused. Nothing was changed.', 'xspeed' ),
-					$module
-				),
-				array(
-					'status' => 403,
-					'module' => $module,
-				)
-			);
-		}
-
+		$checks[] = 'managed';
+		// The Pro licence WRITE gate. The reachability check above hides locked
+		// Pro modules, but that is a VISIBILITY check answered by the
+		// `xspeed_module_descriptor` filter, which drifts the moment Pro changes
+		// how it flags `locked`. This asks the write gate itself, the same one
+		// REST consults via Module::update_settings(). With only the descriptor
+		// check, this handler wrote `enabled: false -> true` to a module whose
+		// is_license_locked() was true. (#185)
+		$checks[] = 'license';
 		// An agent cannot tell a silent no-op from a real write, so refuse
-		// instead of returning a success payload. update() walks the schema:
-		// an out-of-schema key is never written and never mentioned, and an
-		// in-schema key with a rejected value quietly keeps the stored one.
-		// The realistic case is `cache_enabled` on the `cache` module — the
-		// most natural way to ask for caching, and a complete no-op. (#206)
-		$report = self::inspect_or_error( $module, $values );
-		if ( is_wp_error( $report ) ) {
-			return $report;
-		}
+		// instead of returning a success payload. update() drops an
+		// out-of-schema key, keeps the stored value for a rejected one (#206),
+		// and drops a field pinned by a wp-config.php constant (#398).
+		$checks[] = 'inspect';
 
+		return array(
+			'mode'        => 'strict',
+			'checks'      => $checks,
+			/* translators: %s: module slug. */
+			'license_log' => __( 'Refused an MCP settings write to the Pro module "%s" — no valid license.', 'xspeed' ),
+			'refuse'      => array( 'unknown', 'invalid', 'locked' ),
+			'write'       => 'update',
+		);
+	}
+
+	/**
+	 * The response for one module's successful write.
+	 *
+	 * @param array<string,mixed> $settings What update() returned: the public
+	 *                                      view, so a written secret isn't
+	 *                                      echoed back. (#115)
+	 * @return array<string,mixed>
+	 */
+	private static function settings_payload( string $module, array $settings ): array {
 		/**
 		 * Filter the update_settings MCP payload for one module.
 		 *
@@ -2011,9 +2007,7 @@ final class Mcp_Tools {
 			'xspeed_mcp_settings_payload',
 			array(
 				'module'   => $module,
-				// Return value is already masked (Settings_Manager::update returns the
-				// public view), so a written secret isn't echoed back either. (#115)
-				'settings' => Settings_Manager::update( $module, $values ),
+				'settings' => $settings,
 			),
 			$module,
 			'update'
@@ -2021,18 +2015,108 @@ final class Mcp_Tools {
 	}
 
 	/**
-	 * Refuse a settings payload carrying keys that would be silently dropped.
+	 * The WP_Error for a module that Settings_Manager::save() refused.
 	 *
 	 * @param string              $module Module slug.
-	 * @param array<string,mixed> $values Proposed values.
-	 * @return true|\WP_Error True when every key would be applied.
+	 * @param string              $code   save() refusal code.
+	 * @param array<string,mixed> $data   save() refusal data.
 	 */
-	private static function inspect_or_error( string $module, array $values ) {
-		$report = Settings_Manager::inspect_input( $module, $values );
-		if ( empty( $report['unknown'] ) && empty( $report['invalid'] ) && empty( $report['locked'] ) ) {
-			return true;
-		}
+	private static function settings_refusal_error( string $module, string $code, array $data ): \WP_Error {
+		switch ( $code ) {
+			case 'unknown_module':
+				return new \WP_Error(
+					'xspeed_mcp_unknown_module',
+					sprintf(
+						/* translators: %s: module slug. */
+						__( 'Unknown module "%s".', 'xspeed' ),
+						$module
+					),
+					array( 'status' => 404 )
+				);
 
+			case 'conflict':
+				return new \WP_Error(
+					'xspeed_conflict_refused',
+					(string) $data['reason'],
+					array(
+						'status' => 409,
+						'field'  => (string) $data['field'],
+					)
+				);
+
+			case 'secret_fields':
+				return new \WP_Error(
+					'xspeed_mcp_configure_required',
+					sprintf(
+						/* translators: 1: comma-separated field names, 2: module slug. */
+						__( 'Writing credential fields (%1$s) on "%2$s" needs the "configure" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these credentials from the xSpeed dashboard.', 'xspeed' ),
+						implode( ', ', (array) $data['fields'] ),
+						$module
+					),
+					array(
+						'status'         => 403,
+						'refused_fields' => $data['fields'],
+					)
+				);
+
+			case 'consent_grant':
+				return new \WP_Error(
+					'xspeed_mcp_consent_owner_only',
+					sprintf(
+						/* translators: 1: comma-separated field names, 2: module slug. */
+						__( 'Turning on %1$s in "%2$s" records the site owner\'s consent, so it can\'t be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed.', 'xspeed' ),
+						implode( ', ', (array) $data['fields'] ),
+						$module
+					),
+					array(
+						'status'         => 403,
+						'refused_fields' => $data['fields'],
+					)
+				);
+
+			case 'managed':
+				$pairs = array();
+				foreach ( (array) $data['fields'] as $field => $by ) {
+					$pairs[] = $field . ' (' . $by . ')';
+				}
+				return new \WP_Error(
+					'xspeed_setting_managed',
+					sprintf(
+						/* translators: %s: comma-separated list of "field (setting that holds it)" pairs. */
+						__( 'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them.', 'xspeed' ),
+						implode( ', ', $pairs )
+					),
+					array(
+						'status'         => 409,
+						'refused_fields' => $data['fields'],
+					)
+				);
+
+			case 'license_locked':
+				return new \WP_Error(
+					'xspeed_license_required',
+					sprintf(
+						/* translators: %s: module slug. */
+						__( '"%s" is a Pro module and this site has no active license, so the write was refused. Nothing was changed.', 'xspeed' ),
+						$module
+					),
+					array(
+						'status' => 403,
+						'module' => $module,
+					)
+				);
+		}
+		return self::inspect_error( $module, $data );
+	}
+
+	/**
+	 * Why each refused key was refused, without the "nothing was written"
+	 * lead-in, so a batch refusal can name them under its own.
+	 *
+	 * @param string              $module Module slug.
+	 * @param array<string,mixed> $report Settings_Manager::inspect_input() report.
+	 */
+	private static function inspect_reasons( string $module, array $report ): string {
 		$parts = array();
 		// A field pinned by a wp-config.php constant cannot be written. Say so
 		// rather than returning a success the agent relays as "changed" over a
@@ -2077,13 +2161,30 @@ final class Mcp_Tools {
 			);
 		}
 
+		return implode( '; ', $parts );
+	}
+
+	/** Whether save() refusal data is a Settings_Manager::inspect_input() report. */
+	private static function is_inspect_report( $data ): bool {
+		return is_array( $data ) && isset( $data['unknown'], $data['invalid'], $data['locked'] );
+	}
+
+	/**
+	 * The refusal for a settings payload carrying keys that would be silently
+	 * dropped.
+	 *
+	 * @param string              $module Module slug.
+	 * @param array<string,mixed> $report Settings_Manager::inspect_input() report.
+	 */
+	private static function inspect_error( string $module, array $report ): \WP_Error {
+		$reasons = self::inspect_reasons( $module, $report );
 		return new \WP_Error(
 			'xspeed_settings_refused',
 			sprintf(
 				/* translators: 1: module slug, 2: reasons. */
 				__( 'Refused to update %1$s — nothing was written. %2$s', 'xspeed' ),
 				$module,
-				implode( '; ', $parts )
+				$reasons
 			),
 			array(
 				'status'          => 400,

@@ -10,6 +10,14 @@
  *     site-defined list of font files so the LCP-critical face starts
  *     downloading at parser-discovery time, not after the CSS parses.
  *
+ * Two opt-in behaviors, off unless the setup wizard or the admin turns
+ * them on:
+ *   - `async_google_css` loads font-CSS links (Google Fonts, Bunny,
+ *     Typekit) without blocking the first paint, from the page buffer.
+ *     Icon-font links stay blocking. See Minify_Filters::async_google_font_css().
+ *   - `display_swap_in_css` adds font-display: swap to the @font-face rules
+ *     of the CSS that xSpeed minifies. See Font_Display::force_swap().
+ *
  * Pro adds self-hosting (OMGF-style download/serve) and subsetting —
  * those live in xspeed-pro and are surfaced through the manifest.
  *
@@ -28,7 +36,7 @@ final class FontsModule extends Module {
 
 	public const SLUG    = 'fonts';
 	public const TIER    = self::TIER_FREE;
-	public const VERSION = '1.0.0';
+	public const VERSION = '1.1.0';
 
 	public function ui_metadata(): array {
 		return array(
@@ -41,19 +49,89 @@ final class FontsModule extends Module {
 
 	public function settings_schema(): array {
 		return array(
-			'font_display_swap' => array(
+			'font_display_swap'   => array(
 				'type'        => 'bool',
 				'default'     => true,
 				'label'       => __( 'Show text while fonts load', 'xspeed' ),
 				'description' => __( 'Text in Google Fonts, and in fonts added to WordPress itself, shows at once in a standard font, then switches when the web font arrives.', 'xspeed' ),
 			),
-			'preload_fonts'     => array(
+			'preload_fonts'       => array(
 				'type'        => 'list',
 				'default'     => array(),
 				'item_type'   => 'url',
 				'label'       => __( 'Fonts to preload', 'xspeed' ),
 				'description' => __( 'One full font file URL per line (woff2, woff, ttf or otf). The browser fetches these first, so list only fonts used at the top of the page.', 'xspeed' ),
 			),
+			'async_google_css'    => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Load Google Fonts without blocking', 'xspeed' ),
+				'description' => __( 'The page no longer waits for the Google Fonts stylesheet (or Bunny Fonts, Adobe Fonts or CDNFonts) before it paints. Text shows in a standard font first, and the font stylesheet loads at low priority. Icon fonts such as Material Icons load as before. Applies to pages the page cache stores.', 'xspeed' ),
+			),
+			'display_swap_in_css' => array(
+				'type'        => 'bool',
+				'default'     => false,
+				'label'       => __( 'Show text while theme and plugin fonts load', 'xspeed' ),
+				'description' => __( 'Fonts that a theme or plugin declares in its own stylesheets show text at once in a standard font, then switch when the font arrives. Stylesheet files change only with Minify CSS on. Fonts declared in inline styles on the page change only with Minify HTML on. Fonts that already set font-display, and icon fonts, are left as they are.', 'xspeed' ),
+			),
+		);
+	}
+
+	/**
+	 * Say when a font switch is on but the feature it works through is off,
+	 * so the switch changes nothing. Both read "on" while doing nothing, and
+	 * only the long description said why (QA on 1.4.9).
+	 *
+	 * @return array<int,array<string,string>>
+	 */
+	public function ui_notices(): array {
+		$opts    = $this->get_settings();
+		$notices = array();
+		if ( ! empty( $opts['display_swap_in_css'] ) ) {
+			$minify = \XSpeed\Settings_Manager::get( 'minify' );
+			if ( empty( $minify['minify_css'] ) && empty( $minify['minify_html'] ) ) {
+				$notices[] = array(
+					'tone'  => 'warn',
+					'title' => __( 'Theme and plugin fonts are not changed yet', 'xspeed' ),
+					'body'  => __( '"Show text while theme and plugin fonts load" works on the CSS that Minify CSS or Minify HTML processes, and both are off. Turn one of them on under Minify.', 'xspeed' ),
+				);
+			}
+		}
+		if ( ! empty( $opts['async_google_css'] ) && ! self::page_cache_on() ) {
+			$notices[] = array(
+				'tone'  => 'warn',
+				'title' => __( 'Google Fonts still block the page', 'xspeed' ),
+				'body'  => __( '"Load Google Fonts without blocking" changes the pages the page cache stores, and the page cache is off. Turn on the page cache to use it.', 'xspeed' ),
+			);
+		}
+		return $notices;
+	}
+
+	/** Whether the page cache is on, read the way the cache reads it. */
+	private static function page_cache_on(): bool {
+		$legacy = \XSpeed\Settings_Manager::get( 'legacy' );
+		if ( is_array( $legacy ) && ! empty( $legacy['cache_enabled'] ) ) {
+			return true;
+		}
+		$opts = get_option( 'xspeed_options' );
+		return is_array( $opts ) && ! empty( $opts['cache_enabled'] );
+	}
+
+	/**
+	 * 1.1.0 added `async_google_css` and `display_swap_in_css`. A row saved
+	 * before then gets both, off, so an upgraded site behaves as it did. A
+	 * key already in the row keeps its value.
+	 */
+	public function migrations(): array {
+		return array(
+			'1.1.0' => static function ( array $opts ): array {
+				foreach ( array( 'async_google_css', 'display_swap_in_css' ) as $key ) {
+					if ( ! array_key_exists( $key, $opts ) ) {
+						$opts[ $key ] = false;
+					}
+				}
+				return $opts;
+			},
 		);
 	}
 
@@ -114,6 +192,15 @@ final class FontsModule extends Module {
 				remove_action( 'wp_head', 'wp_print_font_faces', 50 );
 				add_action( 'wp_head', array( __CLASS__, 'print_font_faces_swap' ), 50 );
 			}
+		}
+
+		if ( ! empty( $opts['async_google_css'] ) ) {
+			// Theme and plugin font links are mostly printed as literal
+			// <link> markup that style_loader_tag never sees, so this runs
+			// on the finished page buffer. Priority 22, the same slot as the
+			// Async CSS font pass: whichever runs second skips the links the
+			// first one marked.
+			add_filter( 'xspeed_cache_final_html', array( \XSpeed\Minify_Filters::class, 'async_google_font_css' ), 22 );
 		}
 
 		if ( ! empty( $opts['preload_fonts'] ) ) {
@@ -283,7 +370,7 @@ final class FontsModule extends Module {
 				'risk'      => 'read',
 				'callback'  => array( $this, 'cli_handler' ),
 				'shortdesc' => 'Show font-optimization settings.',
-				'ai_hint'   => 'How are web fonts being optimized (font-display swap, preloading, local hosting)? Use for questions about invisible text while loading (FOIT/FOUT) or render-blocking fonts.',
+				'ai_hint'   => 'How are web fonts being optimized (font-display swap, swap in minified CSS, non-blocking Google Fonts CSS, preloading, local hosting)? Use for questions about invisible text while loading (FOIT/FOUT) or render-blocking fonts.',
 				'synopsis'  => array(),
 			),
 		);
@@ -293,5 +380,7 @@ final class FontsModule extends Module {
 		$opts = $this->get_settings();
 		\WP_CLI::log( sprintf( '%-22s %s', 'font_display_swap', ! empty( $opts['font_display_swap'] ) ? 'on' : 'off' ) );
 		\WP_CLI::log( sprintf( '%-22s %d url(s)', 'preload_fonts', count( (array) ( $opts['preload_fonts'] ?? array() ) ) ) );
+		\WP_CLI::log( sprintf( '%-22s %s', 'async_google_css', ! empty( $opts['async_google_css'] ) ? 'on' : 'off' ) );
+		\WP_CLI::log( sprintf( '%-22s %s', 'display_swap_in_css', ! empty( $opts['display_swap_in_css'] ) ? 'on' : 'off' ) );
 	}
 }

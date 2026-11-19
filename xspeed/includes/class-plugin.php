@@ -15,7 +15,7 @@ class Plugin {
 	 * Data-schema version for one-time migrations, independent of the
 	 * plugin version header. Bump when adding a step to maybe_upgrade().
 	 */
-	public const DATA_VERSION = '1.4.6';
+	public const DATA_VERSION = '1.4.9';
 
 	private static $instance = null;
 
@@ -290,6 +290,28 @@ class Plugin {
 			update_option( 'xspeed_oc_reclaim_queued_1_4_6', 1, false );
 		}
 
+		// 1.4.9: Turbo Render is on by default for a site that never saved it
+		// (#841). Pages cached before the update carry none of it, and with
+		// "Clear cache after updates" off nothing rebuilds them until they
+		// expire, while the panel already says it is on. Purge once. A site
+		// older than 1.4.3 skips this: the 1.4.3 step below purges anyway.
+		// Checked on `init`, where the conflict scan can see other plugins.
+		// The flag keeps it to one purge: the data version stays put while
+		// Edge_Hold_Health cannot initialize, and maybe_upgrade() runs again
+		// on every request until it can.
+		if ( version_compare( $current, '1.4.9', '<' ) && version_compare( $current, '1.4.3', '>=' ) && ! get_option( 'xspeed_turbo_default_purged_1_4_9' ) ) {
+			update_option( 'xspeed_turbo_default_purged_1_4_9', 1, false );
+			add_action(
+				'init',
+				static function () {
+					if ( Modules\TurboRender\TurboRenderModule::on_by_default() ) {
+						Cache::purge_all( 'Turbo Render turned on by the new default' );
+					}
+				},
+				99
+			);
+		}
+
 		// 1.4.3 — the lazy loader rewrote an autoplay video's src through a
 		// regex replacement that read `$1` in the value as a backreference,
 		// so crafted post content could render as live markup. The rewrite is
@@ -300,6 +322,9 @@ class Plugin {
 		// page was cached. Deferred to `init` for the reason the 1.1.6 step
 		// gives.
 		if ( version_compare( $current, '1.4.3', '<' ) ) {
+			// This full purge also covers the 1.4.9 Turbo Render step above,
+			// which a retry from 1.4.3 would otherwise reach.
+			update_option( 'xspeed_turbo_default_purged_1_4_9', 1, false );
 			// Record the steps above as done before the purge is scheduled.
 			// The purge can stay pending across requests, and the steps
 			// above must not run again with it (the 1.1.6 sweep would clear

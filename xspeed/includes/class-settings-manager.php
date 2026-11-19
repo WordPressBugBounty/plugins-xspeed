@@ -1593,6 +1593,361 @@ final class Settings_Manager {
 	}
 
 	/**
+	 * Check a settings patch and write it: changes to one or more modules,
+	 * keyed by module slug.
+	 *
+	 * Each settings surface (the CLI `settings update`, the MCP
+	 * `update_settings` tool, the REST saves) used to run its own copy of the
+	 * same checks. They now pass a policy here instead. The policy names the
+	 * checks a surface runs and their order, so each surface keeps the checks,
+	 * the order and therefore the error it reported before. save() produces no
+	 * text a person reads: it returns a code and the data for each module, and
+	 * the surface words the message as it always has.
+	 *
+	 * Policy keys:
+	 * - `mode`: `strict` runs every check on every module before any write and
+	 *   writes nothing if one fails. `lenient` checks and writes each module on
+	 *   its own.
+	 * - `checks`: the checks to run, in order. `reachable` (the module exists
+	 *   and is not hidden as a locked Pro module), `conflict` (no field
+	 *   is turned from off to on whose feature key, from
+	 *   Conflict_Registry::feature_for(), an active plugin refuses),
+	 *   `secrets` (the patch holds
+	 *   no credential field), `consent` (an MCP call grants no consent
+	 *   field), `license` (the module is not licence-locked), `blocked` (a
+	 *   write that turns the module on, while another module has taken over
+	 *   from it), `constant` (no field pinned by wp-config.php is changed,
+	 *   with an echo of the value in effect allowed), `managed` (no field held
+	 *   by another setting is changed, echoes allowed), `inspect` (unknown,
+	 *   invalid or pinned keys, as `refuse` lists) and `module` (the
+	 *   module's own Module::settings_refusal(), such as Object Cache's Redis
+	 *   login test).
+	 * - `license_log`: the Activity Log message for a licence refusal, with one
+	 *   `%s` for the slug, or '' to log nothing.
+	 * - `refuse`: which `inspect` findings refuse the module: `unknown`,
+	 *   `invalid`, `locked`.
+	 * - `keep_echoes`: an invalid value equal to the one in effect asks for no
+	 *   change, so `inspect` does not count it (#464).
+	 * - `write`: `update` writes with update(). `module` writes with
+	 *   Module::update_settings(), which carries the silent licence gate.
+	 * - `instances`: module slug => Module, for a caller that is itself the
+	 *   module (a REST handler). The licence check and a `module` write use
+	 *   that object instead of the registry's.
+	 *
+	 * Every write goes through update(), directly or through the module, so
+	 * the credential backstop for MCP (#116), encryption, preserved keys, the
+	 * change log and `xspeed_settings_saved` all apply as before.
+	 *
+	 * @param array<string,array<string,mixed>> $patch  Module slug => values.
+	 * @param array<string,mixed>               $policy See above.
+	 * @return array{ok:bool,modules:array<string,array{ok:bool,code:string,data:array<string,mixed>,written:bool,settings:array<string,mixed>}>}
+	 */
+	public static function save( array $patch, array $policy ): array {
+		$policy = array_merge(
+			array(
+				'mode'        => 'strict',
+				'checks'      => array(),
+				'license_log' => '',
+				'refuse'      => array(),
+				'keep_echoes' => false,
+				'write'       => 'update',
+				'instances'   => array(),
+			),
+			$policy
+		);
+
+		$results = array();
+		foreach ( $patch as $slug => $values ) {
+			$slug    = (string) $slug;
+			$values  = is_array( $values ) ? $values : array();
+			$refusal = self::check_module( $slug, $values, $policy );
+
+			$results[ $slug ] = array(
+				'ok'       => null === $refusal,
+				'code'     => null === $refusal ? '' : $refusal['code'],
+				'data'     => null === $refusal ? array() : $refusal['data'],
+				'written'  => false,
+				'settings' => array(),
+			);
+			if ( null === $refusal && 'lenient' === $policy['mode'] ) {
+				$results[ $slug ]['settings'] = self::write_module( $slug, $values, $policy );
+				$results[ $slug ]['written']  = true;
+			}
+		}
+
+		$ok = ! in_array( false, array_column( $results, 'ok' ), true );
+
+		if ( 'strict' === $policy['mode'] && $ok ) {
+			foreach ( $patch as $slug => $values ) {
+				$slug = (string) $slug;
+
+				$results[ $slug ]['settings'] = self::write_module( $slug, is_array( $values ) ? $values : array(), $policy );
+				$results[ $slug ]['written']  = true;
+			}
+		}
+
+		return array(
+			'ok'      => $ok,
+			'modules' => $results,
+		);
+	}
+
+	/**
+	 * Whether input from a surface is a settings patch: a non-empty object of
+	 * module slug => a non-empty object of setting keys. An empty or list
+	 * value would pass save() as a module that changes nothing, so a
+	 * malformed request would report success.
+	 *
+	 * @param mixed $patch Decoded input.
+	 */
+	public static function is_patch( $patch ): bool {
+		if ( ! is_array( $patch ) || empty( $patch ) ) {
+			return false;
+		}
+		foreach ( $patch as $slug => $values ) {
+			if ( ! is_string( $slug ) || ! is_array( $values ) || empty( $values ) || array_values( $values ) === $values ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether a settings surface may read or write this module.
+	 *
+	 * Registration is not enough. Module_Registry::available() only asks
+	 * whether Pro is LOADED (Tier_Registry::pro_active() checks the
+	 * XSPEED_PRO_API constant), not whether it is LICENSED, so on a site with
+	 * Pro installed and the licence lapsed every Pro module was enumerable,
+	 * readable and writable while the dashboard showed it locked. (QA M2)
+	 *
+	 * The licence answer lives in Pro, which Free must not reference by name,
+	 * so it comes through the `xspeed_module_descriptor` filter Pro's own
+	 * descriptor gate uses. NOT `xspeed_pro_licensed`: Pro only ever APPLIES
+	 * that one as an override and nothing listens to it, so gating on it
+	 * passed everything. With Pro absent the filter is unhooked and the
+	 * default stands.
+	 *
+	 * `license` is exempt for the same reason Pro exempts it: locking the
+	 * licence module on an unlicensed site would remove the only place the
+	 * problem can be fixed.
+	 *
+	 * @param string $slug Module slug.
+	 */
+	public static function is_reachable( string $slug ): bool {
+		$module = Module_Registry::available()[ $slug ] ?? null;
+		if ( ! $module ) {
+			return false;
+		}
+		if ( Module::TIER_PRO !== $module->tier() || 'license' === $slug ) {
+			return true;
+		}
+
+		// Ask the SAME question the dashboard asks: Pro sets
+		// `locked => 'license'` on every Pro entry when the licence is
+		// inactive. Reusing that keeps one definition of "locked" instead of a
+		// second one in Free that can drift from the panel. (QA M2)
+		$entry = apply_filters(
+			'xspeed_module_descriptor',
+			array(
+				'slug' => $slug,
+				'tier' => $module->tier(),
+			),
+			$module
+		);
+
+		return empty( $entry['locked'] );
+	}
+
+	/**
+	 * The invalid keys in a save that ask for a change.
+	 *
+	 * A panel posts its whole settings object back. A value that echoes what
+	 * is already in effect asks for no change, so it is never the reason a
+	 * save is refused, even if the schema would not accept it as new input.
+	 * (#464)
+	 *
+	 * @param string              $slug   Module slug.
+	 * @param array<string,mixed> $input  Proposed values.
+	 * @param string[]            $invalid Keys inspect_input() found invalid.
+	 * @return string[]
+	 */
+	public static function invalid_changes( string $slug, array $input, array $invalid ): array {
+		if ( empty( $invalid ) ) {
+			return array();
+		}
+		$current = self::get( $slug );
+		$out     = array();
+		foreach ( $invalid as $key ) {
+			if ( array_key_exists( $key, $current ) && $input[ $key ] === $current[ $key ] ) {
+				continue;
+			}
+			$out[] = $key;
+		}
+		return $out;
+	}
+
+	/**
+	 * Run the policy's checks on one module, in order.
+	 *
+	 * @param array<string,mixed> $values Proposed values.
+	 * @param array<string,mixed> $policy save() policy.
+	 * @return array{code:string,data:array<string,mixed>}|null Null when every check passes.
+	 */
+	private static function check_module( string $slug, array $values, array $policy ): ?array {
+		foreach ( (array) $policy['checks'] as $check ) {
+			switch ( $check ) {
+				case 'reachable':
+					if ( ! self::is_reachable( $slug ) ) {
+						return array(
+							'code' => 'unknown_module',
+							'data' => array(),
+						);
+					}
+					break;
+
+				case 'conflict':
+					// Only turning a feature on is refused. A panel posts its
+					// whole object back, so a field already on is resent with
+					// every unrelated change and asks for no change. (#464)
+					$current = self::get( $slug );
+					foreach ( $values as $field => $value ) {
+						$feature = Conflict_Registry::feature_for( $slug, (string) $field );
+						if ( null === $feature || ! filter_var( $value, FILTER_VALIDATE_BOOLEAN ) ) {
+							continue;
+						}
+						if ( filter_var( $current[ $field ] ?? false, FILTER_VALIDATE_BOOLEAN ) ) {
+							continue;
+						}
+						$reason = Conflict_Registry::why_blocked( $slug, $feature );
+						if ( null !== $reason ) {
+							return array(
+								'code' => 'conflict',
+								'data' => array(
+									'reason' => $reason,
+									'field'  => (string) $field,
+								),
+							);
+						}
+					}
+					break;
+
+				case 'secrets':
+					$fields = self::secret_keys_in( $slug, $values );
+					if ( ! empty( $fields ) ) {
+						return array(
+							'code' => 'secret_fields',
+							'data' => array( 'fields' => $fields ),
+						);
+					}
+					break;
+
+				case 'license':
+					$module = $policy['instances'][ $slug ] ?? Module_Registry::get( $slug );
+					if ( $module && $module->is_license_locked() ) {
+						if ( '' !== (string) $policy['license_log'] ) {
+							Activity_Log::record(
+								'license_write_refused',
+								sprintf( (string) $policy['license_log'], $slug ),
+								Activity_Log::WARN
+							);
+						}
+						return array(
+							'code' => 'license_locked',
+							'data' => array(),
+						);
+					}
+					break;
+
+				case 'consent':
+					$fields = self::consent_grants_in( $slug, $values );
+					if ( ! empty( $fields ) ) {
+						return array(
+							'code' => 'consent_grant',
+							'data' => array( 'fields' => $fields ),
+						);
+					}
+					break;
+
+				case 'blocked':
+					$module = $policy['instances'][ $slug ] ?? Module_Registry::get( $slug );
+					$reason = ( $module && ! empty( $values['enabled'] ) ) ? $module->blocked_by() : null;
+					if ( null !== $reason ) {
+						return array(
+							'code' => 'blocked',
+							'data' => array( 'reason' => $reason ),
+						);
+					}
+					break;
+
+				case 'managed':
+					$fields = self::managed_in_input( $slug, $values );
+					if ( ! empty( $fields ) ) {
+						return array(
+							'code' => 'managed',
+							'data' => array( 'fields' => $fields ),
+						);
+					}
+					break;
+
+				case 'constant':
+					$fields = self::locked_in_input( $slug, $values );
+					if ( ! empty( $fields ) ) {
+						return array(
+							'code' => 'constant_locked',
+							'data' => array( 'fields' => $fields ),
+						);
+					}
+					break;
+
+				case 'inspect':
+					$report = self::inspect_input( $slug, $values );
+					if ( ! empty( $policy['keep_echoes'] ) ) {
+						$report['invalid'] = self::invalid_changes( $slug, $values, $report['invalid'] );
+					}
+					foreach ( (array) $policy['refuse'] as $finding ) {
+						if ( ! empty( $report[ $finding ] ) ) {
+							return array(
+								'code' => 'refused',
+								'data' => $report,
+							);
+						}
+					}
+					break;
+
+				case 'module':
+					// The module's own refusal, such as Object Cache testing a
+					// changed Redis login before it is stored (#700).
+					$module = $policy['instances'][ $slug ] ?? Module_Registry::get( $slug );
+					$error  = $module ? $module->settings_refusal( $values ) : null;
+					if ( $error instanceof \WP_Error ) {
+						return array(
+							'code' => 'module_refused',
+							'data' => array( 'error' => $error ),
+						);
+					}
+					break;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Write one module that passed its checks.
+	 *
+	 * @param array<string,mixed> $values Values to write.
+	 * @param array<string,mixed> $policy save() policy.
+	 * @return array<string,mixed> What the write returned: the public view.
+	 */
+	private static function write_module( string $slug, array $values, array $policy ): array {
+		if ( 'module' === $policy['write'] ) {
+			$module = $policy['instances'][ $slug ] ?? Module_Registry::get( $slug );
+			return $module ? $module->update_settings( $values ) : array();
+		}
+		return self::update( $slug, $values );
+	}
+
+	/**
 	 * Where a key the caller asked for actually lives, when it isn't in the
 	 * module's schema. Turns "unknown key" into a pointer.
 	 *

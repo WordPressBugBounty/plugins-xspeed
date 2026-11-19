@@ -182,6 +182,148 @@ class Server {
 	}
 
 	/**
+	 * Whether open_basedir lets PHP touch $path at all.
+	 *
+	 * Under open_basedir every stat call on a path outside the allowed trees
+	 * raises "open_basedir restriction in effect", even is_dir() and
+	 * file_exists(), and Query Monitor still shows @-suppressed warnings. So
+	 * the system paths we probe (server logs, /proc, /.dockerenv) are
+	 * checked against the list first and treated as missing. (#867)
+	 *
+	 * Follows PHP's rule: each entry is a directory, not a string prefix, so
+	 * `/var/www` admits `/var/www` and everything below it, but not
+	 * `/var/www2`. `..` segments are resolved before the comparison, as PHP
+	 * does. Symlinks are not followed here: resolving one that points
+	 * outside the list raises the same warning, so the probes themselves run
+	 * through quiet_probe().
+	 *
+	 * @param string      $path         Absolute path to probe.
+	 * @param string|null $open_basedir The ini value; null reads it live.
+	 * @return bool True when no restriction applies or $path is inside one entry.
+	 */
+	public static function path_allowed( string $path, ?string $open_basedir = null ): bool {
+		$open_basedir = null === $open_basedir ? (string) ini_get( 'open_basedir' ) : $open_basedir;
+		if ( '' === $open_basedir ) {
+			return true;
+		}
+		$path = self::normalize_path( $path );
+		if ( '' === $path ) {
+			return false;
+		}
+		foreach ( self::basedir_entries( $open_basedir ) as $base ) {
+			if ( '/' === $base || $path === $base || 0 === strpos( $path, $base . '/' ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The open_basedir entries as absolute directories without a trailing
+	 * slash, each also in its resolved form (`/tmp` and `/private/tmp` on
+	 * macOS), because PHP compares the resolved paths.
+	 *
+	 * @param string $open_basedir The ini value.
+	 * @return string[]
+	 */
+	private static function basedir_entries( string $open_basedir ): array {
+		static $cache = array();
+		if ( isset( $cache[ $open_basedir ] ) ) {
+			return $cache[ $open_basedir ];
+		}
+		$entries = array();
+		foreach ( explode( PATH_SEPARATOR, $open_basedir ) as $base ) {
+			$base = trim( $base );
+			if ( '' === $base ) {
+				continue;
+			}
+			// An entry is always inside the list, so realpath() on it never
+			// warns. A relative entry such as "." resolves against the working
+			// directory, as PHP resolves it.
+			$resolved = realpath( $base );
+			if ( false !== $resolved ) {
+				$entries[] = self::normalize_path( $resolved );
+			}
+			if ( 0 === strpos( $base, '/' ) ) {
+				$entries[] = self::normalize_path( $base );
+			}
+		}
+		$cache[ $open_basedir ] = array_values( array_unique( array_filter( $entries ) ) );
+		return $cache[ $open_basedir ];
+	}
+
+	/**
+	 * Resolve `.` and `..` in an absolute Unix path without touching the
+	 * filesystem. Windows drive paths and relative paths return ''.
+	 *
+	 * @param string $path Path to normalise.
+	 * @return string
+	 */
+	private static function normalize_path( string $path ): string {
+		if ( 0 !== strpos( $path, '/' ) ) {
+			return '';
+		}
+		$parts = array();
+		foreach ( explode( '/', $path ) as $part ) {
+			if ( '' === $part || '.' === $part ) {
+				continue;
+			}
+			if ( '..' === $part ) {
+				array_pop( $parts );
+				continue;
+			}
+			$parts[] = $part;
+		}
+		return '/' . implode( '/', $parts );
+	}
+
+	/**
+	 * Run a filesystem probe with open_basedir warnings swallowed.
+	 *
+	 * path_allowed() cannot see a symlink inside the list that points
+	 * outside it: PHP resolves the link and warns, and even is_link() warns.
+	 * Only open_basedir warnings are swallowed; any other warning goes on to
+	 * PHP's own handler. (#867)
+	 *
+	 * @param callable $probe Probe to run.
+	 * @return mixed The probe's return value.
+	 */
+	private static function quiet_probe( callable $probe ) {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- scoped to one stat call and restored in finally; swallows only open_basedir warnings.
+		set_error_handler(
+			static function ( int $errno, string $message ): bool {
+				return false !== strpos( $message, 'open_basedir' );
+			},
+			E_WARNING
+		);
+		try {
+			return $probe();
+		} finally {
+			restore_error_handler();
+		}
+	}
+
+	/**
+	 * path_allowed() for a log path, also accepting a link outside the list
+	 * whose target is inside it.
+	 *
+	 * PHP checks open_basedir against the resolved path, so such a link
+	 * opens without a warning, and the log override worked this way before
+	 * #867. path_allowed() only compares text, so it would refuse the link.
+	 * realpath() on a path outside the list warns, hence quiet_probe().
+	 *
+	 * @param string $path Candidate path.
+	 * @return bool
+	 */
+	private static function log_path_allowed( string $path ): bool {
+		if ( self::path_allowed( $path ) ) {
+			return true;
+		}
+		$target = self::quiet_probe( static fn() => realpath( $path ) );
+		return is_string( $target ) && self::path_allowed( $target );
+	}
+
+	/**
 	 * Accept a candidate access-log path only if it can actually be
 	 * tail-scanned, else ''.
 	 *
@@ -201,12 +343,17 @@ class Server {
 	 * @return string The path when usable, '' otherwise.
 	 */
 	private static function usable_access_log( string $path ): string {
-		if ( '' === $path ) {
+		if ( '' === $path || ! self::log_path_allowed( $path ) ) {
 			return '';
 		}
 		// is_file() resolves symlinks, so access.log -> /var/log/real.log
 		// is still accepted; only the pipe/device targets are rejected.
-		if ( ! @is_file( $path ) || ! is_readable( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- racey stat on an external log; treated as "unusable".
+		$usable = self::quiet_probe(
+			static function () use ( $path ): bool {
+				return @is_file( $path ) && is_readable( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- racey stat on an external log; treated as "unusable".
+			}
+		);
+		if ( ! $usable ) {
 			return '';
 		}
 		return $path;
@@ -255,6 +402,23 @@ class Server {
 			return self::usable_access_log( $filtered );
 		}
 
+		// Discovery stats up to nine system paths and globs four
+		// directories. Admin pages ask more than once per request, so the
+		// scan runs once. The constant and filter above stay live.
+		static $detected = null;
+		if ( null !== $detected ) {
+			return $detected;
+		}
+		$detected = self::detect_access_log();
+		return $detected;
+	}
+
+	/**
+	 * Auto-detection half of access_log_path().
+	 *
+	 * @return string Absolute path, or '' if none is usable.
+	 */
+	private static function detect_access_log(): string {
 		// Auto-detect: the standard Apache + OpenLiteSpeed/LiteSpeed
 		// Enterprise access-log locations. First readable, NON-EMPTY file
 		// wins — an empty global access.log (common on LiteSpeed, which
@@ -285,7 +449,7 @@ class Server {
 		$best = '';
 		$best_mtime = 0;
 		foreach ( $dirs as $dir ) {
-			if ( ! is_dir( $dir ) ) {
+			if ( ! self::path_allowed( $dir ) || ! self::quiet_probe( static fn() => is_dir( $dir ) ) ) {
 				continue;
 			}
 			$globbed = glob( $dir . '/*access*log*' );
@@ -583,7 +747,7 @@ class Server {
 	 */
 	public static function is_containerized(): bool {
 		// 1. Docker marker file — cheap to stat, almost always present.
-		if ( file_exists( '/.dockerenv' ) ) {
+		if ( self::path_allowed( '/.dockerenv' ) && self::quiet_probe( static fn() => file_exists( '/.dockerenv' ) ) ) {
 			return true;
 		}
 		// 2. mountinfo overlay2 / containerd footprint — works under cgroup v2.
@@ -591,7 +755,8 @@ class Server {
 		// hosts that hide /proc (open_basedir, hardened Apache), the file is
 		// absent and reading it would emit a warning. Query Monitor surfaces
 		// even @-suppressed warnings, so guard rather than silence. (FBS-83114)
-		if ( is_readable( '/proc/self/mountinfo' ) ) {
+		// is_readable() itself warns under open_basedir, hence path_allowed(). (#867)
+		if ( self::path_allowed( '/proc/self/mountinfo' ) && self::quiet_probe( static fn() => is_readable( '/proc/self/mountinfo' ) ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- /proc/self/mountinfo is a virtual file; WP_Filesystem doesn't model /proc.
 			$mounts = file_get_contents( '/proc/self/mountinfo' );
 			if ( is_string( $mounts ) && '' !== $mounts && preg_match( '#(docker/overlay2|/var/lib/containerd|/var/lib/podman)#i', $mounts ) ) {
@@ -599,7 +764,7 @@ class Server {
 			}
 		}
 		// 3. cgroup v1 fallback.
-		if ( is_readable( '/proc/1/cgroup' ) ) {
+		if ( self::path_allowed( '/proc/1/cgroup' ) && self::quiet_probe( static fn() => is_readable( '/proc/1/cgroup' ) ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- See above.
 			$cgroup = file_get_contents( '/proc/1/cgroup' );
 			if ( is_string( $cgroup ) && '' !== $cgroup && preg_match( '#(docker|kubepods|containerd|podman|lxc)#i', $cgroup ) ) {

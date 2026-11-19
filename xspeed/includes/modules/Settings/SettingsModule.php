@@ -69,6 +69,156 @@ final class SettingsModule extends Module {
 	}
 
 	/**
+	 * `POST /xspeed/v1/settings/modules`: write a settings patch, several
+	 * modules in one request.
+	 *
+	 * The module has no settings schema, so the default GET/POST routes are
+	 * not registered, and this does not call parent::rest_routes(). No
+	 * `feature` key: Rest_Manager's conflict gate would check this module, not
+	 * the ones the patch writes, so save() checks each field the patch turns
+	 * on (the `conflict` check).
+	 *
+	 * @return array[]
+	 */
+	public function rest_routes(): array {
+		return array(
+			array(
+				'path'     => '/modules',
+				'methods'  => 'POST',
+				'callback' => array( $this, 'rest_update_patch' ),
+			),
+		);
+	}
+
+	/**
+	 * Write a settings patch from REST.
+	 *
+	 * Each module runs the checks its own `POST /xspeed/v1/<slug>` save runs
+	 * (licence, a module another has taken over from, wp-config constant, a
+	 * field another setting holds, rejected values), after a check that the
+	 * module exists. Unlike that route, an unknown key is refused too: the
+	 * per-module route drops unknown keys because the dashboard panels post
+	 * their whole settings object back, and nothing posts a patch that way.
+	 * So is turning on a field whose feature an active plugin refuses: that
+	 * route's gate checks the feature `<slug>`, which no catalog entry uses.
+	 * Every module is checked before anything is written.
+	 *
+	 * @return \WP_REST_Response|\WP_Error|array<string,mixed>
+	 */
+	public function rest_update_patch( \WP_REST_Request $request ) {
+		$patch = $request->get_json_params();
+		if ( ! Settings_Manager::is_patch( $patch ) ) {
+			return new \WP_Error(
+				'xspeed_bad_patch',
+				__( 'The request body must be an object of module slugs, each holding an object of setting keys.', 'xspeed' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$result = Settings_Manager::save(
+			$patch,
+			array(
+				'mode'        => 'strict',
+				'checks'      => array( 'reachable', 'conflict', 'license', 'blocked', 'constant', 'managed', 'inspect', 'module' ),
+				'refuse'      => array( 'unknown', 'invalid' ),
+				'keep_echoes' => true,
+				'write'       => 'module',
+			)
+		);
+
+		if ( ! $result['ok'] ) {
+			$parts   = array();
+			$modules = array();
+			foreach ( $result['modules'] as $slug => $entry ) {
+				if ( $entry['ok'] ) {
+					continue;
+				}
+				$error            = self::patch_refusal( (string) $slug, $entry['code'], $entry['data'] );
+				// The batch message already opens with "Nothing was saved.", so a
+				// module's own copy of it would say it twice (QA on 1.4.9).
+				$parts[]          = $slug . ': ' . preg_replace( '/^Nothing was saved\.\s*/', '', $error->get_error_message() );
+				$modules[ $slug ] = array(
+					'code'    => $error->get_error_code(),
+					'message' => $error->get_error_message(),
+					'data'    => $error->get_error_data(),
+				);
+			}
+			return new \WP_Error(
+				'xspeed_settings_refused',
+				sprintf(
+					/* translators: %s: each refused module with its reason. */
+					__( 'Nothing was saved. %s', 'xspeed' ),
+					implode( ' | ', $parts )
+				),
+				array(
+					'status'  => 400,
+					'modules' => $modules,
+				)
+			);
+		}
+
+		foreach ( array_keys( $result['modules'] ) as $slug ) {
+			/**
+			 * Run module-owned REST save effects after the whole patch is written.
+			 *
+			 * @param string $slug Module whose settings were saved.
+			 */
+			do_action( 'xspeed_rest_settings_patch_saved', (string) $slug );
+		}
+
+		return rest_ensure_response(
+			array(
+				'modules' => array_map( static fn( array $entry ): array => $entry['settings'], $result['modules'] ),
+			)
+		);
+	}
+
+	/**
+	 * The error for one module of a REST settings patch. The module's own
+	 * REST route words licence, constant and rejected-value refusals, so they
+	 * read the same as a single-module save. A conflict reads as
+	 * Rest_Manager's gate words it.
+	 *
+	 * @param array<string,mixed> $data save() refusal data.
+	 */
+	private static function patch_refusal( string $slug, string $code, array $data ): \WP_Error {
+		if ( 'unknown_module' === $code ) {
+			return new \WP_Error(
+				'xspeed_unknown_module',
+				/* translators: %s: module slug. */
+				sprintf( __( 'Unknown module "%s".', 'xspeed' ), $slug ),
+				array( 'status' => 404 )
+			);
+		}
+		if ( 'conflict' === $code ) {
+			return new \WP_Error(
+				'xspeed_conflict_refused',
+				(string) $data['reason'],
+				array(
+					'status' => 409,
+					'field'  => (string) $data['field'],
+				)
+			);
+		}
+		if ( 'refused' === $code && ! empty( $data['unknown'] ) ) {
+			return new \WP_Error(
+				'xspeed_settings_refused',
+				sprintf(
+					/* translators: %s: comma-separated setting keys. */
+					__( 'These are not settings of this module: %s.', 'xspeed' ),
+					implode( ', ', (array) $data['unknown'] )
+				),
+				array(
+					'status'  => 400,
+					'unknown' => $data['unknown'],
+					'invalid' => $data['invalid'] ?? array(),
+				)
+			);
+		}
+		return Module_Registry::get( $slug )->settings_save_refusal( $code, $data );
+	}
+
+	/**
 	 * `wp xspeed settings <list|get|update>` — the command whose absence
 	 * dropped get_settings/update_settings from the MCP catalog (#149/#153).
 	 *
@@ -82,8 +232,8 @@ final class SettingsModule extends Module {
 				'name'      => 'xspeed settings',
 				'risk'      => array( '' => 'read', 'list' => 'read', 'get' => 'read', 'update' => 'write' ),
 				'callback'  => array( $this, 'cli_handler' ),
-				'shortdesc' => 'List modules, or read/update a module\'s settings.',
-				'ai_hint'   => 'Read or write any xSpeed module\'s settings directly, and export/import the whole configuration. Use for bulk changes or replicating one site\'s setup onto another.',
+				'shortdesc' => 'List modules, or read/update a module\'s settings (or several modules at once).',
+				'ai_hint'   => 'Read or write any xSpeed module\'s settings directly. To change several modules in one call, leave out the module slug and pass --values as an object of module slug to values; every module is checked first, and nothing is written unless all of them pass.',
 				'synopsis'  => array(
 					// No 'options' constraint on `action`: WP_CLI validates a
 					// positional's options list against every positional it
@@ -101,13 +251,13 @@ final class SettingsModule extends Module {
 					array(
 						'type'        => 'positional',
 						'name'        => 'module',
-						'description' => 'Module slug, e.g. "minify". Required for get/update.',
+						'description' => 'Module slug, e.g. "minify". Required for get. For update, leave it out to pass a settings patch in --values.',
 						'optional'    => true,
 					),
 					array(
 						'type'        => 'assoc',
 						'name'        => 'values',
-						'description' => 'JSON object of setting keys to new values (update only).',
+						'description' => 'JSON object of setting keys to new values (update only). With no module slug: an object of module slug to such an object.',
 						'optional'    => true,
 					),
 					array(
@@ -131,7 +281,7 @@ final class SettingsModule extends Module {
 	}
 
 	/**
-	 * CLI: `wp xspeed settings [list|get <module>|update <module> --values=<json>]`
+	 * CLI: `wp xspeed settings [list|get <module>|update <module> --values=<json>|update --values=<patch>]`
 	 *
 	 * @param array<int,string>    $args  Positional arguments.
 	 * @param array<string,string> $assoc Associative arguments.
@@ -161,54 +311,12 @@ final class SettingsModule extends Module {
 
 
 	/**
-	 * Is this module reachable from the CLI / MCP right now?
-	 *
-	 * Registration is not enough. Module_Registry::available() only asks
-	 * whether Pro is LOADED (Tier_Registry::pro_active() checks the
-	 * XSPEED_PRO_API constant), not whether it is LICENSED — so on a site
-	 * with Pro installed and the licence lapsed, every Pro module was
-	 * enumerable, readable and writable from here while the dashboard
-	 * correctly showed it locked. (QA M2)
-	 *
-	 * The licence answer lives in Pro, which Free must not reference by
-	 * name, so it comes through the `xspeed_module_descriptor` filter Pro's
-	 * own descriptor gate uses. NOT `xspeed_pro_licensed`: Pro only ever
-	 * APPLIES that one as an override and nothing listens to it, so gating
-	 * on it silently passed everything — the bug this method exists to fix.
-	 * With Pro absent the filter is unhooked and the default stands: a
-	 * Free-only site has no Pro modules registered anyway, so nothing
-	 * changes there.
-	 *
-	 * `license` is exempt for the same reason Pro exempts it — locking the
-	 * licence module on an unlicensed site would remove the only surface
-	 * that can fix the problem.
+	 * Is this module reachable from the CLI / MCP right now? Registration is
+	 * not enough: a Pro module on an unlicensed site must read as unknown.
+	 * Settings_Manager::is_reachable() carries the full rule. (QA M2)
 	 */
 	private static function module_reachable( string $slug ): bool {
-		$module = Module_Registry::available()[ $slug ] ?? null;
-		if ( ! $module ) {
-			return false;
-		}
-		if ( Module::TIER_PRO !== $module->tier() || 'license' === $slug ) {
-			return true;
-		}
-
-		// Ask the SAME question the dashboard asks. `xspeed_pro_licensed` is
-		// only ever APPLIED by Pro as an override hook — nothing registers it
-		// — so calling it here returned the default `true` and gated nothing.
-		// Pro DOES register `xspeed_module_descriptor`, and sets
-		// `locked => 'license'` on every Pro entry when the licence is
-		// inactive. Reusing that keeps one definition of "locked" instead of
-		// a second one in Free that can drift from the panel. (QA M2)
-		$entry = apply_filters(
-			'xspeed_module_descriptor',
-			array(
-				'slug' => $slug,
-				'tier' => $module->tier(),
-			),
-			$module
-		);
-
-		return empty( $entry['locked'] );
+		return Settings_Manager::is_reachable( $slug );
 	}
 
 	/**
@@ -276,9 +384,23 @@ final class SettingsModule extends Module {
 		}
 	}
 
-	/** `settings update <module> --values=<json>` — validated by the module schema. */
+	/**
+	 * `settings update <module> --values=<json>`, validated by the module
+	 * schema. With no module slug, `--values` can be a settings patch instead:
+	 * an object of module slug => values, written all together or not at all.
+	 */
 	private function cli_update( string $module, array $assoc, bool $json ): void {
 		if ( '' === $module ) {
+			$patch = self::patch_from( $assoc );
+			if ( null !== $patch ) {
+				foreach ( $patch as $slug => $values ) {
+					if ( empty( $values ) || array_values( $values ) === $values ) {
+						\WP_CLI::error( sprintf( '%s: settings must be an object of field values, e.g. {"minify":{"minify_css":true}}.', $slug ) );
+					}
+				}
+				$this->cli_update_patch( $patch, $json );
+				return;
+			}
 			\WP_CLI::error( 'A module slug is required, e.g. `wp xspeed settings update minify --values=\'{"enabled":true}\'`.' );
 		}
 		// available(), not get(): a Pro module on an unlicensed site must be
@@ -286,7 +408,7 @@ final class SettingsModule extends Module {
 		// "unknown" rather than "locked" so probing cannot enumerate the Pro
 		// slug list. (QA M2)
 		if ( ! self::module_reachable( $module ) ) {
-			\WP_CLI::error( sprintf( 'Unknown module "%s". Run `wp xspeed settings list` to see the registered modules.', $module ) );
+			\WP_CLI::error( self::refusal_message( $module, 'unknown_module', array() ) );
 		}
 		if ( ! isset( $assoc['values'] ) || '' === $assoc['values'] ) {
 			\WP_CLI::error( 'A --values=<json> object is required, e.g. --values=\'{"enabled":true}\'.' );
@@ -297,106 +419,225 @@ final class SettingsModule extends Module {
 			\WP_CLI::error( 'The --values argument must be a JSON object, e.g. --values=\'{"enabled":true}\'.' );
 		}
 
-		// Name the refusal rather than letting the write appear to succeed:
-		// Settings_Manager::update() silently strips secrets on this path
-		// (the #116 backstop), so without this the user would see a green
-		// success and an unchanged credential.
-		$secret_fields = Settings_Manager::secret_keys_in( $module, $values );
-		if ( ! empty( $secret_fields ) ) {
-			\WP_CLI::error(
-				sprintf(
-					'Credential fields (%s) cannot be set from the CLI or MCP — they are stripped on this path by design. Set them in the xSpeed dashboard instead.',
-					implode( ', ', $secret_fields )
-				)
-			);
+		$result = Settings_Manager::save( array( $module => $values ), self::write_policy( false ) );
+		$entry  = $result['modules'][ $module ];
+		if ( ! $entry['ok'] ) {
+			\WP_CLI::error( self::refusal_message( $module, $entry['code'], $entry['data'] ) );
 		}
-
-		// A field an add-on holds is dropped by update() just as quietly as
-		// a secret, so refuse it by name here too.
-		$managed = Settings_Manager::managed_in_input( $module, $values );
-		if ( ! empty( $managed ) ) {
-			$pairs = array();
-			foreach ( $managed as $field => $by ) {
-				$pairs[] = $field . ' (' . $by . ')';
-			}
-			\WP_CLI::error(
-				sprintf(
-					'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them. Nothing was changed.',
-					implode( ', ', $pairs )
-				)
-			);
-		}
-
-		// Pro licence write gate — the CLI writes through
-		// Settings_Manager::update() and so never reaches
-		// Module::update_settings(), where the gate lives. Without this a
-		// `wp xspeed settings update <pro-module>` turns a Pro feature on with
-		// no licence, exactly as the MCP handler did. (#185)
-		$module_object = \XSpeed\Module_Registry::get( $module );
-		if ( $module_object && $module_object->is_license_locked() ) {
-			\XSpeed\Activity_Log::record(
-				'license_write_refused',
-				sprintf(
-					/* translators: %s: module slug. */
-					__( 'Refused a CLI settings write to the Pro module "%s" — no valid license.', 'xspeed' ),
-					$module
-				),
-				\XSpeed\Activity_Log::WARN
-			);
-			\WP_CLI::error(
-				sprintf(
-					'"%s" is a Pro module and this site has no active license, so the write was refused. Nothing was changed.',
-					$module
-				)
-			);
-		}
-
-		// Refuse rather than report success over a write that won't happen.
-		// update() walks the schema, so an out-of-schema key is never written
-		// and never mentioned; an in-schema key with an invalid value is
-		// dropped back to the stored value just as quietly. Both used to exit
-		// 0 with "Success", which an agent — or a human script — cannot tell
-		// apart from a real write. (#206)
-		$report = Settings_Manager::inspect_input( $module, $values );
-		if ( ! empty( $report['unknown'] ) || ! empty( $report['invalid'] ) ) {
-			$lines = array();
-			foreach ( $report['unknown'] as $key ) {
-				$line = sprintf( '  %s — not a setting of module "%s"', $key, $module );
-				$hint = Settings_Manager::hint_for_unknown_key( $key );
-				if ( '' !== $hint ) {
-					$line .= "\n      " . $hint;
-				} else {
-					$near = Settings_Manager::did_you_mean( $module, $key );
-					if ( ! empty( $near ) ) {
-						$line .= "\n      did you mean: " . implode( ', ', $near ) . '?';
-					}
-				}
-				$lines[] = $line;
-			}
-			foreach ( $report['invalid'] as $key ) {
-				$lines[] = sprintf( '  %s — value rejected by the schema (wrong type, or outside the allowed range/options)', $key );
-			}
-
-			$applied = empty( $report['applied'] )
-				? 'Nothing was written.'
-				: sprintf( 'Nothing was written — the valid keys (%s) were not applied either, so the whole payload can be corrected and re-sent.', implode( ', ', $report['applied'] ) );
-
-			\WP_CLI::error(
-				sprintf(
-					"Refused to update %s:\n%s\n\n%s",
-					$module,
-					implode( "\n", $lines ),
-					$applied
-				)
-			);
-		}
-
-		$updated = Settings_Manager::update( $module, $values );
 
 		if ( $json ) {
-			\WP_CLI::log( (string) wp_json_encode( $updated ) );
+			\WP_CLI::log( (string) wp_json_encode( $entry['settings'] ) );
 			return;
 		}
+		self::log_update( $module, $values, $entry['settings'] );
+	}
+
+	/**
+	 * `settings update --values=<patch>`: several modules in one call.
+	 *
+	 * Every module is checked before anything is written. One refusal and
+	 * nothing is written, and the error names every module that failed, so the
+	 * whole patch can be corrected and re-sent.
+	 *
+	 * @param array<string,array<string,mixed>> $patch Module slug => values.
+	 */
+	private function cli_update_patch( array $patch, bool $json ): void {
+		$result = Settings_Manager::save( $patch, self::write_policy( true ) );
+		if ( ! $result['ok'] ) {
+			$messages = array();
+			foreach ( $result['modules'] as $slug => $entry ) {
+				if ( ! $entry['ok'] ) {
+					$messages[] = self::refusal_message( (string) $slug, $entry['code'], $entry['data'], true );
+				}
+			}
+			\WP_CLI::error( implode( "\n\n", $messages ) . "\n\nNo module was written." );
+		}
+
+		if ( $json ) {
+			\WP_CLI::log( (string) wp_json_encode( array_map( static fn( array $entry ): array => $entry['settings'], $result['modules'] ) ) );
+			return;
+		}
+		foreach ( $result['modules'] as $slug => $entry ) {
+			self::log_update( (string) $slug, $patch[ $slug ], $entry['settings'] );
+		}
+	}
+
+	/**
+	 * The `--values` of a call with no module slug, read as a settings patch.
+	 *
+	 * An object whose every value is itself an object or list reads as a
+	 * patch. The caller still refuses a module whose value is empty or a list
+	 * (Settings_Manager::is_patch() is the full rule), naming that module.
+	 * Anything else is the flat values of one module with its slug forgotten,
+	 * and gets the "slug is required" error it always got.
+	 *
+	 * @param array<string,string> $assoc Associative arguments.
+	 * @return array<string,array<mixed>>|null
+	 */
+	private static function patch_from( array $assoc ): ?array {
+		if ( ! isset( $assoc['values'] ) || '' === $assoc['values'] ) {
+			return null;
+		}
+		$patch = json_decode( (string) $assoc['values'], true );
+		if ( ! is_array( $patch ) || empty( $patch ) ) {
+			return null;
+		}
+		foreach ( $patch as $slug => $values ) {
+			if ( ! is_string( $slug ) || ! is_array( $values ) ) {
+				return null;
+			}
+		}
+		return $patch;
+	}
+
+	/**
+	 * The checks a CLI write runs, in the order it has always run them.
+	 *
+	 * A single-module call checks reachability itself, before it reads
+	 * `--values`, so an unknown module is reported ahead of a missing or
+	 * malformed `--values`, as before. A patch has no such step, so the check
+	 * runs here.
+	 *
+	 * A patch also refuses turning on a feature an active plugin refuses, as
+	 * the REST batch does (IMPLEMENTATION.md §6.2). A single-module call does
+	 * not check conflicts, as before.
+	 *
+	 * Credential fields are refused rather than left to update(), which strips
+	 * them on the MCP path (the #116 backstop), so the user never sees a green
+	 * success over an unchanged credential. A field another setting holds is
+	 * dropped by update() just as quietly, so it is refused by name too. So is
+	 * a field pinned by a wp-config.php constant in a patch, where a dropped
+	 * value would leave the other modules written under a success. A
+	 * single-module call still has update() drop it without an error, as it
+	 * always has.
+	 *
+	 * @param bool $patch Whether this is a multi-module patch.
+	 * @return array<string,mixed>
+	 */
+	private static function write_policy( bool $patch ): array {
+		$checks = $patch
+			? array( 'reachable', 'conflict', 'secrets', 'consent', 'constant', 'managed', 'license', 'inspect' )
+			: array( 'secrets', 'consent', 'managed', 'license', 'inspect' );
+		return array(
+			'mode'        => 'strict',
+			'checks'      => $checks,
+			// Pro licence write gate. The CLI writes through
+			// Settings_Manager::update() and so never reaches
+			// Module::update_settings(), where the gate lives. Without this a
+			// `wp xspeed settings update <pro-module>` turns a Pro feature on
+			// with no licence. (#185)
+			/* translators: %s: module slug. */
+			'license_log' => __( 'Refused a CLI settings write to the Pro module "%s" — no valid license.', 'xspeed' ),
+			// Refuse rather than report success over a write that won't
+			// happen: update() drops an out-of-schema key, and an in-schema
+			// key with an invalid value, without a word. Both used to exit 0
+			// with "Success". (#206)
+			'refuse'      => array( 'unknown', 'invalid' ),
+			'write'       => 'update',
+		);
+	}
+
+	/**
+	 * The CLI's words for a module that save() refused.
+	 *
+	 * Inside a patch the module's own closing sentence ("Nothing was
+	 * changed.") is left off: the patch error ends with one line for the
+	 * whole call.
+	 *
+	 * @param string              $module   Module slug.
+	 * @param string              $code     save() refusal code.
+	 * @param array<string,mixed> $data     save() refusal data.
+	 * @param bool                $in_patch Part of a settings patch.
+	 */
+	private static function refusal_message( string $module, string $code, array $data, bool $in_patch = false ): string {
+		$unchanged = $in_patch ? '' : ' Nothing was changed.';
+		switch ( $code ) {
+			case 'unknown_module':
+				return sprintf( 'Unknown module "%s". Run `wp xspeed settings list` to see the registered modules.', $module );
+
+			case 'conflict':
+				return sprintf( 'Refused to turn on %1$s in "%2$s": %3$s%4$s', $data['field'], $module, $data['reason'], $unchanged );
+
+			case 'secret_fields':
+				return sprintf(
+					'Credential fields (%s) cannot be set from the CLI or MCP — they are stripped on this path by design. Set them in the xSpeed dashboard instead.',
+					implode( ', ', (array) $data['fields'] )
+				);
+
+			case 'consent_grant':
+				return sprintf(
+					'Turning on %1$s in "%2$s" records the site owner\'s consent, so it can\'t be done from an MCP tool call. The owner can turn it on from the xSpeed dashboard. Turning it off is allowed.',
+					implode( ', ', (array) $data['fields'] ),
+					$module
+				);
+
+			case 'constant_locked':
+				$pairs = array();
+				foreach ( (array) $data['fields'] as $field => $constant ) {
+					$pairs[] = $field . ' (' . $constant . ')';
+				}
+				return sprintf(
+					'These settings are defined in wp-config.php and cannot be changed here: %s. Edit the constant, or remove it to manage the setting from xSpeed.%s',
+					implode( ', ', $pairs ),
+					$unchanged
+				);
+
+			case 'managed':
+				$pairs = array();
+				foreach ( (array) $data['fields'] as $field => $by ) {
+					$pairs[] = $field . ' (' . $by . ')';
+				}
+				return sprintf(
+					'These settings are held by another setting and cannot be changed here: %s. Turn that setting off to change them.%s',
+					implode( ', ', $pairs ),
+					$unchanged
+				);
+
+			case 'license_locked':
+				return sprintf(
+					'"%s" is a Pro module and this site has no active license, so the write was refused.%s',
+					$module,
+					$unchanged
+				);
+		}
+
+		$lines = array();
+		foreach ( (array) ( $data['unknown'] ?? array() ) as $key ) {
+			$line = sprintf( '  %s — not a setting of module "%s"', $key, $module );
+			$hint = Settings_Manager::hint_for_unknown_key( $key );
+			if ( '' !== $hint ) {
+				$line .= "\n      " . $hint;
+			} else {
+				$near = Settings_Manager::did_you_mean( $module, $key );
+				if ( ! empty( $near ) ) {
+					$line .= "\n      did you mean: " . implode( ', ', $near ) . '?';
+				}
+			}
+			$lines[] = $line;
+		}
+		foreach ( (array) ( $data['invalid'] ?? array() ) as $key ) {
+			$lines[] = sprintf( '  %s — value rejected by the schema (wrong type, or outside the allowed range/options)', $key );
+		}
+
+		$message = sprintf( "Refused to update %s:\n%s", $module, implode( "\n", $lines ) );
+		if ( $in_patch ) {
+			return $message;
+		}
+		$applied = empty( $data['applied'] )
+			? 'Nothing was written.'
+			: sprintf( 'Nothing was written — the valid keys (%s) were not applied either, so the whole payload can be corrected and re-sent.', implode( ', ', (array) $data['applied'] ) );
+
+		return $message . "\n\n" . $applied;
+	}
+
+	/**
+	 * Report one module's successful write: a success line, then each key
+	 * that was sent, with the value now stored.
+	 *
+	 * @param array<string,mixed> $values  What was sent.
+	 * @param array<string,mixed> $updated What update() returned.
+	 */
+	private static function log_update( string $module, array $values, array $updated ): void {
 		\WP_CLI::success( sprintf( 'Updated %s.', $module ) );
 		foreach ( array_keys( $values ) as $key ) {
 			if ( array_key_exists( $key, $updated ) ) {

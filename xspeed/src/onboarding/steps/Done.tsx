@@ -49,8 +49,13 @@ export function DoneStep({
   if (choices.gzip_enabled) summary.push('GZIP');
   if (choices.lazy_images) summary.push('Lazy images');
   if (choices.browser_cache) summary.push('Browser cache');
-  // Total optimizations we could have toggled from the wizard.
-  const totalPossible = 8;
+  // Configure shows this row on unless a preset says otherwise.
+  if (choices.resource_hints ?? true) summary.push('Main image preload');
+  if (choices.async_google_fonts) summary.push('Google Fonts without blocking');
+  if (choices.display_swap_in_css) summary.push('Text while fonts load');
+  // Every switch the Configure step offers. Keep it in step with that list:
+  // the font switches were added there and missed here (QA on 1.4.9).
+  const totalPossible = 11;
   const expiryLabel =
     choices.cache_expiry >= 24 * 7
       ? `${Math.round(choices.cache_expiry / (24 * 7))}-week`

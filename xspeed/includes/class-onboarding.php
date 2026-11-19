@@ -222,19 +222,22 @@ class Onboarding {
 		$lazy     = Settings_Manager::get( 'lazy' );
 		$browser  = Settings_Manager::get( 'browser-cache' );
 		$hints    = Settings_Manager::get( 'resource-hints' );
+		$fonts    = Settings_Manager::get( 'fonts' );
 		$settings = Settings::get();
 
 		return array(
-			'cache_enabled'  => ! empty( $settings['cache_enabled'] ),
-			'minify_html'    => ! empty( $minify['minify_html'] ),
-			'minify_css'     => ! empty( $minify['minify_css'] ),
-			'minify_js'      => ! empty( $minify['minify_js'] ),
-			'defer_js'       => ! empty( $minify['defer_js'] ),
-			'gzip_enabled'   => ! empty( $gzip['gzip_enabled'] ),
-			'lazy_images'    => ! empty( $lazy['lazy_images'] ),
-			'browser_cache'  => ! empty( $browser['enabled'] ),
-			'resource_hints' => ! empty( $hints['enabled'] ),
-			'cache_expiry'   => isset( $cache['cache_expiry'] ) ? absint( $cache['cache_expiry'] ) : \XSpeed\Modules\Cache\CacheModule::DEFAULT_EXPIRY_HOURS,
+			'cache_enabled'       => ! empty( $settings['cache_enabled'] ),
+			'minify_html'         => ! empty( $minify['minify_html'] ),
+			'minify_css'          => ! empty( $minify['minify_css'] ),
+			'minify_js'           => ! empty( $minify['minify_js'] ),
+			'defer_js'            => ! empty( $minify['defer_js'] ),
+			'gzip_enabled'        => ! empty( $gzip['gzip_enabled'] ),
+			'lazy_images'         => ! empty( $lazy['lazy_images'] ),
+			'browser_cache'       => ! empty( $browser['enabled'] ),
+			'resource_hints'      => ! empty( $hints['enabled'] ),
+			'async_google_fonts'  => ! empty( $fonts['async_google_css'] ),
+			'display_swap_in_css' => ! empty( $fonts['display_swap_in_css'] ),
+			'cache_expiry'        => isset( $cache['cache_expiry'] ) ? absint( $cache['cache_expiry'] ) : \XSpeed\Modules\Cache\CacheModule::DEFAULT_EXPIRY_HOURS,
 		);
 	}
 
@@ -308,6 +311,28 @@ class Onboarding {
 	}
 
 	/**
+	 * The Fonts settings a wizard payload asks for, keyed as the Fonts
+	 * module stores them. Only keys the payload carries are returned, so a
+	 * wizard build from before these choices changes nothing.
+	 *
+	 * @param array<string,mixed> $params Wizard payload.
+	 * @return array<string,bool>
+	 */
+	public static function font_settings_from( array $params ): array {
+		$map = array(
+			'async_google_fonts'  => 'async_google_css',
+			'display_swap_in_css' => 'display_swap_in_css',
+		);
+		$out = array();
+		foreach ( $map as $choice => $setting ) {
+			if ( array_key_exists( $choice, $params ) ) {
+				$out[ $setting ] = ! empty( $params[ $choice ] );
+			}
+		}
+		return $out;
+	}
+
+	/**
 	 * Apply the wizard's selected settings + flip the cache drop-in on if
 	 * requested. Single REST round-trip so the wizard never lands in a
 	 * half-applied state.
@@ -365,6 +390,10 @@ class Onboarding {
 				'resource-hints',
 				array( 'enabled' => ! empty( $params['resource_hints'] ) )
 			);
+		}
+		$fonts = self::font_settings_from( $params );
+		if ( array() !== $fonts ) {
+			Settings_Manager::update( 'fonts', $fonts );
 		}
 
 		// Usage analytics consent. Only acted on when the key is present in

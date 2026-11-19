@@ -39,9 +39,36 @@ final class Conflict_Registry {
 	public const STRATEGY_ALLOW  = 'allow';
 
 	/**
+	 * The feature key a module setting switches on, for settings that have
+	 * one. Strategies are keyed by feature (`minify.html`), not by module or
+	 * setting, so a check on a settings write maps each field first.
+	 */
+	private const SETTING_FEATURES = array(
+		'minify'    => array(
+			'minify_html' => 'minify.html',
+			'minify_css'  => 'minify.css',
+			'minify_js'   => 'minify.js',
+		),
+		'lazy'      => array(
+			'lazy_images'            => 'images.lazyload',
+			'lazy_background_images' => 'images.lazyload',
+		),
+		'cdn'       => array( 'enabled' => 'cdn.rewrite' ),
+		'preloader' => array( 'enabled' => 'preload.crawler' ),
+	);
+
+	/**
 	 * @var array|null Memoized detection result for this request.
 	 */
 	private static $cache = null;
+
+	/**
+	 * The feature key behind one module setting, or null when no conflict
+	 * strategy covers it.
+	 */
+	public static function feature_for( string $module_slug, string $setting ): ?string {
+		return self::SETTING_FEATURES[ $module_slug ][ $setting ] ?? null;
+	}
 
 	/**
 	 * Per-feature strategy matrix, projected from Cache_Plugin_Catalog.
@@ -176,13 +203,33 @@ final class Conflict_Registry {
 	 * @return string[]
 	 */
 	public static function warnings_for( string $feature_key ): array {
+		return array_column( self::warning_notices( $feature_key ), 'body' );
+	}
+
+	/**
+	 * The same warnings as callouts for the module's panel (Module::ui_notices()
+	 * shape), one per warning-strategy conflict. Admin::modules_payload() puts
+	 * them above the module's own notices, so `warn` shows on the dashboard
+	 * while the conflicting plugin is active, whether the feature is on or off.
+	 *
+	 * @return array<int,array{tone:string,title:string,body:string}>
+	 */
+	public static function warning_notices( string $feature_key ): array {
 		$out = array();
 		foreach ( self::detected() as $conflict ) {
 			if ( ( $conflict['strategy'][ $feature_key ] ?? null ) === self::STRATEGY_WARN ) {
-				$out[] = sprintf(
-					/* translators: %s: conflicting plugin name */
-					__( '%s is active and may interfere. Test carefully.', 'xspeed' ),
-					$conflict['label']
+				$out[] = array(
+					'tone'  => 'warn',
+					'title' => sprintf(
+						/* translators: %s: conflicting plugin name */
+						__( '%s is active', 'xspeed' ),
+						$conflict['label']
+					),
+					'body'  => sprintf(
+						/* translators: %s: conflicting plugin name */
+						__( '%s does some of the same work. You can still switch this on. If you do, check a few pages to see they look right.', 'xspeed' ),
+						$conflict['label']
+					),
 				);
 			}
 		}

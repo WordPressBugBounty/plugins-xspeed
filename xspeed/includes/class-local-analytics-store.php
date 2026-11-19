@@ -396,7 +396,7 @@ final class Local_Analytics_Store {
 			wp_delete_file( $tmp );
 			return false;
 		}
-		@chmod( $tmp, self::file_mode() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- best effort; the umask default still works.
+		function_exists( 'chmod' ) && @chmod( $tmp, self::file_mode() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- best effort; the umask default still works.
 		// WP_Filesystem::move() is not atomic and needs admin context; rename() within one directory is.
 		if ( ! @rename( $tmp, $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- reported as a WP_Error by the caller.
 			wp_delete_file( $tmp );

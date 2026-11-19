@@ -2336,9 +2336,29 @@ class Cache {
 				header_remove( 'Content-Encoding' );
 			}
 		}
-		fpassthru( $handle );
+		self::send_open_file( $handle );
 		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- our own handle.
 		return true;
+	}
+
+	/**
+	 * Send the rest of an open file to the client.
+	 *
+	 * Not fpassthru(): hosts disable it, and calling a disabled function is a
+	 * fatal error, so every PHP-path HIT went out as a 500 (#928). Not
+	 * readfile( $path ) either: the entry may have been purged since it was
+	 * opened, and only the handle still reads it (#887).
+	 *
+	 * @param resource $handle Open, readable handle.
+	 */
+	private static function send_open_file( $handle ): void {
+		while ( ! feof( $handle ) ) {
+			$chunk = fread( $handle, 65536 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- streaming our own open cache file.
+			if ( false === $chunk || '' === $chunk ) {
+				return;
+			}
+			echo $chunk; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- a stored cache entry, sent byte for byte.
+		}
 	}
 
 	/**
@@ -4466,7 +4486,7 @@ class Cache {
 
 		// tempnam() creates the file 0600; cache files must stay readable by
 		// the web server, which may run as a different user.
-		@chmod( $tmp, defined( 'FS_CHMOD_FILE' ) ? FS_CHMOD_FILE : 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod, WordPress.PHP.NoSilencedErrors.Discouraged -- the web server may run as another uid and must be able to read the published file; a chmod failure is not fatal.
+		function_exists( 'chmod' ) && @chmod( $tmp, defined( 'FS_CHMOD_FILE' ) ? FS_CHMOD_FILE : 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod, WordPress.PHP.NoSilencedErrors.Discouraged -- the web server may run as another uid and must be able to read the published file; a chmod failure is not fatal.
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename, WordPress.PHP.NoSilencedErrors.Discouraged -- the atomic publish this function exists for; WP_Filesystem offers no atomic rename and needs admin creds.
 		if ( ! @rename( $tmp, $path ) ) {
@@ -5146,7 +5166,7 @@ class Cache {
 			// The query-arg shape (`?_wpnonce=…`) has no key name to report
 			// beyond the literal, so name it explicitly rather than reporting
 			// nothing for a page that was genuinely refused.
-			if ( preg_match( '/[?&]_wpnonce=/i', $html ) ) {
+			if ( preg_match( '/(?:[?&]|&#0*38;|&amp;)_wpnonce=/i', $html ) ) {
 				$found[] = '_wpnonce';
 			}
 			$keys = array_slice( array_values( array_unique( $found ) ), 0, 10 );
@@ -5426,14 +5446,16 @@ class Cache {
 		 *    `]` so grouping does not hide the field: form builders are
 		 *    exactly the kind of plugin #236 is about, and a missed page
 		 *    keeps the old broken behaviour silently.
-		 * 2. A query argument (`?_wpnonce=`) on a link.
+		 * 2. A query argument (`?_wpnonce=`) on a link, including the
+		 *    `&#038;_wpnonce=` and `&amp;_wpnonce=` that esc_url() prints,
+		 *    such as WooCommerce's mini-cart remove link. (#895)
 		 * 3. A nonce handed to the page's own scripts rather than placed in
 		 *    a visible form — `wp_localize_script()` output and inline JSON
 		 *    both land as a `"nonce":"…"`-shaped pair.
 		 */
 		return 1 === preg_match(
 			'/(name=["\'][a-z0-9_\-\[\]]*nonce[a-z0-9_\-\[\]]*["\']'
-				. '|[?&]_wpnonce='
+				. '|(?:[?&]|&#0*38;|&amp;)_wpnonce='
 				. '|["\'][a-z0-9_\-]*nonce[a-z0-9_\-]*["\']\s*:\s*["\'][a-f0-9]{8,}["\'])/i',
 			$html
 		);
@@ -11410,7 +11432,7 @@ class Cache {
 		if ( $is_nginx ) {
 			// Ensure the dir is traversable + writable by a different-uid nginx.
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- nginx (a separate uid in multi-container setups) must be able to create/append the log; WP_Filesystem layers ownership overrides that defeat that intent.
-			@chmod( $dir, 0777 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; the access_log just stays empty if it fails.
+			function_exists( 'chmod' ) && @chmod( $dir, 0777 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; the access_log just stays empty if it fails.
 		}
 
 		$path = self::hits_log_path();
@@ -11425,7 +11447,7 @@ class Cache {
 			// so this is unnecessary — and would emit the "Operation not
 			// permitted" warnings the old early return was added to silence.
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- See docblock.
-			@chmod( $path, 0666 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort.
+			function_exists( 'chmod' ) && @chmod( $path, 0666 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort.
 		}
 
 		return file_exists( $path );

@@ -37,6 +37,21 @@ final class Minify_Filters {
 	private static $opts = null;
 
 	/**
+	 * Provenance for external scripts to which Defer JS added the attribute.
+	 * Keyed by the WordPress handle whose final id is `<handle>-js`.
+	 *
+	 * @var array<string,array{id:string,src:string,attrs:array<string,string|null>,body:string}>
+	 */
+	private static $defer_provenance = array();
+
+	/**
+	 * Handles whose defer filter has already run once this request.
+	 *
+	 * @var array<string,'seen'|'ambiguous'>
+	 */
+	private static $defer_handles_seen = array();
+
+	/**
 	 * Has the delay-JS bootstrap snippet been printed? Guards against
 	 * duplicate emission in pages that hit wp_footer multiple times.
 	 */
@@ -185,6 +200,7 @@ final class Minify_Filters {
 			return (string) $tag;
 		}
 		$handle   = (string) $handle;
+		unset( self::$defer_provenance[ $handle ] );
 		$pristine = isset( self::$pristine_tag[ $handle ] ) ? self::$pristine_tag[ $handle ] : '';
 		if ( '' !== $pristine && $pristine !== $tag ) {
 			// The marker is on the tag we were handed, not on the snapshot,
@@ -549,6 +565,132 @@ final class Minify_Filters {
 	}
 
 	/**
+	 * Parse a script opening tag's attributes without discarding duplicate
+	 * names. HTML uses the first duplicate attribute, so any duplicate makes
+	 * provenance ambiguous even when the values happen to match.
+	 *
+	 * @param string $raw Raw attributes between `<script` and `>`.
+	 * @return array<string,string|null>|null Attribute names map to values; null means malformed or duplicate.
+	 */
+	private static function parse_defer_attributes( string $raw ): ?array {
+		$attrs  = array();
+		$offset = 0;
+		$length = strlen( $raw );
+		while ( $offset < $length ) {
+			if ( '' === trim( substr( $raw, $offset ) ) ) {
+				break;
+			}
+			if ( ! preg_match( '/\G\s+([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+)))?/', $raw, $match, PREG_UNMATCHED_AS_NULL, $offset ) ) {
+				return null;
+			}
+			$name = strtolower( $match[1] );
+			if ( array_key_exists( $name, $attrs ) ) {
+				return null;
+			}
+			$value = null;
+			foreach ( array( 2, 3, 4 ) as $group ) {
+				if ( null !== $match[ $group ] ) {
+					$value = $match[ $group ];
+					break;
+				}
+			}
+			$attrs[ $name ] = $value;
+			$offset        += strlen( $match[0] );
+		}
+		return $attrs;
+	}
+
+	/**
+	 * Read exactly one external script from a WordPress script_loader_tag
+	 * string. Inline before/after blocks are allowed; a second external or an
+	 * ambiguous id is not.
+	 *
+	 * @param string $tag Full filter tag, including any inline companions.
+	 * @return array{id:string,src:string,attrs:array<string,string|null>,body:string}|null
+	 */
+	private static function defer_external_snapshot( string $tag ): ?array {
+		$count = preg_match_all( '#<script\b((?:"[^"]*"|\'[^\']*\'|[^>"\'])*)>(.*?)</script\s*>#is', $tag, $matches, PREG_SET_ORDER );
+		if ( false === $count || 1 > $count ) {
+			return null;
+		}
+
+		$external = null;
+		$id_count = array();
+		foreach ( $matches as $match ) {
+			$attrs = self::parse_defer_attributes( $match[1] );
+			if ( null === $attrs ) {
+				return null;
+			}
+			if ( isset( $attrs['id'] ) && is_string( $attrs['id'] ) ) {
+				$id_count[ $attrs['id'] ] = ( $id_count[ $attrs['id'] ] ?? 0 ) + 1;
+			}
+			if ( array_key_exists( 'src', $attrs ) ) {
+				if ( null === $attrs['src'] || '' === $attrs['src'] || null !== $external ) {
+					return null;
+				}
+				$external = array(
+					'id'    => isset( $attrs['id'] ) && is_string( $attrs['id'] ) ? $attrs['id'] : '',
+					'src'   => $attrs['src'],
+					'attrs' => $attrs,
+					'body'  => $match[2],
+				);
+			}
+		}
+
+		if ( null === $external || '' === $external['id'] || 1 !== ( $id_count[ $external['id'] ] ?? 0 ) ) {
+			return null;
+		}
+		return $external;
+	}
+
+	/**
+	 * Public provenance query for the final script_loader_tag string.
+	 * Only the exact external tag recorded at defer insertion can match. A
+	 * configured CDN rewrite is the sole permitted later src change.
+	 *
+	 * @param string $tag Final script tag string.
+	 */
+	public static function was_deferred_by_xspeed( string $tag ): bool {
+		$current = self::defer_external_snapshot( $tag );
+		if ( null === $current || ! preg_match( '/-js$/', $current['id'] ) ) {
+			return false;
+		}
+		$handle = substr( $current['id'], 0, -3 );
+		if ( '' === $handle || ! isset( self::$defer_provenance[ $handle ] ) ) {
+			return false;
+		}
+		$record = self::$defer_provenance[ $handle ];
+		if ( $record['id'] !== $current['id'] || $record['body'] !== $current['body'] ) {
+			return false;
+		}
+
+		$expected = $record['attrs'];
+		$actual   = $current['attrs'];
+		if ( ! isset( $expected['defer'] ) || 'defer' !== $expected['defer']
+			|| ! isset( $actual['defer'] ) || 'defer' !== $actual['defer'] ) {
+			return false;
+		}
+		$expected_src = $expected['src'];
+		$actual_src   = $actual['src'];
+		unset( $expected['src'], $actual['src'] );
+		if ( $expected !== $actual ) {
+			return false;
+		}
+		if ( $expected_src === $actual_src ) {
+			return true;
+		}
+
+		if ( ! Module_Registry::is_available( 'cdn' ) ) {
+			return false;
+		}
+		$cdn_opts = Settings_Manager::get( 'cdn' );
+		if ( empty( $cdn_opts['enabled'] ) || empty( $cdn_opts['cdn_url'] ) ) {
+			return false;
+		}
+		return Cdn_Rewriter::rewrite_url( $expected_src, $cdn_opts ) === $actual_src;
+	}
+
+	/**
 	 * Filter: `script_loader_tag` — add defer="defer" to non-excluded
 	 * scripts. WordPress passes the full <script> tag string, the
 	 * handle, and the src. We bail when:
@@ -562,6 +704,15 @@ final class Minify_Filters {
 	 * @param string $src
 	 */
 	public static function defer_script_tag( $tag, $handle, $src ): string {
+		$handle = (string) $handle;
+		if ( '' !== $handle ) {
+			if ( isset( self::$defer_handles_seen[ $handle ] ) ) {
+				unset( self::$defer_provenance[ $handle ] );
+				self::$defer_handles_seen[ $handle ] = 'ambiguous';
+			} else {
+				self::$defer_handles_seen[ $handle ] = 'seen';
+			}
+		}
 		if ( ! is_string( $tag ) || '' === $tag ) {
 			return (string) $tag;
 		}
@@ -584,6 +735,10 @@ final class Minify_Filters {
 			&& ! self::defers_consent_manager( (string) $handle, (string) $src ) ) {
 			return $tag;
 		}
+		// Keep dependencies of Defer-excluded handles outside this rewrite too.
+		if ( isset( self::needed_by_defer_excluded()[ $handle ] ) ) {
+			return $tag;
+		}
 		// The tag itself asked to be left alone. (#456)
 		if ( self::tag_opts_out( $tag ) ) {
 			return $tag;
@@ -601,6 +756,7 @@ final class Minify_Filters {
 		if ( false !== stripos( $tag, ' defer' ) || false !== stripos( $tag, ' async' ) ) {
 			return $tag;
 		}
+		$before = self::defer_external_snapshot( $tag );
 		// Target the <script> that actually carries a src, NOT simply the
 		// first one in the string. WP_Scripts::do_item() hands this filter
 		// the CONCATENATION of before_inline + external + after_inline, so
@@ -615,6 +771,26 @@ final class Minify_Filters {
 		// an inline `<script id="…-js-before">` can never match.
 		$deferred = (string) preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)#i', '<script defer="defer"', $tag, 1 );
 		if ( $deferred !== $tag ) {
+			$after = self::defer_external_snapshot( $deferred );
+			if ( null !== $before
+				&& $before['id'] === $handle . '-js'
+				&& ! array_key_exists( 'async', $before['attrs'] )
+				&& ! array_key_exists( 'defer', $before['attrs'] )
+				&& null !== $after
+				&& $after['id'] === $before['id']
+				&& $after['src'] === $before['src']
+				&& $after['body'] === $before['body']
+				&& 'defer' === ( $after['attrs']['defer'] ?? null )
+				&& 'module' !== strtolower( trim( (string) ( $before['attrs']['type'] ?? '' ) ) ) ) {
+				$before_attrs = $before['attrs'];
+				$after_attrs  = $after['attrs'];
+				unset( $after_attrs['defer'] );
+				if ( $before_attrs === $after_attrs ) {
+					if ( 'seen' === ( self::$defer_handles_seen[ $handle ] ?? '' ) ) {
+						self::$defer_provenance[ $handle ] = $after;
+					}
+				}
+			}
 			// Remember that THIS defer is ours, so the late opt-out revert
 			// drops it — and only it, never a stamper's own defer.
 			self::$our_late_attrs[ (string) $handle ]['defer'] = true;
@@ -768,7 +944,8 @@ final class Minify_Filters {
 	 * Jetpack Boost — so an author who prints one has already declared that
 	 * no optimizer should touch this tag. Consent banners are the main
 	 * beneficiary, but the rule is general and needs neither a handle nor a
-	 * recognised URL, so it works identically on both passes.
+	 * recognised URL, so it works identically on both passes. The font-CSS
+	 * pass reads the same list on `<link>` tags.
 	 *
 	 * Two deliberate omissions:
 	 *
@@ -799,9 +976,11 @@ final class Minify_Filters {
 	 * Bare and valued forms both count: an author writes `nowprocket`,
 	 * `nowprocket=""` and `data-noptimize="1"` interchangeably.
 	 *
-	 * @param string $tag Full opening tag.
+	 * @param string $tag     Full opening tag.
+	 * @param string $element Element whose opening tags are read: `script`
+	 *                        for the delay passes, `link` for the font-CSS pass.
 	 */
-	private static function carries_optimizer_opt_out( string $tag ): bool {
+	private static function carries_optimizer_opt_out( string $tag, string $element = 'script' ): bool {
 		// Read ATTRIBUTE NAMES, not the tag as a string. A substring scan
 		// matched `src="https://cdn/nowprocket/loader.js"`, `?nowprocket=1`,
 		// `class="nowprocket"` and any inline body that merely mentioned one
@@ -819,7 +998,7 @@ final class Minify_Filters {
 		// The tag regex is quote-aware because `[^>]*>` stops at a `>` inside
 		// a quoted value, and consent managers routinely ship JSON in a
 		// data-* attribute.
-		if ( ! preg_match_all( '#<script\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>#is', $tag, $tags ) ) {
+		if ( ! preg_match_all( '#<' . $element . '\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>#is', $tag, $tags ) ) {
 			return false;
 		}
 
@@ -830,7 +1009,7 @@ final class Minify_Filters {
 			// if it were more attribute names.
 			if ( ! preg_match_all(
 				'#\s+([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*))?#s',
-				substr( $open, 7, -1 ),
+				substr( $open, 1 + strlen( $element ), -1 ),
 				$found
 			) ) {
 				continue;
@@ -1837,6 +2016,16 @@ final class Minify_Filters {
 		if ( preg_match( '#\bmedia\s*=\s*(["\'])\s*print\s*\1#i', $tag ) ) {
 			return $tag;
 		}
+		// Font-CSS links wait for async_font_css_pass(), which sees every link
+		// on the page. This filter sees one tag at a time, so it cannot tell
+		// that a family is split across URLs, and a deferred sheet would carry
+		// a marker that keeps the pass from correcting it.
+		$hosts = self::font_css_hosts();
+		foreach ( self::live_link_tags( $tag ) ?? array() as $link ) {
+			if ( self::is_font_css_link( $link['attrs'], $hosts ) ) {
+				return $tag;
+			}
+		}
 		return self::async_link_markup( $tag );
 	}
 
@@ -1857,22 +2046,28 @@ final class Minify_Filters {
 	 * @param string $tag A `<link rel="stylesheet">` tag deemed safe to defer.
 	 */
 	private static function async_link_markup( string $tag ): string {
-		$async = (string) preg_replace_callback(
-			'#\bmedia\s*=\s*(["\'])([^"\']*)\1#i',
-			static function ( $m ) {
-				$orig = $m[2];
-				return 'media="print" onload="this.media=\'' . esc_attr( $orig ) . '\'" data-xs-async="' . esc_attr( $orig ) . '"';
-			},
-			$tag,
-			1
-		);
-		// If no media= was present (rare), inject one.
-		if ( $async === $tag ) {
-			$async = (string) preg_replace(
-				'#<link\b#i',
-				'<link media="print" onload="this.media=\'all\'" data-xs-async="all"',
+		$link = null;
+		foreach ( self::live_link_tags( $tag ) ?? array() as $candidate ) {
+			if ( self::has_rel_token( $candidate['attrs'], 'stylesheet' ) ) {
+				$link = $candidate;
+				break;
+			}
+		}
+		if ( null === $link ) {
+			return $tag;
+		}
+
+		$media = $link['attrs']['media'] ?? null;
+		if ( null === $media ) {
+			// If no media= was present (rare), inject one.
+			$async = substr_replace( $tag, ' media="print" onload="this.media=\'all\'" data-xs-async="all"', $link['offset'] + strlen( '<link' ), 0 );
+		} else {
+			$orig  = $media['value'];
+			$async = substr_replace(
 				$tag,
-				1
+				'media="print" onload="this.media=\'' . esc_attr( $orig ) . '\'" data-xs-async="' . esc_attr( $orig ) . '"',
+				$media['start'],
+				$media['end'] - $media['start']
 			);
 		}
 		// Fallback for noscript users — re-emit the original tag inside <noscript>.
@@ -1951,6 +2146,14 @@ final class Minify_Filters {
 	 * FONT_CSS_HOSTS. Same-origin links (no host, or the site's own) never
 	 * match the allowlist and are untouched.
 	 *
+	 * Enqueued font links land here too: async_style_tag() leaves them for
+	 * this pass.
+	 *
+	 * Icon-font stylesheets keep blocking (see
+	 * Font_Display::href_names_icon_font()). Material Icons and Material
+	 * Symbols are ligature fonts: loaded late, they print the ligature
+	 * words ("arrow_forward") in a standard font until the sheet arrives.
+	 *
 	 * @param string $html Complete page HTML.
 	 */
 	public static function async_raw_font_css_links( $html ): string {
@@ -1965,101 +2168,442 @@ final class Minify_Filters {
 			return $html;
 		}
 
-		// Never rewrite inside a <noscript>. That block IS the no-JS
-		// fallback — its <link> is a plain blocking stylesheet on purpose,
-		// and async_style_tag() itself emits one for every sheet it defers.
-		// Rewriting it would nest <noscript> (invalid; the parser closes the
-		// outer block at the first </noscript>) and hand no-JS visitors a
-		// media="print" sheet whose onload never runs: no stylesheet at all.
-		// Splitting the buffer on <noscript> spans and rewriting only the
-		// slices between them also makes the pass idempotent against
-		// whatever an earlier pass emitted.
-		$parts = preg_split(
-			'#(<noscript\b[^>]*>.*?</noscript\s*>)#is',
-			$html,
-			-1,
-			PREG_SPLIT_DELIM_CAPTURE
-		);
-
-		// preg_split failed (pathological buffer / backtrack limit). Without
-		// the split we cannot tell a fallback link from a live one, so leave
-		// the page untouched — a few blocking font sheets beat a broken
-		// no-JS fallback.
-		if ( ! is_array( $parts ) ) {
-			return $html;
-		}
-
-		foreach ( $parts as $i => $part ) {
-			// Odd indices are the captured <noscript> blocks.
-			if ( 1 === $i % 2 || '' === $part ) {
-				continue;
-			}
-			$parts[ $i ] = self::async_font_links_in_slice( $part );
-		}
-
-		return implode( '', $parts );
+		return self::async_font_css_pass( $html );
 	}
 
 	/**
-	 * Rewrite the font-CSS links in one <noscript>-free slice of the buffer.
+	 * Filter: `xspeed_cache_final_html`, hooked by the Fonts module when
+	 * "Load Google Fonts without blocking" (`fonts.async_google_css`) is on.
 	 *
-	 * @param string $html Slice of page HTML with no <noscript> spans.
+	 * The same pass as async_raw_font_css_links(), without the Async CSS
+	 * gate.
+	 *
+	 * Async CSS keeps its own hook. With both settings on, both
+	 * run at priority 22 in either order, and the second sees the first's
+	 * data-xs-async markers and skips those links, so the page comes out as
+	 * Async CSS alone would write it.
+	 *
+	 * @param string $html Complete page HTML.
 	 */
-	private static function async_font_links_in_slice( string $html ): string {
-		$hosts = self::font_css_hosts();
+	public static function async_google_font_css( $html ): string {
+		if ( ! is_string( $html ) || '' === $html ) {
+			return (string) $html;
+		}
+		if ( self::skip_in_non_frontend_context() ) {
+			return $html;
+		}
 
-		$out = preg_replace_callback(
-			'#<link\b[^>]*>#i',
-			static function ( array $m ) use ( $hosts ): string {
-				$tag = $m[0];
+		return self::async_font_css_pass( $html );
+	}
 
-				// Only plain stylesheets — never preload/alternate/anything
-				// carrying explicit author intent. `(?<![-\w])` not `\b`, so
-				// a `data-rel=` attribute can never read as the rel — same
-				// reason the delay passes spell src that way. (#273)
-				if ( ! preg_match( '#(?<![-\w])rel\s*=\s*(["\']?)\s*stylesheet\s*\1#i', $tag ) ) {
-					return $tag;
+	/**
+	 * Whitespace as the HTML tokenizer counts it. PCRE's `\s` and PHP's
+	 * ctype_space() also accept the vertical tab, which HTML reads as an
+	 * ordinary character, so a tag split on them ends in the wrong place.
+	 */
+	private const HTML_SPACE = " \t\n\f\r";
+
+	/**
+	 * Elements whose content the browser reads as text up to their own end
+	 * tag. Script has extra escape rules and has its own reader.
+	 *
+	 * Noscript is here because it IS the no-JS fallback: its link is a plain
+	 * blocking stylesheet on purpose, and async_style_tag() emits one for
+	 * every sheet it defers. Rewriting it would nest noscript and hand no-JS
+	 * visitors a print sheet whose onload never runs.
+	 */
+	private const RAW_TEXT_ELEMENTS = array( 'iframe', 'noembed', 'noframes', 'noscript', 'style', 'textarea', 'title', 'xmp' );
+
+	/** SVG and MathML elements whose content the browser reads as HTML again. */
+	private const HTML_INTEGRATION_POINTS = array( 'foreignobject', 'desc', 'title', 'mi', 'mo', 'mn', 'ms', 'mtext', 'annotation-xml' );
+
+	/** Start tags that end SVG or MathML content in the HTML parser. */
+	private const FOREIGN_BREAKOUT_TAGS = array(
+		'b', 'big', 'blockquote', 'body', 'br', 'center', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'embed',
+		'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'i', 'img', 'li', 'listing', 'menu', 'meta', 'nobr',
+		'ol', 'p', 'pre', 'ruby', 's', 'small', 'span', 'strong', 'strike', 'sub', 'sup', 'table', 'tt', 'u', 'ul', 'var', 'font',
+	);
+
+	/**
+	 * The `<link>` tags a browser would actually create, in document order.
+	 *
+	 * This follows the HTML tokenizer rather than matching patterns. Links
+	 * also appear as text in scripts, comments and quoted attributes, and
+	 * themes store whole templates in data attributes. A rewrite there breaks
+	 * the page: onload="this.media='all'" ends a single-quoted value early
+	 * and the rest of the template shows as text. Regex versions of this
+	 * kept failing on markup browsers recover from, because deciding where a
+	 * tag ends depends on the parser state before it.
+	 *
+	 * When the page ends inside a tag or raw-text block, the rest is text to
+	 * the browser, so scanning stops there.
+	 *
+	 * SVG and MathML are understood only when well formed. Recovering from
+	 * broken foreign markup takes the browser's whole tree builder, and a
+	 * wrong guess either rewrites script text or hides a live link from the
+	 * split-family guard. So the answer is null there, and callers leave the
+	 * markup as written.
+	 *
+	 * @param string $html Page or tag markup.
+	 * @return array<int,array{offset:int,tag:string,attrs:array<string,array{value:string,start:int,end:int}>}>|null Null when foreign markup is malformed.
+	 */
+	private static function live_link_tags( string $html ): ?array {
+		$links     = array();
+		$open      = array();
+		$pos       = 0;
+		$in_select = false;
+		$frameset  = false;
+		while ( null !== $pos ) {
+			$lt = strpos( $html, '<', $pos );
+			if ( false === $lt ) {
+				break;
+			}
+			$next        = $html[ $lt + 1 ] ?? '';
+			$is_end      = '/' === $next && ctype_alpha( $html[ $lt + 2 ] ?? '' );
+			$foreign     = array() !== $open;
+			$integration = $foreign && in_array( end( $open ), self::HTML_INTEGRATION_POINTS, true );
+			if ( '!' === $next || '?' === $next || ( '/' === $next && ! $is_end ) ) {
+				if ( $integration ) {
+					return null;
 				}
+				$pos = self::comment_end( $html, $lt, $foreign );
+				continue;
+			}
+			if ( ! $is_end && ! ctype_alpha( $next ) ) {
+				$pos = $lt + 1;
+				continue;
+			}
 
-				// Already deferred (either marker spelling — ours and Pro's),
-				// or explicitly opted out by the theme.
-				foreach ( array( 'data-xs-async', 'data-xspeed-async', 'data-xspeed-keep' ) as $marker ) {
-					if ( false !== stripos( $tag, $marker ) ) {
-						return $tag;
+			$tag = self::read_tag( $html, $lt );
+			if ( null === $tag ) {
+				break;
+			}
+			$pos  = $tag['end'];
+			$name = $tag['name'];
+			// Some browsers ignore an SVG or MathML root inside these, which
+			// changes how everything after it is read.
+			if ( 'select' === $name ) {
+				$in_select = ! $is_end;
+			}
+			$frameset = $frameset || ( 'frameset' === $name && ! $is_end );
+			if ( ( $in_select || $frameset ) && ! $is_end && ( 'svg' === $name || 'math' === $name ) ) {
+				return null;
+			}
+			$open = self::track_foreign_content( $open, $tag, $is_end, $integration );
+			if ( null === $open ) {
+				return null;
+			}
+			// Inside SVG or MathML the browser reads style and script as markup
+			// and a link creates no stylesheet.
+			if ( $is_end || $foreign ) {
+				continue;
+			}
+
+			if ( 'link' === $name ) {
+				$links[] = array(
+					'offset' => $lt,
+					'tag'    => substr( $html, $lt, $pos - $lt ),
+					'attrs'  => $tag['attrs'],
+				);
+			} elseif ( 'plaintext' === $name ) {
+				break;
+			} elseif ( 'script' === $name ) {
+				$pos = self::script_end( $html, $pos );
+			} elseif ( in_array( $name, self::RAW_TEXT_ELEMENTS, true ) ) {
+				$pos = self::raw_text_end( $html, $name, $pos );
+			}
+		}
+		return $links;
+	}
+
+	/**
+	 * Read one start or end tag.
+	 *
+	 * Attribute offsets are positions in `$html`. The first of two same-named
+	 * attributes wins, as in the browser.
+	 *
+	 * @param string $html Markup.
+	 * @param int    $at   Offset of the tag's `<`.
+	 * @return array{end:int,name:string,self_closing:bool,attrs:array<string,array{value:string,start:int,end:int}>}|null Null when the markup ends inside the tag.
+	 */
+	private static function read_tag( string $html, int $at ): ?array {
+		$len   = strlen( $html );
+		$start = $at + ( '/' === $html[ $at + 1 ] ? 2 : 1 );
+		$i     = $start + strcspn( $html, self::HTML_SPACE . '/>', $start );
+		$name  = strtolower( substr( $html, $start, $i - $start ) );
+		$attrs = array();
+
+		while ( $i < $len ) {
+			$skipped = strspn( $html, self::HTML_SPACE . '/', $i );
+			$i      += $skipped;
+			if ( $i >= $len ) {
+				return null;
+			}
+			if ( '>' === $html[ $i ] ) {
+				return array(
+					'end'          => $i + 1,
+					'name'         => $name,
+					'self_closing' => $skipped > 0 && '/' === $html[ $i - 1 ],
+					'attrs'        => $attrs,
+				);
+			}
+
+			// The first character always belongs to the name, even an `=`.
+			$attr_at = $i;
+			$i      += 1 + strcspn( $html, self::HTML_SPACE . '/>=', $i + 1 );
+			$attr    = strtolower( substr( $html, $attr_at, $i - $attr_at ) );
+			$value   = '';
+			$after   = $i + strspn( $html, self::HTML_SPACE, $i );
+			if ( '=' === ( $html[ $after ] ?? '' ) ) {
+				$i     = $after + 1 + strspn( $html, self::HTML_SPACE, $after + 1 );
+				$quote = $html[ $i ] ?? '';
+				if ( '"' === $quote || "'" === $quote ) {
+					$close = strpos( $html, $quote, $i + 1 );
+					if ( false === $close ) {
+						return null;
 					}
+					$value = substr( $html, $i + 1, $close - $i - 1 );
+					$i     = $close + 1;
+				} elseif ( '>' !== $quote ) {
+					$span  = strcspn( $html, self::HTML_SPACE . '>', $i );
+					$value = substr( $html, $i, $span );
+					$i    += $span;
 				}
+			}
+			$attrs += array(
+				$attr => array(
+					'value' => $value,
+					'start' => $attr_at,
+					'end'   => $i,
+				),
+			);
+		}
+		return null;
+	}
 
-				// An onload handler on a stylesheet link is only ever
-				// somebody's finished async pattern — same rule as
-				// async_style_tag(). (#216)
-				if ( preg_match( '#(?<![-\w])onload\s*=#i', $tag ) ) {
-					return $tag;
+	/**
+	 * The open SVG and MathML elements after one tag.
+	 *
+	 * An integration point may hold only text here, because HTML inside it
+	 * needs the full tree builder. A breakout tag or a mismatched end tag
+	 * means the markup is malformed.
+	 *
+	 * @param string[]                         $open        Open element names, outermost first.
+	 * @param array{name:string,self_closing:bool} $tag         The tag just read.
+	 * @param bool                             $is_end      Whether it is an end tag.
+	 * @param bool                             $integration Whether it was read inside an integration point.
+	 * @return string[]|null Null when the markup is malformed.
+	 */
+	private static function track_foreign_content( array $open, array $tag, bool $is_end, bool $integration ): ?array {
+		$name = $tag['name'];
+
+		if ( $is_end ) {
+			if ( array() === $open ) {
+				return $open;
+			}
+			if ( end( $open ) !== $name ) {
+				return null;
+			}
+			array_pop( $open );
+			return $open;
+		}
+
+		if ( $integration || ( array() !== $open && in_array( $name, self::FOREIGN_BREAKOUT_TAGS, true ) ) ) {
+			return null;
+		}
+		if ( ( array() !== $open || 'svg' === $name || 'math' === $name ) && ! $tag['self_closing'] ) {
+			$open[] = $name;
+		}
+		return $open;
+	}
+
+	/**
+	 * Where a comment, doctype or other `<!`, `<?` or `</` construct ends.
+	 *
+	 * CDATA is only a section in SVG or MathML content. In HTML the browser treats
+	 * it as a comment that ends at the first `>`.
+	 *
+	 * @param string $html    Markup.
+	 * @param int    $lt      Offset of the `<`.
+	 * @param bool   $foreign In SVG or MathML content.
+	 * @return int|null Offset after the construct, or null when the markup ends first.
+	 */
+	private static function comment_end( string $html, int $lt, bool $foreign ): ?int {
+		if ( '<!--' === substr( $html, $lt, 4 ) ) {
+			$body = $lt + 4;
+			if ( preg_match( '#\G-?>#', $html, $abrupt, 0, $body ) ) {
+				return $body + strlen( $abrupt[0] );
+			}
+			if ( ! preg_match( '#--!?>#', $html, $close, PREG_OFFSET_CAPTURE, $body ) ) {
+				return null;
+			}
+			return $close[0][1] + strlen( $close[0][0] );
+		}
+
+		$closer = $foreign && '<![CDATA[' === substr( $html, $lt, 9 ) ? ']]>' : '>';
+		$end    = strpos( $html, $closer, $lt + 1 );
+		return false === $end ? null : $end + strlen( $closer );
+	}
+
+	/**
+	 * Where a raw-text element's end tag ends.
+	 *
+	 * @param string $html Markup.
+	 * @param string $name Lowercase element name.
+	 * @param int    $from Offset after the start tag.
+	 * @return int|null Null when the element is never closed.
+	 */
+	private static function raw_text_end( string $html, string $name, int $from ): ?int {
+		if ( ! preg_match( '#</' . $name . '(?=[\t\n\f\r />])#i', $html, $close, PREG_OFFSET_CAPTURE, $from ) ) {
+			return null;
+		}
+		$tag = self::read_tag( $html, $close[0][1] );
+		return null === $tag ? null : $tag['end'];
+	}
+
+	/**
+	 * Where a script's end tag ends.
+	 *
+	 * Inside `<!--`, a `<script` text hides the next `</script>` from the
+	 * browser, so the first end tag is not always the real one.
+	 *
+	 * @param string $html Markup.
+	 * @param int    $from Offset after the start tag.
+	 * @return int|null Null when the script is never closed.
+	 */
+	private static function script_end( string $html, int $from ): ?int {
+		$in_comment  = false;
+		$hidden_once = false;
+		while ( preg_match( '#<!--|-->|</?script(?=[\t\n\f\r />])#i', $html, $found, PREG_OFFSET_CAPTURE, $from ) ) {
+			list( $token, $at ) = $found[0];
+			$token              = strtolower( $token );
+			if ( '<!--' === $token ) {
+				$in_comment = true;
+				// The dashes can also be the start of `-->`, as in `<!-->`.
+				$from = $at + 2;
+				continue;
+			}
+			$from = $at + strlen( $token );
+			if ( '-->' === $token ) {
+				$in_comment  = false;
+				$hidden_once = false;
+			} elseif ( '<script' === $token ) {
+				$hidden_once = $in_comment;
+			} elseif ( $hidden_once ) {
+				$hidden_once = false;
+			} else {
+				$tag = self::read_tag( $html, $at );
+				return null === $tag ? null : $tag['end'];
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether a parsed link's rel, a token list, contains one keyword.
+	 *
+	 * @param array<string,array{value:string,start:int,end:int}> $attrs Parsed attributes.
+	 * @param string                                              $token Lowercase keyword.
+	 */
+	private static function has_rel_token( array $attrs, string $token ): bool {
+		$tokens = (array) preg_split( '#[\t\n\f\r ]+#', strtolower( $attrs['rel']['value'] ?? '' ), -1, PREG_SPLIT_NO_EMPTY );
+		return in_array( $token, $tokens, true );
+	}
+
+	/**
+	 * Whether a parsed link's href is on the font-CSS allowlist.
+	 *
+	 * @param array<string,array{value:string,start:int,end:int}> $attrs Parsed attributes.
+	 * @param string[]                                            $hosts Allowed font-CSS hosts.
+	 */
+	private static function is_font_css_link( array $attrs, array $hosts ): bool {
+		$host = strtolower( (string) wp_parse_url( $attrs['href']['value'] ?? '', PHP_URL_HOST ) );
+		return '' !== $host && in_array( $host, $hosts, true );
+	}
+
+	/**
+	 * The font-CSS buffer pass both entry points share.
+	 *
+	 * @param string $html Complete page HTML.
+	 */
+	private static function async_font_css_pass( string $html ): string {
+		$family_sources = array();
+		$candidates     = self::async_font_links( $html, self::font_css_hosts(), $family_sources );
+		if ( null === $candidates ) {
+			return $html;
+		}
+
+		// One weight can become the browser's temporary match while another
+		// sheet for the family is missing, fetching both fonts.
+		// Decide after every live link is known, including links across scripts.
+		$pieces = array();
+		$cursor = 0;
+		foreach ( $candidates as $link ) {
+			$keep = false;
+			foreach ( $link['families'] as $family ) {
+				if ( count( $family_sources[ $family ] ) > 1 ) {
+					$keep = true;
+					break;
 				}
+			}
+			$pieces[] = substr( $html, $cursor, $link['offset'] - $cursor );
+			$pieces[] = $keep ? $link['tag'] : self::async_link_markup( $link['tag'] );
+			$cursor   = $link['offset'] + strlen( $link['tag'] );
+		}
+		$pieces[] = substr( $html, $cursor );
 
-				// A sheet that never applies on screen is not blocking paint.
-				if ( preg_match( '#(?<![-\w])media\s*=\s*(["\'])([^"\']*)\1#i', $tag, $mm )
-					&& in_array( strtolower( trim( $mm[2] ) ), self::NON_SCREEN_MEDIA, true ) ) {
-					return $tag;
-				}
+		return implode( '', $pieces );
+	}
 
-				if ( ! preg_match( '#(?<![-\w])href\s*=\s*(["\'])([^"\']+)\1#i', $tag, $hm ) ) {
-					return $tag;
-				}
-				// No host means a relative URL — same-origin, and the enqueue
-				// path's business if it is anybody's.
-				$host = strtolower( (string) wp_parse_url( $hm[2], PHP_URL_HOST ) );
-				if ( '' === $host || ! in_array( $host, $hosts, true ) ) {
-					return $tag;
-				}
+	/**
+	 * Read the page's live font links once, keeping their offsets.
+	 *
+	 * @param string                           $html           Complete page HTML.
+	 * @param string[]                         $hosts          Allowed font-CSS hosts.
+	 * @param array<string,array<string,bool>> $family_sources Distinct screen stylesheet URLs for each family.
+	 * @return array<int,array{offset:int,tag:string,families:string[]}>|null Links that may be deferred, or null when foreign markup is malformed.
+	 */
+	private static function async_font_links( string $html, array $hosts, array &$family_sources ): ?array {
+		$live = self::live_link_tags( $html );
+		if ( null === $live ) {
+			return null;
+		}
 
-				return self::async_link_markup( $tag );
-			},
-			$html
-		);
+		$out = array();
+		foreach ( $live as $link ) {
+			$attrs = $link['attrs'];
+			// data-rel and data-href must not stand in for the real attributes (#273).
+			if ( ! self::has_rel_token( $attrs, 'stylesheet' ) || ! self::is_font_css_link( $attrs, $hosts ) ) {
+				continue;
+			}
+			$href = $attrs['href']['value'];
 
-		// A PCRE failure returns null — the unrewritten slice is the safe
-		// fallback, never an empty page.
-		return null === $out ? $html : $out;
+			$deferred = isset( $attrs['data-xs-async'] ) || isset( $attrs['data-xspeed-async'] );
+			// An author-supplied load handler owns this link's behavior (#216).
+			$onload = isset( $attrs['onload'] );
+			if ( in_array( strtolower( trim( $attrs['media']['value'] ?? '' ) ), self::NON_SCREEN_MEDIA, true )
+				&& ! $deferred && ! $onload ) {
+				continue;
+			}
+
+			$families = Font_Display::href_families( $href );
+			$source   = html_entity_decode( $href, ENT_QUOTES | ENT_HTML5 );
+			foreach ( $families as $family ) {
+				$family_sources[ $family ][ $source ] = true;
+			}
+			// An alternate sheet can apply on load through its title, so it
+			// counts toward its family above, but it is the author's to switch.
+			if ( $deferred || $onload || isset( $attrs['data-xspeed-keep'] ) || self::has_rel_token( $attrs, 'alternate' )
+				|| self::carries_optimizer_opt_out( $link['tag'], 'link' ) || Font_Display::href_names_icon_font( $href ) ) {
+				continue;
+			}
+			$out[] = array(
+				'offset'   => $link['offset'],
+				'tag'      => $link['tag'],
+				'families' => $families,
+			);
+		}
+		return $out;
 	}
 
 	/**
@@ -3158,10 +3702,14 @@ final class Minify_Filters {
 		self::$has_critical_css        = null;
 		self::$exclusion_floor         = null;
 		self::$inline_bound_handles    = null;
-		self::$needed_by_excluded      = null;
+		self::$needed_by_excluded             = null;
+		self::$needed_by_defer_excluded       = null;
+		self::$needed_by_defer_excluded_count = 0;
 		self::$own_host                = null;
 		self::$pristine_tag            = array();
 		self::$our_late_attrs          = array();
+		self::$defer_provenance        = array();
+		self::$defer_handles_seen      = array();
 	}
 
 	/**
@@ -3180,6 +3728,17 @@ final class Minify_Filters {
 
 	/** How many scripts were registered when $needed_by_excluded was built. */
 	private static $needed_by_excluded_count = 0;
+
+	/**
+	 * Per-request memo for dependencies of Defer-excluded scripts.
+	 * Null = not resolved.
+	 *
+	 * @var array<string,true>|null
+	 */
+	private static $needed_by_defer_excluded = null;
+
+	/** How many scripts were registered when the Defer dependency map was built. */
+	private static $needed_by_defer_excluded_count = 0;
 
 	/** The site's own host for without_own_host(). Null = not read yet. */
 	private static $own_host = null;
@@ -3225,6 +3784,43 @@ final class Minify_Filters {
 		}
 		self::$needed_by_excluded       = $needed;
 		self::$needed_by_excluded_count = $count;
+		return $needed;
+	}
+
+	/**
+	 * Handles a Defer-excluded script depends on, transitively.
+	 *
+	 * Delay exclusions may be lifted by explicit delay targets. Defer
+	 * exclusions have no such override, so use the default exclusion policy.
+	 *
+	 * @return array<string,true> Handle => true.
+	 */
+	private static function needed_by_defer_excluded(): array {
+		$scripts = function_exists( 'wp_scripts' ) ? wp_scripts() : null;
+		$count   = $scripts instanceof \WP_Scripts ? count( (array) $scripts->registered ) : 0;
+		if ( null !== self::$needed_by_defer_excluded && $count === self::$needed_by_defer_excluded_count ) {
+			return self::$needed_by_defer_excluded;
+		}
+
+		$needed = array();
+		if ( $scripts instanceof \WP_Scripts ) {
+			foreach ( (array) $scripts->registered as $handle => $reg ) {
+				$handle = (string) $handle;
+				$src    = self::original_src( $handle );
+				if ( '' === $src ) {
+					$src = self::registered_src( $handle );
+				}
+				if ( ! isset( $reg->deps ) || ! self::is_excluded_script( $handle, $src ) ) {
+					continue;
+				}
+				foreach ( (array) $reg->deps as $dep ) {
+					self::mark_with_deps( $scripts, (string) $dep, $needed );
+				}
+			}
+		}
+
+		self::$needed_by_defer_excluded       = $needed;
+		self::$needed_by_defer_excluded_count = $count;
 		return $needed;
 	}
 
@@ -3608,5 +4204,64 @@ final class Minify_Filters {
 		self::$js_measured_layout = (bool) apply_filters( 'xspeed_async_css_js_measured_layout', $found );
 
 		return self::$js_measured_layout;
+	}
+
+	/**
+	 * The `defer_js_excluded` entries the Minify schema ships with. They keep
+	 * jQuery blocking only because inline code used to run before it could;
+	 * Defer_Inline moves that code behind jQuery, so it skips these two.
+	 */
+	private const SHIPPED_JQUERY_EXCLUSIONS = array( 'jquery-core', 'jquery-migrate' );
+
+	/**
+	 * Whether Defer_Inline must leave a script running where it is.
+	 *
+	 * The consent-manager floor, our own handles, and the user's exclusion
+	 * list minus the shipped jQuery entries. ALWAYS_EXCLUDED_HANDLES is
+	 * left out on purpose: it protects the admin dashboard, and the
+	 * buffer pass only ever sees front-end pages.
+	 *
+	 * @param string $handle Script handle, '' when the tag has none.
+	 * @param string $src    Script URL, or an inline body to match fragments against.
+	 */
+	public static function keeps_script_in_place( string $handle, string $src ): bool {
+		if ( '' !== $handle && 0 === strpos( $handle, 'xspeed-' ) ) {
+			return true;
+		}
+		foreach ( self::exclusion_floor() as $needle ) {
+			if ( self::floor_matches( $needle, $handle, $src ) && ! self::defers_consent_manager( $handle, $src ) ) {
+				return true;
+			}
+		}
+		$opts     = self::opts();
+		$excluded = is_array( $opts['defer_js_excluded'] ?? null ) ? $opts['defer_js_excluded'] : array();
+		foreach ( $excluded as $needle ) {
+			$needle = (string) $needle;
+			if ( in_array( $needle, self::SHIPPED_JQUERY_EXCLUSIONS, true ) ) {
+				continue;
+			}
+			if ( self::target_matches( $needle, $handle, $src ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a `<script …>` opening tag asks optimizers to leave it alone.
+	 *
+	 * @param string $open_tag Full opening tag.
+	 */
+	public static function script_opts_out( string $open_tag ): bool {
+		return self::tag_opts_out( $open_tag ) || self::carries_optimizer_opt_out( $open_tag );
+	}
+
+	/**
+	 * A script tag's `type`, lowercased; '' when it has none.
+	 *
+	 * @param string $attrs Opening tag or its attribute string.
+	 */
+	public static function script_type( string $attrs ): string {
+		return self::extract_type( $attrs );
 	}
 }
