@@ -56,6 +56,11 @@ final class ObjectCacheModule extends Module {
 		return array(
 			'backend' => array(
 				'type'          => 'enum',
+				// Connection fields decide which backend WordPress trusts, so an
+				// MCP write must hold `configure` to change them — not only the
+				// secret password. A write-only token could otherwise repoint the
+				// cache at an attacker's server. (#920)
+				'configure'     => true,
 				'default'       => 'redis',
 				'options'       => array( 'redis', 'memcached' ),
 				'option_labels' => array(
@@ -67,6 +72,7 @@ final class ObjectCacheModule extends Module {
 			),
 			'redis_host' => array(
 				'type'           => 'string',
+				'configure'      => true, // Repoints the backend. (#920)
 				'default'        => '127.0.0.1',
 				// WP_REDIS_PATH is Redis Object Cache's name for a unix socket,
 				// and it only means one when WP_REDIS_SCHEME says `unix` -- the
@@ -88,6 +94,7 @@ final class ObjectCacheModule extends Module {
 			),
 			'redis_port' => array(
 				'type'        => 'int',
+				'configure'   => true, // Repoints the backend. (#920)
 				'default'     => 6379,
 				'min'         => 1,
 				'max'         => 65535,
@@ -99,6 +106,7 @@ final class ObjectCacheModule extends Module {
 			),
 			'redis_user' => array(
 				'type'                => 'string',
+				'configure'           => true, // Identity on the backend. (#920)
 				'default'             => '',
 				// WP_REDIS_PASSWORD trails the dedicated names because in its
 				// array form -- how xCloud and Cloudways hand out ACL
@@ -124,6 +132,9 @@ final class ObjectCacheModule extends Module {
 			),
 			'redis_database' => array(
 				'type'        => 'int',
+				// On a shared Redis, the database number alone can point the site
+				// at another site's keys. (#920)
+				'configure'   => true,
 				'default'     => 0,
 				'min'         => 0,
 				'max'         => 15,
@@ -135,6 +146,7 @@ final class ObjectCacheModule extends Module {
 			),
 			'memcached_host' => array(
 				'type'        => 'string',
+				'configure'   => true, // Repoints the backend. (#920)
 				'default'     => '127.0.0.1',
 				// Memcached names its OWN constants. Sharing XSPEED_OC_HOST/PORT
 				// with Redis meant enabling Redis rewrote the Memcached host and
@@ -164,6 +176,7 @@ final class ObjectCacheModule extends Module {
 			),
 			'memcached_port' => array(
 				'type'          => 'int',
+				'configure'     => true, // Repoints the backend. (#920)
 				'default'       => 11211,
 				'min'           => 1,
 				'max'           => 65535,
@@ -188,6 +201,9 @@ final class ObjectCacheModule extends Module {
 			),
 			'key_prefix' => array(
 				'type'        => 'string',
+				// The namespace/salt; on a shared server, changing it alone can
+				// read or collide with another site's keys. (#920)
+				'configure'   => true,
 				'default'     => '',
 				// ONE field for both backends on purpose: the drop-in has one
 				// salt and applies it identically either way (full_key()), so
@@ -1140,6 +1156,12 @@ final class ObjectCacheModule extends Module {
 					\WP_CLI::error( 'Unknown setting: ' . ( '' === $key ? '(none given)' : $key ) . '. Run `wp xspeed objcache status` for the list.' );
 				}
 				$on = 'override' === $action;
+				// Over MCP without `configure`, refuse before anything changes
+				// so the command does not report a switch that did not happen. (#920)
+				$refusal = \XSpeed\Settings_Manager::configure_refusal( self::SLUG, $key );
+				if ( null !== $refusal ) {
+					\WP_CLI::error( $refusal->get_error_message() );
+				}
 				if ( $on && null === \XSpeed\Settings_Manager::constant_source( $schema[ $key ] ) ) {
 					\WP_CLI::error( sprintf( '"%s" is not defined in wp-config.php, so there is nothing to override.', $key ) );
 				}

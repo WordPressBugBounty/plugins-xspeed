@@ -43,7 +43,13 @@ use XSpeed\Onboarding;
 
 defined( 'ABSPATH' ) || exit;
 
-final class McpModule extends Module {
+// Not final, unlike the other modules: a test subclass overrides
+// plugins_module_ships(), so the `plugins list` fallback is checked both with
+// and without the plugins module in any tree, whichever of them ships it.
+class McpModule extends Module {
+
+	/** The module that owns `wp xspeed plugins` when it is installed (#953). */
+	public const PLUGINS_COMMAND_MODULE = 'XSpeed\\Modules\\Plugins\\PluginsModule';
 
 	/**
 	 * The stylesheet of the standalone consent pages: the OAuth authorize
@@ -211,6 +217,9 @@ final class McpModule extends Module {
 		// retried once on an admin page load (see Mcp_Hub::queue_scan_notice).
 		add_action( Mcp_Hub::SCAN_NOTICE_HOOK, array( Mcp_Hub::class, 'send_scan_notice' ) );
 		add_action( 'admin_init', array( Mcp_Hub::class, 'maybe_retry_scan_notice' ) );
+		// A plugin activated, deactivated, deleted, installed or updated is
+		// reported to the Hub within seconds, not on its daily pass (#952).
+		Plugins_Changed::boot();
 		// The owner's Approve / Deny for destructive MCP actions.
 		Mcp_Approvals::boot();
 
@@ -1869,6 +1878,12 @@ final class McpModule extends Module {
 		status_header( 200 );
 		header( 'Content-Type: text/html; charset=utf-8' );
 		header( 'Cache-Control: no-store' );
+		// The page carries a live nonce and state, and approving it mints a
+		// read/write MCP token; it must never be framed, or one click under a
+		// decoy hands that token to an attacker. Core's send_frame_options_header()
+		// does not reach this front-end rewrite route. (#923)
+		header( 'X-Frame-Options: DENY' );
+		header( "Content-Security-Policy: frame-ancestors 'none'" );
 
 		echo '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . esc_html__( 'Authorize AI access', 'xspeed' ) . '</title>';
 		echo '<style>' . self::CONSENT_CSS . '</style></head><body><div class="card">'; // phpcs:ignore WordPress.Security.EscapeOutput -- static stylesheet constant.
@@ -1893,6 +1908,9 @@ final class McpModule extends Module {
 		status_header( 400 );
 		header( 'Content-Type: text/html; charset=utf-8' );
 		header( 'Cache-Control: no-store' );
+		// Same authorize route as the consent screen: never frame it. (#923)
+		header( 'X-Frame-Options: DENY' );
+		header( "Content-Security-Policy: frame-ancestors 'none'" );
 		echo '<!doctype html><html><head><meta charset="utf-8"><title>' . esc_html__( 'Authorization error', 'xspeed' ) . '</title>';
 		echo '<style>body{font:15px/1.5 -apple-system,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}'
 			. '.card{background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:440px;padding:32px;text-align:center}</style></head><body>';
@@ -1932,7 +1950,7 @@ final class McpModule extends Module {
 	// -- WP-CLI mirror --
 
 	public function cli_commands(): array {
-		return array(
+		$commands = array(
 			array(
 				'name'      => 'xspeed mcp status',
 				'risk'      => 'read',
@@ -1996,6 +2014,57 @@ final class McpModule extends Module {
 				'synopsis'  => array(),
 			),
 		);
+
+		// The plugins command, when its module is installed, has `list` as
+		// one of its actions and serves it from Plugin_Inventory. Two
+		// `xspeed plugins` registrations stop every `wp` command with a fatal
+		// error, so this one steps aside.
+		if ( ! $this->plugins_module_ships() ) {
+			$commands[] = array(
+				'name'      => 'xspeed plugins list',
+				'risk'      => 'read',
+				'callback'  => array( $this, 'cli_plugins_list' ),
+				'shortdesc' => 'List every plugin on this site: file, slug, name, version, status, available update, required plugins, source and licence state.',
+				'ai_hint'   => 'Read which plugins this site has, which are active (on this site or network-wide), which have an update waiting and which come from wordpress.org. Reads stored update data only and makes no outside call. Pass format=json for the full rows.',
+				'synopsis'  => array(
+					array(
+						'type'        => 'assoc',
+						'name'        => 'format',
+						'description' => 'table (default) or json (every field, for scripts and the Hub).',
+						'optional'    => true,
+						'options'     => array( 'table', 'json' ),
+					),
+				),
+			);
+		}
+		return $commands;
+	}
+
+	/**
+	 * Whether the plugins command module is installed, which then owns
+	 * `wp xspeed plugins list`.
+	 */
+	public static function plugins_command_elsewhere(): bool {
+		// Without autoloading: asking the autoloader for a class that is not
+		// installed logs a missing-module diagnostic on every call. The file
+		// check finds the module before it has loaded.
+		if ( class_exists( self::PLUGINS_COMMAND_MODULE, false ) ) {
+			return true;
+		}
+		return defined( 'XSPEED_DIR' ) && file_exists( self::plugins_command_file() );
+	}
+
+	/**
+	 * Whether cli_commands() leaves `plugins list` to the plugins module.
+	 * Tests override this; the real answer depends on which files ship.
+	 */
+	protected function plugins_module_ships(): bool {
+		return self::plugins_command_elsewhere();
+	}
+
+	/** Where the plugins command module lives when it is installed. */
+	public static function plugins_command_file(): string {
+		return XSPEED_DIR . 'includes/modules/Plugins/PluginsModule.php';
 	}
 
 	/**
@@ -2108,6 +2177,22 @@ final class McpModule extends Module {
 		Mcp_Pairing::rotate( $read_only );
 		\WP_CLI::success( 'Rotated. The previous token is now invalid. New paste-in URL:' );
 		\WP_CLI::log( '  ' . Mcp_Pairing::connect_url() );
+	}
+
+	/**
+	 * `wp xspeed plugins list` — every plugin on the site (#952).
+	 *
+	 * Registered here, beside the other Hub calls, because the Hub is what
+	 * reads it; it has no settings or panel of its own.
+	 *
+	 * @param array $args  Positional args (unused).
+	 * @param array $assoc --format=table|json.
+	 */
+	public function cli_plugins_list( array $args, array $assoc ): void {
+		unset( $args );
+		foreach ( explode( "\n", Plugin_Inventory::render( (string) ( $assoc['format'] ?? 'table' ) ) ) as $line ) {
+			\WP_CLI::line( $line );
+		}
 	}
 
 	/**

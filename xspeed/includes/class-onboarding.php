@@ -398,11 +398,11 @@ class Onboarding {
 
 		// Usage analytics consent. Only acted on when the key is present in
 		// the payload (legacy onboarding-complete sites are left untouched).
-		// The wizard toggle starts off (#437, #735), so usage_tracking=true
-		// means the admin turned it on, and opt_in(true) registers the
-		// install. Nothing is sent before the admin clicks Apply. The same
-		// consent is also writable from Settings → Privacy & usage data, via
-		// PrivacyModule, which routes through the same opt_in().
+		// The wizard sends usage_tracking=true when the admin clicks Apply &
+		// Continue under the consent notice (#963); Skip never reaches this
+		// handler, so nothing is sent. The same consent is writable from
+		// Settings → Privacy & usage data, via PrivacyModule, which routes
+		// through the same opt_in().
 		if ( array_key_exists( 'usage_tracking', $params ) ) {
 			$tracker = Plugin::instance()->usage_tracker();
 			if ( $tracker ) {

@@ -47,6 +47,8 @@ return array(
     'XSpeed\\Modules\\Mcp\\Mcp_Rate_Limiter' => $baseDir . '/includes/modules/Mcp/Mcp_Rate_Limiter.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Server' => $baseDir . '/includes/modules/Mcp/Mcp_Server.php',
     'XSpeed\\Modules\\Mcp\\Mcp_Tools' => $baseDir . '/includes/modules/Mcp/Mcp_Tools.php',
+    'XSpeed\\Modules\\Mcp\\Plugin_Inventory' => $baseDir . '/includes/modules/Mcp/Plugin_Inventory.php',
+    'XSpeed\\Modules\\Mcp\\Plugins_Changed' => $baseDir . '/includes/modules/Mcp/Plugins_Changed.php',
     'XSpeed\\Modules\\Migration\\MigrationModule' => $baseDir . '/includes/modules/Migration/MigrationModule.php',
     'XSpeed\\Modules\\Minify\\MinifyModule' => $baseDir . '/includes/modules/Minify/MinifyModule.php',
     'XSpeed\\Modules\\ObjectCache\\ObjectCacheModule' => $baseDir . '/includes/modules/ObjectCache/ObjectCacheModule.php',

@@ -313,6 +313,12 @@ final class Health {
 						$nginx_detail = self::nonce_skip_detail( $skip );
 						break;
 					case 'unverified':
+						if ( ! empty( $probe['unconfirmed'] ) ) {
+							// The round trip worked, so "the check did not
+							// complete" would be wrong. (#897)
+							$nginx_detail = 'The test file was served without PHP, but the response had no X-XSpeed-Rules marker and no ETag, so xSpeed cannot tell whether nginx or PHP served it. Paste the snippet below into your server { } block again and reload nginx, so nginx sends the marker.';
+							break;
+						}
 						$nginx_detail = sprintf(
 							'Could not verify the static rewrite — the check itself did not complete, so this is not evidence that your config is wrong. If you have already pasted the snippet, it may well be working. Reason: %s',
 							$probe_reason
@@ -421,6 +427,13 @@ final class Health {
 				} elseif ( ! $installed ) {
 					$tone   = self::WARN;
 					$detail = 'Block missing from .htaccess. Toggle Enable Cache off and on to reinstall it.';
+				} elseif ( $inconclusive && ! empty( $probe['unconfirmed'] ) ) {
+					// The site did reach itself and got the right file back,
+					// so the "could not complete" advice below would be wrong.
+					// What is missing is the marker, which a reinstalled
+					// block sends. (#897)
+					$tone   = self::INFO;
+					$detail = 'The test file was served without PHP, but the response had no X-XSpeed-Rules marker and no ETag, so xSpeed cannot tell whether Apache or PHP served it. Turn Enable Cache off and on to reinstall the .htaccess block, then run `wp xspeed cache recheck-rewrite`.';
 				} elseif ( $inconclusive ) {
 					// Same distinction as the nginx branch: the probe never
 					// reached a verdict, so telling the user to go re-check

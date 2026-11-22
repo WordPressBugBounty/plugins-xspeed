@@ -586,6 +586,12 @@ final class Settings_Manager {
 		if ( ! $module || ! array_key_exists( $key, $module->settings_schema() ) ) {
 			return;
 		}
+		// Backstop for callers that did not ask configure_refusal() first.
+		// Only taking a field over is gated: dropping the entry is also how a
+		// save promotes its own values, and revert() checks for itself. (#920)
+		if ( $on && null !== self::configure_refusal( $slug, $key ) ) {
+			return;
+		}
 		// Seed the option row from the value currently in force, BEFORE the
 		// override lifts. Without this the field falls back to its schema
 		// default the moment it unlocks -- so an admin who took the field over
@@ -676,6 +682,10 @@ final class Settings_Manager {
 	 * @return string|\WP_Error Foreign constant name, or an error.
 	 */
 	public static function revert( string $slug, string $key ) {
+		$refusal = self::configure_refusal( $slug, $key );
+		if ( null !== $refusal ) {
+			return $refusal;
+		}
 		$module = Module_Registry::get( $slug );
 		if ( ! $module || ! array_key_exists( $key, $module->settings_schema() ) ) {
 			return new \WP_Error(
@@ -980,15 +990,18 @@ final class Settings_Manager {
 		$raw = get_option( self::option_key( $slug ), array() );
 		$raw = is_array( $raw ) ? $raw : array();
 
-		// An MCP agent must not silently rewrite credentials — repointing the
+		// An MCP agent must not silently rewrite credentials OR the connection
+		// that decides which backend WordPress trusts — repointing the
 		// Cloudflare or object-cache backend at an attacker endpoint — unless the
-		// connection was explicitly granted the `configure` scope. Strip secret
-		// fields from an unprivileged MCP write here so every write path (the
-		// update_settings tool AND run_command → CLI) is covered at one choke
-		// point. The tool handler surfaces the refusal as a clear error. (#116)
+		// connection was explicitly granted the `configure` scope. #116 gated
+		// only secret-typed fields, which let a write-only token change the Redis
+		// host/port/database and repoint the cache; is_configure_field() closes
+		// that by covering the connection fields too. Stripped here so every
+		// write path (the update_settings tool AND run_command → CLI) is covered
+		// at one choke point. The tool handler surfaces the refusal. (#116, #920)
 		if ( self::mcp_write_blocked() ) {
 			foreach ( $schema as $key => $spec ) {
-				if ( self::is_secret_field( $key, $spec ) ) {
+				if ( self::is_configure_field( $key, $spec ) ) {
 					unset( $input[ $key ] );
 				}
 			}
@@ -1483,6 +1496,73 @@ final class Settings_Manager {
 	}
 
 	/**
+	 * Whether a schema field needs the `configure` scope to write, separate
+	 * from secret masking. A field marked `'configure' => true` decides which
+	 * backend the site trusts (connection host/port/backend) or which key
+	 * namespace it reads — changing it is an infrastructure change, not an
+	 * everyday write, so a default read-write MCP connection must not. A secret
+	 * field is always configure-gated too, so the password case stays covered
+	 * even if a schema omits the flag. (#920)
+	 */
+	public static function is_configure_field( string $key, array $spec ): bool {
+		return ! empty( $spec['configure'] ) || self::is_secret_field( $key, $spec );
+	}
+
+	/**
+	 * The refusal for an MCP call without `configure` that would change which
+	 * value of a configure field is in force, or null when it may go ahead.
+	 *
+	 * Override and revert never pass through update(), so its strip does not
+	 * see them, yet each one switches a connection field between the host's
+	 * wp-config.php value and ours: a write-only token could swap the Redis
+	 * host that way. (#920)
+	 */
+	public static function configure_refusal( string $slug, string $key ): ?\WP_Error {
+		if ( ! self::mcp_write_blocked() ) {
+			return null;
+		}
+		$module = Module_Registry::get( $slug );
+		$spec   = $module ? ( $module->settings_schema()[ $key ] ?? null ) : null;
+		if ( ! is_array( $spec ) || ! self::is_configure_field( $key, $spec ) ) {
+			return null;
+		}
+		return new \WP_Error(
+			'xspeed_mcp_configure_required',
+			sprintf(
+				/* translators: 1: setting key, 2: module slug. */
+				__( 'Changing who sets "%1$s" on "%2$s" needs the "configure" scope, which is off by default. Reconnect the MCP client granting the configure scope, or do this from the xSpeed dashboard.', 'xspeed' ),
+				$key,
+				$slug
+			),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * The subset of $input keys that need `configure` for this module's schema.
+	 * Used by the MCP update_settings tool to name exactly which fields it
+	 * refused. Returns [] for an unknown module.
+	 *
+	 * @param string              $slug  Module slug.
+	 * @param array<string,mixed> $input Proposed settings patch.
+	 * @return string[]
+	 */
+	public static function configure_keys_in( string $slug, array $input ): array {
+		$module = Module_Registry::get( $slug );
+		if ( ! $module ) {
+			return array();
+		}
+		$schema = $module->settings_schema();
+		$out    = array();
+		foreach ( $input as $key => $value ) {
+			if ( isset( $schema[ $key ] ) && self::is_configure_field( $key, $schema[ $key ] ) ) {
+				$out[] = $key;
+			}
+		}
+		return $out;
+	}
+
+	/**
 	 * The subset of $input keys that are secret fields for this module's schema.
 	 * Used by the MCP update_settings tool to name exactly which fields it
 	 * refused. Returns [] for an unknown module.
@@ -1837,6 +1917,20 @@ final class Settings_Manager {
 					if ( ! empty( $fields ) ) {
 						return array(
 							'code' => 'secret_fields',
+							'data' => array( 'fields' => $fields ),
+						);
+					}
+					break;
+
+				// MCP without the `configure` scope: secret fields AND the
+				// connection fields that decide which backend the site trusts.
+				// The CLI keeps the narrower `secrets` check, since an admin
+				// at a shell may repoint the cache. (#920)
+				case 'configure':
+					$fields = self::configure_keys_in( $slug, $values );
+					if ( ! empty( $fields ) ) {
+						return array(
+							'code' => 'configure_fields',
 							'data' => array( 'fields' => $fields ),
 						);
 					}

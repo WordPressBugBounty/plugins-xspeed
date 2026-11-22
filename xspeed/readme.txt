@@ -4,7 +4,7 @@ Tags: cache, performance, page speed, optimization, mcp
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.9
+Stable tag: 1.4.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -141,7 +141,7 @@ Pages are saved as static HTML files and served before WordPress loads. The cach
 
 xSpeed Cache stores no IP addresses and sets no tracking cookies. Out of the box, the only request it makes is a check to your own site's home URL to confirm GZIP is active, at most once an hour.
 
-Usage analytics is optional and off by default. If you turn it on in the setup wizard or in xSpeed Cache → Settings → Privacy & usage data, it sends your email address and display name, your site's setup and which xSpeed Cache features you use. Page content is never sent. See the External services section below for every service the plugin can contact.
+Usage analytics is optional. It starts when you click Apply & Continue in the setup wizard, which says so above the button, or when you turn it on in xSpeed Cache → Settings → Privacy & usage data. It sends your email address and display name, your site's setup and which xSpeed Cache features you use. Page content is never sent. See the External services section below for every service the plugin can contact.
 
 If xSpeed Cache makes your site faster, please leave a review on WordPress.org.
 
@@ -229,7 +229,7 @@ By default, no. The only request is a check to your own site's home URL to confi
 
 Out of the box, xSpeed Cache contacts only your own site (the gzip probe below). Every other service on this list runs only after an administrator turns it on, connects it or presses a button. None of them runs on a fresh install.
 
-Usage analytics is off by default. The setup wizard shows it as an unticked switch, and xSpeed Cache → Settings → Privacy & usage data has the same switch. Nothing is sent until you turn it on. Turning it off stops all sending and clears the scheduled send. The deactivation survey is separate and sends nothing unless you click Submit. Speed tests and xSpeed Scan run only when you press Test or Scan, never on a schedule.
+Usage analytics starts only after an administrator agrees to it. The setup wizard's Configure step says that clicking Apply & Continue shares usage data, with a "What we collect?" link that lists it. Skip the step and nothing is sent. xSpeed Cache → Settings → Privacy & usage data turns it on or off at any time. Turning it off stops all sending and clears the scheduled send. The deactivation survey is separate and sends nothing unless you click Submit. Speed tests and xSpeed Scan run only when you press Test or Scan, never on a schedule.
 
 = Self-hosted gzip probe =
 
@@ -251,6 +251,7 @@ Usage analytics is off by default. The setup wizard shows it as an unticked swit
 * **When it runs:** Only after an administrator connects the site to xSpeed Hub from xSpeed Cache → AI & agents. A site that was never connected makes no Hub requests.
 * **What is sent:** The site URL and this site's MCP token, which the Hub uses to call the site's own MCP endpoint. The token is sent when the site is connected, when the connection status is checked, when the token changes (Rotate, or Connect after Disconnect), when you disconnect, and with speed-test requests you start.
 * **After an xSpeed Scan:** When a scan you run from the plugin finishes on a connected site, the site sends the Hub that scan's id, so the Hub can compare it with the site's earlier scans. Only the id and the site URL are sent. The Hub reads the report from the scan service itself.
+* **When a plugin changes:** While the site is connected to xSpeed Hub, adding, activating, deactivating, updating or deleting a plugin sends the Hub that plugin's slug (its folder name) and the site URL, once per change, with all the changes from one page load in one request. No licence keys or download links are sent.
 * **Where the request goes:** app.xspeedcache.com, operated by WPDeveloper.
 * **The broker URL:** The AI & agents screen also shows an api.xspeedcache.com address that you can paste into an AI client. The plugin never contacts that address. Only your AI client does, and only if you set it up that way.
 * **Terms and privacy:** [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
@@ -258,7 +259,7 @@ Usage analytics is off by default. The setup wizard shows it as an unticked swit
 = Usage analytics and deactivation survey (send.wpinsight.com) =
 
 * **What it does:** Tells WPDeveloper which WordPress setups and xSpeed features are in use, so we can fix what breaks.
-* **When it runs:** Only after an administrator turns on "Share usage data" in the setup wizard or in Settings → Privacy & usage data. It checks once a day and sends only what changed since the last send, and sends once more when the plugin is deactivated.
+* **When it runs:** Only after an administrator clicks Apply & Continue in the setup wizard or turns on usage data in Settings → Privacy & usage data. It checks once a day and sends only what changed since the last send, and sends once more when the plugin is deactivated.
 * **What is sent:** The site URL and name, WordPress and PHP versions, site language, charset, text direction, multisite status, server software, active and inactive plugins, theme name and version, the xSpeed version and xSpeed's own settings. The send when you turn the switch on, and the one at deactivation, also include the email address and display name of the administrator who did it. The daily send runs without a logged-in user, so it has no email or name. Page content is never sent.
 * **Deactivation survey:** If you pick a reason and click Submit when deactivating, the reason and any text you typed are sent. With analytics off, the survey sends only the reason, your text, the site URL, the WordPress, PHP and xSpeed versions, and the date. Skip & Deactivate sends nothing.
 * **Where the request goes:** send.wpinsight.com, operated by WPDeveloper. [Terms](https://wpdeveloper.com/terms-and-conditions/), [Privacy](https://wpdeveloper.com/privacy-policy/).
@@ -344,6 +345,27 @@ Used for admin interface icons.
 
 == Changelog ==
 
+= [1.4.10] – 2026-11-22 =
+
+**Header dropdowns work again with Turbo Render, and AI assistants can connect when REST is limited to logged-in users.**
+
+Optimization:
+- Fixed: With Turbo Render on, header dropdown menus open fully and their links work again on pages where hidden sections come before the header. A section that holds a dropdown is never collapsed, and the above-fold count is kept for each screen size.
+- Fixed: HTML minification keeps the space between inline tags, and around meta and link tags in the body, so words no longer run together.
+
+Caching:
+- Fixed: A visitor whose `wordpress_no_cache` cookie was set by another plugin no longer gets a cached page, and the cookie is left in place.
+- Fixed: The static-rewrite check no longer fails on a stale X-Powered-By header or a missing ETag, and it says why when it cannot confirm the rules.
+
+AI / MCP:
+- New: `wp xspeed plugins list`, also an MCP tool, lists every plugin with its version, status, available update and source. On a site connected to the Hub, a plugin change sends the Hub a short notice.
+- Fixed: AI assistants can connect when REST API for logged-in users only is on.
+- Fixed: Changing an object cache connection field over MCP needs the configure permission.
+- Fixed: Another site can no longer show the MCP sign-in page inside a frame.
+
+Dashboard & Admin UX:
+- Improved: The setup wizard asks to share usage data with a notice above Apply & Continue, and "What we collect?" lists what is sent and where. Skip sends nothing.
+
 = [1.4.9] – 2026-11-18 =
 
 **Turbo Render is on for every site, and Google Fonts load without blocking.**
@@ -395,22 +417,3 @@ Optimization:
 AI / MCP:
 - Improved: An add-on can report when its licence expires, and when and where its licence was last checked.
 - Fixed: An owner's approval for a database clean covers only the categories the owner was shown, and an MCP token cleans only the categories it covers.
-
-= [1.4.7] – 2026-11-08 =
-
-**WooCommerce shoppers with a cart can get cached pages, you can choose each page's main (LCP) image, and Slider Revolution works with Delay JS.**
-
-Caching:
-- New: Cache pages for shoppers with a cart keeps one cached copy per cart, so a shopper with items in the cart no longer skips the page cache. It is off by default and shows only while WooCommerce is active. Cart, checkout and account pages, add-to-cart requests and logged-in users are still not cached, and a product, price or stock change clears every cart copy.
-- New: An add-on can hold the cache write for up to 5 minutes while a page's optimized version is about to land, so the unoptimized page is not cached first (`xspeed_cache_write_hold`).
-- Fixed: A browser that reloads a cached page with a conditional request now gets a real 304 on the PHP serve path. Before, it got a 200 with an empty body, which showed a blank page and could be stored by a CDN.
-- Fixed: Requests from the Hub renderer and Speed Scan no longer count as visits in WP Statistics, Slimstat or the hit ratio when they send a browser user agent.
-
-Optimization:
-- New: Main (LCP) image. In the block editor sidebar or the classic editor, choose which image a page preloads: automatic, the featured image, an image you pick, or none. Resource Hints has site-wide rules by page type or path. The chosen image gets `fetchpriority="high"` and is not lazy-loaded.
-- Fixed: With Delay JS on, Slider Revolution no longer shows its "jquery.js library include" error in place of the slider, the hero keeps its height until the delayed scripts run, and the Bridge theme's logo shows. This also holds on pages the cache does not store, such as for logged-in users.
-
-Dashboard & Admin UX:
-- Fixed: A link to a module that lives in another page's tab opens that tab.
-
-Older releases are listed in changelog.txt, included with the plugin, and at [xspeedcache.com/changelog](https://xspeedcache.com/changelog/).

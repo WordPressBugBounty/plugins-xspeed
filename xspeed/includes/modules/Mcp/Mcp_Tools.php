@@ -1944,9 +1944,11 @@ final class Mcp_Tools {
 		// off by default even for a write-scoped connection, so an agent can't
 		// silently repoint the Cloudflare/object-cache backend at an attacker
 		// endpoint. (Settings_Manager::update also strips these as a backstop
-		// covering the run_command → CLI path.) (#116)
+		// covering the run_command → CLI path.) (#116) #116 gated only the
+		// secret fields, so a write-only token could still change the Redis
+		// host, port or database; the `configure` check covers those too. (#920)
 		if ( ! self::can_configure() ) {
-			$checks[] = 'secrets';
+			$checks[] = 'configure';
 		}
 		// Consent fields can be withdrawn over MCP but never granted.
 		// Settings_Manager::update() drops them as the backstop; say so here
@@ -2045,11 +2047,12 @@ final class Mcp_Tools {
 				);
 
 			case 'secret_fields':
+			case 'configure_fields':
 				return new \WP_Error(
 					'xspeed_mcp_configure_required',
 					sprintf(
 						/* translators: 1: comma-separated field names, 2: module slug. */
-						__( 'Writing credential fields (%1$s) on "%2$s" needs the "configure" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these credentials from the xSpeed dashboard.', 'xspeed' ),
+						__( 'Writing credential or connection fields (%1$s) on "%2$s" needs the "configure" scope, which is off by default. Reconnect the MCP client granting the configure scope, or set these from the xSpeed dashboard.', 'xspeed' ),
 						implode( ', ', (array) $data['fields'] ),
 						$module
 					),

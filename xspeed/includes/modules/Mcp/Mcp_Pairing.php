@@ -512,6 +512,10 @@ final class Mcp_Pairing {
 	public static function disconnect(): array {
 		delete_option( self::OPTION );
 
+		// Without a token the site cannot ping the Hub, and a change made
+		// earlier in this request must not go out with the next token.
+		Plugins_Changed::forget();
+
 		// Also revoke every OAuth grant (clients, codes, access + refresh
 		// tokens) so "Disconnect" is a single kill switch for ALL MCP access,
 		// not just the pasted pairing token.

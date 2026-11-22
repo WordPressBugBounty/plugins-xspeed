@@ -458,15 +458,32 @@ final class TurboRenderModule extends Module {
 		// Keyed by the section's ordinal: its position in $offsets, the
 		// number the measurement render gives it.
 		$edits = array();
+		// Visible sections counted so far, per screen size. (#959)
+		$seen = array_fill_keys( self::DEVICES, 0 );
 		foreach ( array_values( $offsets ) as $ordinal => $offset ) {
-			if ( $ordinal < $skip ) {
-				continue;
-			}
 			$end = self::tag_end( $masked, $offset );
 			if ( null === $end ) {
 				continue; // Unterminated tag at EOF — never stamp it.
 			}
 			$open_tag = substr( $html, $offset, $end - $offset );
+			// The allowance counts the sections a visitor sees, on each screen
+			// size apart: a page that builds a desktop copy and a mobile copy
+			// of each section fills it on both, so the sections below the
+			// fold are still stamped. A section the visitor might see before
+			// that screen's allowance is used up renders first. (#959)
+			if ( min( $seen ) < $skip ) {
+				$shown_on = self::shown_on( $open_tag );
+				$early    = array() === $shown_on;
+				foreach ( $shown_on as $device ) {
+					if ( $seen[ $device ] < $skip ) {
+						$early = true;
+					}
+					++$seen[ $device ];
+				}
+				if ( $early ) {
+					continue;
+				}
+			}
 			if ( false !== stripos( $open_tag, 'data-xspeed-turbo' ) ) {
 				continue;
 			}
@@ -1095,7 +1112,9 @@ final class TurboRenderModule extends Module {
 	 *   Rocket skips these too);
 	 * - an inline `position: fixed` or `sticky`: the section becomes the
 	 *   containing block, so a back-to-top button or a sticky bar is
-	 *   positioned against the section instead of the viewport.
+	 *   positioned against the section instead of the viewport;
+	 * - a menu with a dropdown: the open submenu is clipped at the
+	 *   section's edge.
 	 *
 	 * The span runs to the element's close tag. When element_end() can't
 	 * pair it, the span runs to the next candidate (or `</body>` for the
@@ -1117,7 +1136,52 @@ final class TurboRenderModule extends Module {
 		// says nothing about this section. Inline style="" attributes do.
 		$span = (string) preg_replace( '#<style\b[^>]*>.*?</style>#is', '', $span );
 
-		return (bool) preg_match( '#<use[\s/>]|position\s*:\s*(?:-webkit-)?(?:fixed|sticky)\b#i', $span );
+		return (bool) preg_match( '#<use[\s/>]|position\s*:\s*(?:-webkit-)?(?:fixed|sticky)\b#i', $span )
+			|| (bool) preg_match( self::DROPDOWN_PATTERN, $span );
+	}
+
+	/**
+	 * A menu with a dropdown. The open submenu hangs below the section, and
+	 * paint containment cut it off at the section's edge: the links were
+	 * visible but a click landed on the section underneath. (#959)
+	 *
+	 * WordPress menus write `sub-menu` and `menu-item-has-children`, the
+	 * core Navigation block writes `has-child` and
+	 * `wp-block-navigation__submenu-container`, mega-menu plugins prefix
+	 * their own `*-sub-menu`, and Bootstrap writes `dropdown-menu`.
+	 */
+	private const DROPDOWN_PATTERN = '#(?<![\w-])(?:[a-z0-9_]+-)*(?:sub-?menu|dropdown-menu)(?![\w-])|(?<![\w-])(?:menu-item-has-children|has-child|wp-block-navigation__submenu-container)(?![\w-])|\baria-haspopup\s*=#i';
+
+	/**
+	 * The screen sizes Elementor can hide a section on, as it names them in
+	 * `elementor-hidden-<device>`. A site that has not turned on the extra
+	 * breakpoints never writes those classes, so their counters see every
+	 * section and fill first.
+	 */
+	private const DEVICES = array( 'widescreen', 'desktop', 'laptop', 'tablet_extra', 'tablet', 'mobile_extra', 'mobile' );
+
+	/**
+	 * The screen sizes a section shows on, judged from its open tag: none
+	 * when the `hidden` attribute or an inline `display: none` hides it
+	 * always, otherwise every size but the ones its Elementor classes hide
+	 * it on.
+	 *
+	 * @param string $open_tag The section's open tag.
+	 * @return string[]
+	 */
+	private static function shown_on( string $open_tag ): array {
+		// Attribute values blanked, so the word `hidden` in a label or a
+		// class name is never read as the attribute.
+		$names = (string) preg_replace( '#=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)#', '', $open_tag );
+		if ( preg_match( '#\shidden(?![\w-])#i', $names )
+			|| preg_match( '#\bstyle\s*=\s*(["\'])[^"\']*display\s*:\s*none#i', $open_tag ) ) {
+			return array();
+		}
+		if ( ! preg_match( '#\bclass\s*=\s*(["\'])([^"\']*)\1#i', $open_tag, $class ) ) {
+			return self::DEVICES;
+		}
+		preg_match_all( '#(?<![\w-])elementor-hidden-([a-z_]+)(?![\w-])#i', $class[2], $hidden );
+		return array_values( array_diff( self::DEVICES, array_map( 'strtolower', $hidden[1] ) ) );
 	}
 
 	/**

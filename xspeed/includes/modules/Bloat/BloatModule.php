@@ -120,7 +120,7 @@ final class BloatModule extends Module {
 				'type'        => 'bool',
 				'default'     => false,
 				'label'       => __( 'REST API for logged-in users only', 'xspeed' ),
-				'description' => __( 'Blocks /wp-json/ for logged-out visitors. This breaks WooCommerce checkout and many contact forms, so keep it off unless you are sure.', 'xspeed' ),
+				'description' => __( 'Blocks /wp-json/ for logged-out visitors. This breaks WooCommerce checkout and many contact forms, so keep it off unless you are sure. MCP and OAuth sign-in routes stay open so AI assistants can still connect.', 'xspeed' ),
 				'advanced'    => true,
 			),
 		);
@@ -450,11 +450,52 @@ final class BloatModule extends Module {
 		if ( is_user_logged_in() ) {
 			return $result;
 		}
+		if ( self::rest_route_stays_public( self::current_rest_route() ) ) {
+			return $result;
+		}
 		return new \WP_Error(
 			'rest_not_logged_in',
 			__( 'This site only answers REST API requests from logged-in users.', 'xspeed' ),
 			array( 'status' => 401 )
 		);
+	}
+
+	/**
+	 * Whether an anonymous request to this route passes the logged-in-only
+	 * restriction.
+	 *
+	 * An AI assistant signs in to an MCP server with OAuth before it has a
+	 * token, so client registration, the token exchange and the discovery
+	 * documents are anonymous by design, and the MCP endpoint itself must
+	 * answer with its 401 challenge. Refusing them broke Remote MCP for
+	 * xSpeed and for every other MCP plugin on the site. Each of these routes
+	 * still runs its own permission check and bearer-token auth.
+	 *
+	 * @param string $route REST route, such as /xspeed/v1/mcp/oauth/register.
+	 */
+	public static function rest_route_stays_public( string $route ): bool {
+		$exempt = 1 === preg_match( '#(?:^|/)(?:mcp|oauth2?)(?:/|$)#i', $route );
+
+		/**
+		 * Filters whether an anonymous request to a REST route passes
+		 * "REST API for logged-in users only".
+		 *
+		 * @param bool   $exempt True for MCP and OAuth routes.
+		 * @param string $route  The REST route, such as /wp/v2/posts.
+		 */
+		return (bool) apply_filters( 'xspeed_rest_restrict_exempt', $exempt, $route );
+	}
+
+	/**
+	 * The route of the REST request being served. rest_api_loaded() puts it in
+	 * the rest_route query var for both /wp-json/<route> and ?rest_route=.
+	 */
+	private static function current_rest_route(): string {
+		$wp = $GLOBALS['wp'] ?? null;
+		if ( is_object( $wp ) && isset( $wp->query_vars['rest_route'] ) && is_string( $wp->query_vars['rest_route'] ) ) {
+			return '/' . ltrim( $wp->query_vars['rest_route'], '/' );
+		}
+		return '';
 	}
 
 	public function cli_commands(): array {

@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'wpdeveloper/xspeed',
-        'pretty_version' => 'v1.4.9',
-        'version' => '1.4.9.0',
-        'reference' => 'da65537fddc00e491aef47414f95ff6cf40dc277',
+        'pretty_version' => 'v1.4.10',
+        'version' => '1.4.10.0',
+        'reference' => '94ba25d39f475ec0b004b3b3f6e3961b691ef820',
         'type' => 'wordpress-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -29,9 +29,9 @@
             'dev_requirement' => false,
         ),
         'wpdeveloper/xspeed' => array(
-            'pretty_version' => 'v1.4.9',
-            'version' => '1.4.9.0',
-            'reference' => 'da65537fddc00e491aef47414f95ff6cf40dc277',
+            'pretty_version' => 'v1.4.10',
+            'version' => '1.4.10.0',
+            'reference' => '94ba25d39f475ec0b004b3b3f6e3961b691ef820',
             'type' => 'wordpress-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

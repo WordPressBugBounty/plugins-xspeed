@@ -236,24 +236,40 @@ class Minifier {
 	}
 
 	/**
-	 * HTML elements that participate in an inline formatting context, where
-	 * whitespace between two of them renders as a visible space.
+	 * Tags where whitespace on either side never renders: block-level boxes,
+	 * table parts, line breaks, <head> content, and SVG shapes (SVG draws text
+	 * only inside <text>, which is not listed).
 	 *
-	 * Deliberately excludes <br> (nothing to separate) and replaced/embedded
-	 * inline elements that sit alone. Anything not listed is treated as block
-	 * level, where inter-tag whitespace collapses to nothing and is safe to
-	 * strip. (FBS-84090)
+	 * This is a list of tags that are safe to strip, not of tags that are
+	 * inline. The old inline list missed <input>, <svg>, <iframe>, custom
+	 * elements and more, and an unlisted tag lost a space that renders: a
+	 * radio ran into its label in Elementor Forms and Fluent Forms. A tag
+	 * missing from this list keeps one space, which costs a byte at most.
+	 * (#868, FBS-84090)
 	 */
-	private const INLINE_TAGS = array(
-		'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'data', 'del', 'dfn',
-		'em', 'i', 'ins', 'kbd', 'label', 'mark', 'q', 'rp', 'rt', 'ruby',
-		's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'time', 'u',
-		'var', 'wbr', 'img', 'button', 'select', 'output',
+	private const BLOCK_TAGS = array(
+		// Document and <head>. Not <meta> or <link>: schema.org microdata puts
+		// them inside body text, where the spaces either side make the one
+		// visible gap, and stripping both joined the words. (#868 review)
+		'html', 'head', 'body', 'base', 'title', 'style', 'script', 'noscript',
+		// Block-level boxes.
+		'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'div',
+		'dd', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
+		'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'legend', 'li',
+		'main', 'menu', 'nav', 'ol', 'p', 'pre', 'search', 'section', 'summary', 'ul',
+		// Tables.
+		'caption', 'col', 'colgroup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr',
+		// Line breaks and select options.
+		'br', 'optgroup', 'option',
+		// SVG shapes and definitions.
+		'circle', 'clippath', 'defs', 'ellipse', 'filter', 'g', 'line', 'lineargradient',
+		'mask', 'path', 'pattern', 'polygon', 'polyline', 'radialgradient', 'rect', 'stop',
+		'symbol', 'use',
 	);
 
-	/** True when $tag renders inline, so whitespace beside it is visible. */
-	private static function is_inline( string $tag ): bool {
-		return in_array( strtolower( $tag ), self::INLINE_TAGS, true );
+	/** True when whitespace beside $tag never renders, so it is safe to strip. */
+	private static function is_block( string $tag ): bool {
+		return in_array( strtolower( $tag ), self::BLOCK_TAGS, true );
 	}
 
 	/**
@@ -324,17 +340,20 @@ class Minifier {
 		 *
 		 * So the strip only applies when at least one side is a BLOCK-level
 		 * (or non-rendered) tag, where the whitespace collapses away anyway.
-		 * Inline-to-inline boundaries keep their single space.
+		 * Every other boundary keeps its single space.
+		 *
+		 * The right-hand tag is matched by a lookahead. When the match consumed
+		 * it, that tag could not be the left side of the next match, so every
+		 * second boundary in a run like `<br> <input> <label>` was skipped: one
+		 * radio lost its space and the next kept it, and `<tr> <td>` kept a
+		 * stray one. (#868)
 		 */
 		$html = preg_replace_callback(
-			// left tag name (may be a closing tag) … whitespace … right tag name
-			'#</?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>\s+<(/?)([a-zA-Z][a-zA-Z0-9-]*)#',
+			// left tag name (may be a closing tag) … whitespace … (right tag name)
+			'#</?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>\s+(?=</?([a-zA-Z][a-zA-Z0-9-]*))#',
 			static function ( $m ) {
-				// Keep the space only when BOTH sides are inline elements —
-				// that is the one case where it is actually rendered.
-				$keep = self::is_inline( $m[1] ) && self::is_inline( $m[3] );
-				$open = substr( $m[0], 0, strrpos( $m[0], '<' ) ); // through the left tag's '>'
-				return rtrim( $open ) . ( $keep ? ' ' : '' ) . '<' . $m[2] . $m[3];
+				$strip = self::is_block( $m[1] ) || self::is_block( $m[2] );
+				return rtrim( $m[0] ) . ( $strip ? '' : ' ' );
 			},
 			$html
 		);

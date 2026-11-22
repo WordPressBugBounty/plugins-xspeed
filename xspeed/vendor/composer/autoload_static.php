@@ -75,6 +75,8 @@ class ComposerStaticInitdf04e86b4edc700a2afcbe671d8a7d20
         'XSpeed\\Modules\\Mcp\\Mcp_Rate_Limiter' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Rate_Limiter.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Server' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Server.php',
         'XSpeed\\Modules\\Mcp\\Mcp_Tools' => __DIR__ . '/../..' . '/includes/modules/Mcp/Mcp_Tools.php',
+        'XSpeed\\Modules\\Mcp\\Plugin_Inventory' => __DIR__ . '/../..' . '/includes/modules/Mcp/Plugin_Inventory.php',
+        'XSpeed\\Modules\\Mcp\\Plugins_Changed' => __DIR__ . '/../..' . '/includes/modules/Mcp/Plugins_Changed.php',
         'XSpeed\\Modules\\Migration\\MigrationModule' => __DIR__ . '/../..' . '/includes/modules/Migration/MigrationModule.php',
         'XSpeed\\Modules\\Minify\\MinifyModule' => __DIR__ . '/../..' . '/includes/modules/Minify/MinifyModule.php',
         'XSpeed\\Modules\\ObjectCache\\ObjectCacheModule' => __DIR__ . '/../..' . '/includes/modules/ObjectCache/ObjectCacheModule.php',

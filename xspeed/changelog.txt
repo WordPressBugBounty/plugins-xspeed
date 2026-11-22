@@ -2,6 +2,27 @@
 
 The three most recent releases are listed in readme.txt. Everything since 1.0.0 is below.
 
+= [1.4.10] – 2026-11-22 =
+
+**Header dropdowns work again with Turbo Render, and AI assistants can connect when REST is limited to logged-in users.**
+
+Optimization:
+- Fixed: With Turbo Render on, header dropdown menus open fully and their links work again on pages where hidden sections come before the header. A section that holds a dropdown is never collapsed, and the above-fold count is kept for each screen size.
+- Fixed: HTML minification keeps the space between inline tags, and around meta and link tags in the body, so words no longer run together.
+
+Caching:
+- Fixed: A visitor whose `wordpress_no_cache` cookie was set by another plugin no longer gets a cached page, and the cookie is left in place.
+- Fixed: The static-rewrite check no longer fails on a stale X-Powered-By header or a missing ETag, and it says why when it cannot confirm the rules.
+
+AI / MCP:
+- New: `wp xspeed plugins list`, also an MCP tool, lists every plugin with its version, status, available update and source. On a site connected to the Hub, a plugin change sends the Hub a short notice.
+- Fixed: AI assistants can connect when REST API for logged-in users only is on.
+- Fixed: Changing an object cache connection field over MCP needs the configure permission.
+- Fixed: Another site can no longer show the MCP sign-in page inside a frame.
+
+Dashboard & Admin UX:
+- Improved: The setup wizard asks to share usage data with a notice above Apply & Continue, and "What we collect?" lists what is sent and where. Skip sends nothing.
+
 = [1.4.9] – 2026-11-18 =
 
 **Turbo Render is on for every site, and Google Fonts load without blocking.**

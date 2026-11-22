@@ -55,12 +55,9 @@ export function deriveInitialChoices(env: OnboardingEnv): OnboardingChoices {
     // state deliberately does not match Balanced, and the step surfaces it
     // as a named "custom" state rather than as three blank cards.
     ...(hasConflict ? { cache_enabled: false } : {}),
-    // Usage analytics consent is a question, not site state, so it is never
-    // seeded from storage and the wizard always asks afresh.
-    //
-    // Unticked: wordpress.org guideline 7 requires tracking to be opt-in, and
-    // the payload includes the admin's email and name (#437, #735). Do not
-    // pre-check it again.
+    // Usage analytics consent is never seeded from storage. The Configure
+    // step has no switch for it: clicking Apply & Continue under the consent
+    // notice is the opt-in and sends true, and Skip never calls apply (#963).
     usage_tracking: false,
   };
 }

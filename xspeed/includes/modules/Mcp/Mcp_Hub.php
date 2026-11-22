@@ -175,6 +175,11 @@ final class Mcp_Hub {
 			}
 		}
 		update_option( self::SITE_ATTACHED_OPTION, $attached ? '1' : '0', false );
+		if ( ! $attached ) {
+			// Every detach path ends here. A change made earlier in this
+			// request must not go out once the site is detached.
+			Plugins_Changed::forget();
+		}
 		return $attached;
 	}
 
@@ -1114,6 +1119,32 @@ final class Mcp_Hub {
 				)
 			);
 		}
+	}
+
+	/**
+	 * Tell the Hub which plugins changed, so it reads the plugin list again
+	 * (#952). Plugins_Changed decides when; this only sends.
+	 *
+	 * The request does not wait for the answer: it runs on shutdown, often
+	 * after a wp-admin action, and a slow Hub must not hold that worker. A
+	 * failed ping is not retried here because the Hub's daily pass reads the
+	 * list anyway.
+	 *
+	 * @param array<int,string> $slugs Plugin slugs. Nothing else goes.
+	 */
+	public static function post_plugins_changed( array $slugs ): void {
+		if ( array() === $slugs || ! self::site_attached() ) {
+			return;
+		}
+		self::hub_request(
+			'POST',
+			Plugins_Changed::PATH,
+			array( 'changed' => array_values( $slugs ) ),
+			array(
+				'timeout'  => Plugins_Changed::ping_timeout(),
+				'blocking' => false,
+			)
+		);
 	}
 
 	/**

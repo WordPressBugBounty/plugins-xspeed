@@ -226,8 +226,16 @@ final class HealthModule extends Module {
 					// the origin). Not evidence the config is wrong, so don't
 					// say "required" and don't dump a snippet the user has
 					// probably already pasted. (FBS-84012, and why #480 was filed.)
-					$result['label']       = __( 'xSpeed could not verify the nginx static rewrite', 'xspeed' );
-					$result['status']      = 'recommended';
+					$result['label']  = __( 'xSpeed could not verify the nginx static rewrite', 'xspeed' );
+					$result['status'] = 'recommended';
+					if ( ! empty( $probe['unconfirmed'] ) ) {
+						// The round trip worked; "the check did not complete"
+						// and "once the site can reach itself" would be wrong
+						// here. What is missing is the marker, and pasting the
+						// current snippet adds it. (#897)
+						$result['description'] = '<p>' . esc_html__( 'The test file was served without PHP, but the response had no X-XSpeed-Rules marker and no ETag, so xSpeed cannot tell whether nginx or PHP served it. Paste the current xSpeed snippet into your server { } block again and reload nginx, so nginx sends the marker.', 'xspeed' ) . '</p>';
+						return $result;
+					}
 					$result['description'] = '<p>' . esc_html(
 						sprintf(
 							/* translators: %s: the reason the probe could not complete. */

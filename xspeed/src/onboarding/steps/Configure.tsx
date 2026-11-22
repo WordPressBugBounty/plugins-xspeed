@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Toggle } from '../../components/Toggle';
+import { Modal } from '../../components/Modal';
 import {
   HeroHeader,
   PrimaryButton,
@@ -269,6 +270,7 @@ export function ConfigureStep({
   busy: boolean;
 }) {
   const [choices, setChoices] = useState<OnboardingChoices>(initial);
+  const [showCollect, setShowCollect] = useState(false);
   const set = <K extends keyof OnboardingChoices>(key: K, value: OnboardingChoices[K]) =>
     setChoices((c) => ({ ...c, [key]: value }));
   const applyPreset = (p: Preset) =>
@@ -309,7 +311,7 @@ export function ConfigureStep({
             </GhostLink>
           )}
           <GhostLink onClick={onSkip}>Skip — I'll configure manually</GhostLink>
-          <PrimaryButton onClick={() => onApply(choices)} disabled={busy}>
+          <PrimaryButton onClick={() => onApply({ ...choices, usage_tracking: true })} disabled={busy}>
             {busy ? 'Applying…' : 'Apply & Continue'}
             {!busy && <ArrowRight size={14} />}
           </PrimaryButton>
@@ -500,32 +502,36 @@ export function ConfigureStep({
         </div>
       </div>
 
-      {/* Usage data — styled like the other config sections (no accent
-          icon / focal treatment) so it reads as one option among many.
-          Off until the user turns it on (#735). DESIGN.md §24.9 ConsentCard. */}
-      <div className="border border-line bg-paper rounded-card p-4 sm:p-5">
-        <div className="flex items-start justify-between gap-3 sm:gap-4">
-          <div className="min-w-0 pr-2">
-            <div className="text-[13px] font-medium text-ink mb-1.5">
-              Help improve xSpeed
-            </div>
-            <p className="text-[12px] text-muted leading-snug">
-              When you turn this on, WPDeveloper receives your email address and
-              display name. After that, once a day: the site URL and name,
-              WordPress &amp; PHP versions, theme, plugins, server type and your
-              xSpeed settings. Never page content. Change it anytime from
-              Settings → Privacy &amp; usage data.
-            </p>
-          </div>
-          <div className="shrink-0">
-            <Toggle
-              checked={choices.usage_tracking}
-              onChange={(v) => set('usage_tracking', v)}
-              label="Share usage data"
-            />
-          </div>
+      {/* Usage-data consent (#963). Clicking Apply & Continue is the opt-in,
+          so the notice sits right above that button and Skip is the way out.
+          It replaced the switch from #437 / #735. DESIGN.md §24.9. */}
+      <p className="m-0 text-center text-[12px] text-muted leading-snug">
+        By clicking Apply &amp; Continue, you allow xSpeed to share usage data
+        with WPDeveloper.{' '}
+        <button
+          type="button"
+          onClick={() => setShowCollect(true)}
+          className="text-primary underline underline-offset-2 hover:text-primary-hover"
+        >
+          What we collect?
+        </button>
+      </p>
+      <Modal
+        open={showCollect}
+        onClose={() => setShowCollect(false)}
+        title="What Do We Collect?"
+      >
+        <div className="space-y-3 text-[13px] text-ink-soft leading-relaxed">
+          <p className="m-0">
+            If you choose &ldquo;Apply &amp; Continue&rdquo;, xSpeed sends your
+            site URL and name, your admin email address, WordPress, PHP and
+            server versions, active and inactive plugins, active theme, and
+            which xSpeed features you use to our usage-tracking service (WP
+            Insights). We use it to keep xSpeed compatible with popular plugins
+            and themes, and may email you xSpeed news and offers.
+          </p>
         </div>
-      </div>
+      </Modal>
     </WizardShell>
   );
 }

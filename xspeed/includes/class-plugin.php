@@ -679,6 +679,10 @@ class Plugin {
 
 		$profile = Settings::set_defaults();
 
+		// Options and a cron event that earlier builds of the plugin change
+		// ping left behind (#952).
+		\XSpeed\Modules\Mcp\Plugins_Changed::clean_legacy();
+
 		// Score history table. Also called on admin_init (see init()) because
 		// activation does not fire for a site added to a multisite network
 		// later, nor after an update that ships a new schema version.

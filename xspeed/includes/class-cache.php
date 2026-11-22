@@ -1094,7 +1094,7 @@ class Cache {
 	 * first place, in the name of protecting them from one.
 	 *
 	 * The gates left out of this list are about the visitor (`logged-in`,
-	 * `excluded-cookie`) or are somebody stating outright that this page is
+	 * `excluded-cookie`, `no-cache-cookie`) or are somebody stating outright that this page is
 	 * never to be stored (`donotcachepage`, `post-excluded`, `filtered`).
 	 * Those hold whether or not we can see an edge.
 	 */
@@ -2058,7 +2058,7 @@ class Cache {
 	 * write. What is left describes the site: the cache is off, the home
 	 * page is excluded, or something refuses it on every request.
 	 */
-	private const HOME_VERDICT_SKIP = array( 'logged-in', 'excluded-cookie', 'non-get', 'query-param', 'user-agent', 'non-frontend' );
+	private const HOME_VERDICT_SKIP = array( 'logged-in', 'excluded-cookie', 'no-cache-cookie', 'non-get', 'query-param', 'user-agent', 'non-frontend' );
 
 	/** At most one write of the home verdict per this many seconds. */
 	private const HOME_VERDICT_MIN_GAP = 60;
@@ -2877,6 +2877,16 @@ class Cache {
 			return self::bypass( 'excluded-url' );
 		}
 
+		// `wordpress_no_cache` is a shared convention: other plugins set it
+		// to ask every cache layer for a fresh page for this visitor. We use
+		// the same name for our own record (sync_bypass_cookie()), so only
+		// our value is ours to judge again. Any other value is an
+		// instruction, and it holds whatever the excluded-cookie list says.
+		// Request-scoped, so we never record it or touch the cookie. (#941)
+		if ( self::has_foreign_bypass_cookie() ) {
+			return self::bypass( 'no-cache-cookie' );
+		}
+
 		// Cookie-based exclusion. We only check cookie NAMES (matching
 		// values would leak content-sensitive logic into the cache key
 		// rules); presence of any matching cookie name skips cache.
@@ -2891,7 +2901,8 @@ class Cache {
 				// no later request could ever re-evaluate the visitor on the
 				// rules that actually describe them. The web server still acts
 				// on the cookie without booting PHP; when PHP does boot it is
-				// authoritative and re-decides from scratch. (#218)
+				// authoritative and re-decides from scratch. (#218) Someone
+				// else's cookie under the same name was refused above. (#941)
 				if ( Server_Rules::BYPASS_COOKIE === $cookie_name ) {
 					continue;
 				}
@@ -11850,11 +11861,19 @@ class Cache {
 		}
 
 		$name = Server_Rules::BYPASS_COOKIE;
-		$has  = isset( $_COOKIE[ $name ] );
+		$ours = self::bypass_cookie_is_ours();
+
+		// Another plugin's cookie under the shared name. Never overwrite it
+		// and never expire it: it is that plugin's instruction, not our
+		// record. (#941)
+		if ( false === $ours ) {
+			return;
+		}
 
 		// Only touch the header when the state actually changes — a
 		// Set-Cookie on every request would make the response uncacheable
 		// for intermediary caches and add noise to every hit.
+		$has = true === $ours;
 		if ( $bypass === $has ) {
 			return;
 		}
@@ -11863,12 +11882,43 @@ class Cache {
 		$domain = defined( 'COOKIE_DOMAIN' ) ? COOKIE_DOMAIN : '';
 
 		if ( $bypass ) {
-			setcookie( $name, '1', 0, $path, (string) $domain, is_ssl(), false );
-			$_COOKIE[ $name ] = '1';
+			setcookie( $name, self::BYPASS_COOKIE_VALUE, 0, $path, (string) $domain, is_ssl(), false );
+			$_COOKIE[ $name ] = self::BYPASS_COOKIE_VALUE;
 		} else {
 			setcookie( $name, '', time() - 3600, $path, (string) $domain, is_ssl(), false );
 			unset( $_COOKIE[ $name ] );
 		}
+	}
+
+	/**
+	 * The value xSpeed writes into the shared bypass cookie, so a later
+	 * request can tell our record from another plugin's instruction. Older
+	 * versions wrote `1`; a visitor still holding that is treated as
+	 * someone else's until the session cookie ends. (#941)
+	 */
+	public const BYPASS_COOKIE_VALUE = 'xspeed';
+
+	/**
+	 * Whose bypass cookie this request carries: true for ours, false for
+	 * another plugin's, null when there is none.
+	 *
+	 * Only the exact value is ours. Sanitizing first would trim `xspeed `
+	 * into our value, expire the other plugin's cookie and serve the cached
+	 * page. (#950)
+	 */
+	private static function bypass_cookie_is_ours(): ?bool {
+		$name = Server_Rules::BYPASS_COOKIE;
+		if ( ! isset( $_COOKIE[ $name ] ) ) {
+			return null;
+		}
+		// A strict comparison with our constant: nothing is stored or printed,
+		// and slashes cannot turn another value into ours.
+		return self::BYPASS_COOKIE_VALUE === $_COOKIE[ $name ];
+	}
+
+	/** Whether the request carries the shared bypass cookie set by someone else. */
+	public static function has_foreign_bypass_cookie(): bool {
+		return false === self::bypass_cookie_is_ours();
 	}
 
 	/**
@@ -12161,7 +12211,11 @@ class Cache {
 
 		$code     = (int) wp_remote_retrieve_response_code( $resp );
 		$body     = (string) wp_remote_retrieve_body( $resp );
-		$ua_php   = '' !== (string) wp_remote_retrieve_header( $resp, 'x-powered-by' );
+		// Only an engine-identifying value means PHP answered. Any non-empty
+		// X-Powered-By used to count, so a stale `X-Powered-By: WP Rocket/…`
+		// left in .htaccess by a previous cache plugin made every static hit
+		// look like PHP. (#897)
+		$ua_php   = 1 === preg_match( '#\bPHP/#i', (string) wp_remote_retrieve_header( $resp, 'x-powered-by' ) );
 		$has_etag = '' !== (string) wp_remote_retrieve_header( $resp, 'etag' )
 				 || '' !== (string) wp_remote_retrieve_header( $resp, 'last-modified' );
 		$match    = trim( $body ) === $nonce;
@@ -12175,11 +12229,25 @@ class Cache {
 		$rules_raw = trim( (string) wp_remote_retrieve_header( $resp, strtolower( self::RULES_HEADER ) ) );
 		$rules     = preg_match( '/^[0-9a-f]{8}\z/', $rules_raw ) ? $rules_raw : '';
 
-		// "Active" = the web server served our raw nonce bytes back
-		// AND emitted the static-serve markers (ETag / Last-Modified)
-		// AND didn't add an X-Powered-By: PHP header. All three are
-		// individually noisy; together they're conclusive.
-		$active = $match && $has_etag && ! $ua_php && 200 === $code;
+		// "Active" = the web server served our raw nonce bytes back without
+		// an X-Powered-By: PHP header, and either stamped the rules marker,
+		// which only our static rules set, or (for rules from before the
+		// marker) emitted ETag / Last-Modified. The marker is the direct
+		// evidence: a static path that sends no ETag, as some hosts' does,
+		// was reported missing while rules_state() called the same response
+		// current. (#897) The PHP check still applies when a marker is
+		// present: a header copied in from an old block, or set host-wide,
+		// can ride on a PHP response, and "active" with php:true contradicts
+		// itself.
+		$active = $match && 200 === $code && ! $ua_php && ( '' !== $rules || $has_etag );
+
+		// The right bytes came back with no PHP header, but nothing says who
+		// served them: no marker, no ETag, no Last-Modified. A pre-marker
+		// block on a host that strips both validators looks like this, and so
+		// does PHP with expose_php off. It is not a failed round trip, so it
+		// needs its own reason and advice rather than "the check could not
+		// complete".
+		$unconfirmed = ! $active && 200 === $code && $match && ! $ua_php;
 
 		/*
 		 * `inconclusive` separates "we proved the rewrite isn't serving" from
@@ -12191,6 +12259,9 @@ class Cache {
 		$inconclusive = false;
 		if ( $active ) {
 			$reason = 'static-served';
+		} elseif ( $unconfirmed ) {
+			$reason       = 'file served, but no rules marker or ETag shows the web server served it';
+			$inconclusive = true;
 		} elseif ( 200 === $code && $match && $ua_php ) {
 			$reason = 'php served the file instead of nginx/Apache (rewrite block missing)';
 		} elseif ( 200 === $code && ! $match ) {
@@ -12211,6 +12282,7 @@ class Cache {
 		$result = array(
 			'active'       => $active,
 			'inconclusive' => $inconclusive,
+			'unconfirmed'  => $unconfirmed,
 			'reason'       => $reason,
 			'code'         => $code,
 			'php'          => $ua_php,
